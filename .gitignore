@@ -16,6 +16,13 @@ checkpoints/
 *.sqlite3
 *.db
 
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+
 __pycache__/
 *.py[cod]
 .venv/
