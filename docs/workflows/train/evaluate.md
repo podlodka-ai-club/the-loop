@@ -106,6 +106,7 @@ benchmark
   source_distribution
   geography_distribution
   scene_distribution
+  request_context_policy_version
   created_at
   content_hash
 ```
@@ -161,6 +162,8 @@ evaluation_config
   geocoder_provider
   geocoder_version
   inference_budget
+  calibration_policy_by_condition
+  require_point_estimate — true
   randomization_policy
   repetitions
   metric_definitions_version
@@ -168,6 +171,9 @@ evaluation_config
 
 Если меняется любой из этих параметров, сравнение с предыдущим отчётом помечается как непарное
 либо выполняется заново для всех условий.
+
+Calibration policy привязана к model, prompt, memory snapshot и metric definitions. Несовместимая
+policy не переносится на новую конфигурацию только ради сохранения прежних confidence.
 
 ### 5. Матрица условий
 
@@ -202,22 +208,56 @@ G — candidate snapshot без новых знаний конкретного �
 - Timeout и ошибки инструментов учитываются как часть результата, а не молча исключаются.
 - Для каждого условия фиксируется точный `memory_snapshot_id`.
 
+### 6.1. Калибровка условий
+
+На validation каждый condition сначала возвращает raw confidence и uncertainty. По ним создаётся
+версионированная calibration policy:
+
+```text
+calibration_policy
+  policy_id
+  model_id
+  prompt_version
+  memory_snapshot_id | null
+  source_cohorts
+  confidence_mapping
+  uncertainty_adjustment
+  metric_definitions_version
+  fitted_on_validation_version
+```
+
+До test policy и её cohort rules замораживаются. Test применяет её через общий solver, но не
+изменяет mappings по результату. Publication активирует candidate memory snapshot и совместимую
+calibration policy как одну production-конфигурацию.
+
 ## Фаза 3. Выполнение
 
 ### 7. Слепой прогон
 
-Каждый benchmark-пример проходит слепую часть [цикла попытки](attempt.md):
+Каждый benchmark-пример проходит общий [слепой цикл геолокации](../locate.md), тот же самый, что
+используют production-инференс и train-попытка:
 
 ```text
-observations
-  → retrieval согласно условию
-  → candidates
-  → immutable answer_snapshot
+locate_request
+  request_id
+  image_ref
+  request_context
+  solve_config
+    caller — validation | test | shadow
+    memory_mode — off | snapshot
+    memory_snapshot_id
+    calibration_mode — evaluation
+    require_point_estimate — true
+
+→ immutable answer_snapshot
 ```
 
 Для `memory off` инструмент памяти недоступен. Уверенность не должна автоматически снижаться
 только из-за знания агентом названия экспериментального условия; это техническая конфигурация,
 а не часть пользовательского задания.
+
+Название условия и наличие ground truth не передаются модели. Изменение общего solver требует
+повторного запуска всех сравниваемых условий, а не только candidate snapshot.
 
 ### 8. Оценка
 
@@ -408,10 +448,10 @@ evaluation_decision
 
 ### 20. Публикация и откат
 
-Активация выполняется атомарным переключением `active_memory_snapshot_id`. Предыдущий snapshot не
-удаляется. После публикации запускается ограниченный мониторинг рабочего распределения; он может
-инициировать rollback, но пользовательские запросы сами по себе не становятся train-эпизодами без
-отдельного разрешённого процесса обратной связи.
+Активация выполняется атомарным переключением `active_memory_snapshot_id` и совместимого
+`calibration_policy_id`. Предыдущая пара не удаляется. После публикации запускается ограниченный
+мониторинг рабочего распределения; он может инициировать rollback, но пользовательские запросы
+сами по себе не становятся train-эпизодами без отдельного разрешённого процесса обратной связи.
 
 ## Связь со следующим отбором
 

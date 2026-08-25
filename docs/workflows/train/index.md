@@ -22,6 +22,9 @@ tags: [loci, workflow, learning, memory, evaluation, catalog]
 В рамках этих процессов обучение означает адаптацию через внешнюю память. Весы базовой модели не
 изменяются.
 
+Слепую геолокацию внутри train-попыток и benchmark выполняет общий
+[решатель](../locate.md), используемый также production-инференсом.
+
 ## Циклы
 
 | Цикл | Частота | Основной результат |
@@ -134,6 +137,23 @@ evaluation_report
   decision
 ```
 
+### Production-конфигурация
+
+Публикация атомарно связывает проверенные версии решателя, памяти и калибровки:
+
+```text
+production_configuration
+  agent_version
+  model_id
+  prompt_version
+  memory_snapshot_id
+  calibration_policy_id
+  tool_contract_versions
+  publication_report_id
+```
+
+Production-инференс закрепляет эту конфигурацию целиком до начала solve.
+
 ## Разделение данных
 
 ```text
@@ -192,7 +212,7 @@ learning demonstrated
 - Временные и доменные ограничения знания сохраняются явно.
 - Архив эпизодов отделён от памяти пользовательского инференса.
 - Подтверждение доставки не считается доказательством обучения.
-- Публикация памяти обратима через предыдущий `memory_snapshot_id`.
+- Публикация пары memory snapshot и calibration policy обратима через предыдущую production-конфигурацию.
 
 ## Наблюдаемость системы
 
@@ -223,9 +243,9 @@ delivery_status
 
 | Инструмент | Цикл |
 |---|---|
-| [`memory_retrieve`](/tools/memory_retrieve.md) | Слепая часть попытки и диагностические benchmark-запуски |
-| [`geocode_search`](/tools/geocode_search.md) | Разрешение уже сформированных топонимов в попытке и benchmark |
-| [`geocode_reverse`](/tools/geocode_reverse.md) | Нормализация выбранных и истинных координат |
+| [`memory_retrieve`](/tools/memory_retrieve.md) | Общий blind solver в production, train и benchmark |
+| [`geocode_search`](/tools/geocode_search.md) | Разрешение уже сформированных топонимов в общем solver |
+| [`geocode_reverse`](/tools/geocode_reverse.md) | Нормализация выбранных координат в solver и ground truth после reveal |
 | [`episode_store`](/tools/episode_store.md) | Архивирование завершённой попытки |
 | [`memory_store`](/tools/memory_store.md) | Публикация только валидированных наблюдений |
 

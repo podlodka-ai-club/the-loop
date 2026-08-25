@@ -161,9 +161,11 @@ ground_truth_envelope
 ```text
 source_metadata
   source_domain — user_photo | street_view | panorama | dashcam | screenshot | unknown
+  source_domain_confidence — number, от 0 до 1
   capture_platform | null
   campaign_id | null
   captured_at | null
+  image_orientation | null
   preprocessing_history[]
 ```
 
@@ -318,6 +320,12 @@ training_batch
     image_ref
     data_identity
     dataset_assignment
+    source_metadata
+    task_context
+      user_constraints[]
+      user_hints[]
+      target_precision
+      metadata_policy
     ground_truth_envelope
     usage_policy
     selection_reasons[]
@@ -329,6 +337,9 @@ training_batch
 ```
 
 Ground truth и закрытые group IDs передаются обучающему оркестратору, но не агенту.
+`task_context.target_precision` определяется задачей dataset, а не точностью конкретного ground
+truth. `user_constraints` и `user_hints` остаются пустыми, если для них нет независимого от метки
+источника; их нельзя синтезировать из истинного места для облегчения solve.
 
 ### 17. Freeze и dispatch
 

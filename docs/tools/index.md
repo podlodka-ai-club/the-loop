@@ -13,7 +13,7 @@ tags: [loci, workflow, geocoding, memory, tools, agent-tools, contract]
 
 | Инструмент | Назначение |
 |---|---|
-| [`memory_retrieve`](memory_retrieve.md) | Извлечь наблюдения, которые память считает релевантными текущему запросу. |
+| [`memory_retrieve`](memory_retrieve.md) | Извлечь валидированные наблюдения из закреплённой версии памяти. |
 | [`memory_store`](memory_store.md) | Передать валидированные учебные наблюдения во внешнюю память. |
 | [`episode_store`](episode_store.md) | Сохранить полный обучающий эпизод в отдельном аналитическом архиве. |
 | [`geocode_search`](geocode_search.md) | Преобразовать текстовую гипотезу о месте в один или несколько кандидатов с координатами. |
