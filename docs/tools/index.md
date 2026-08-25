@@ -1,11 +1,3 @@
----
-type: Tool Contract
-title: Инструменты Loci
-description: Каталог контрактов инструментов Loci для геокодинга, внешней памяти и архивирования обучающих эпизодов.
-timestamp: 2026-08-25T00:00:00+03:00
-tags: [loci, workflow, geocoding, memory, tools, agent-tools, contract]
----
-
 # Инструменты Loci
 
 Каталог описывает контракты всех инструментов, доступных агенту Loci. По мере развития workflow
@@ -13,8 +5,7 @@ tags: [loci, workflow, geocoding, memory, tools, agent-tools, contract]
 
 | Инструмент | Назначение |
 |---|---|
-| [`memory_retrieve`](memory_retrieve.md) | Извлечь валидированные наблюдения из закреплённой версии памяти. |
-| [`memory_store`](memory_store.md) | Передать валидированные учебные наблюдения во внешнюю память. |
-| [`episode_store`](episode_store.md) | Сохранить полный обучающий эпизод в отдельном аналитическом архиве. |
-| [`geocode_search`](geocode_search.md) | Преобразовать текстовую гипотезу о месте в один или несколько кандидатов с координатами. |
-| [`geocode_reverse`](geocode_reverse.md) | Нормализовать координаты в страну, регион и населённый пункт. |
+| [`memory_retrieve`](memory_retrieve.md) | Получить релевантные заметки из заданного snapshot памяти. |
+| [`memory_store`](memory_store.md) | Добавить обучающие заметки и получить новый snapshot памяти. |
+| [`geocode_search`](geocode_search.md) | Найти объекты по названию или адресу. |
+| [`geocode_reverse`](geocode_reverse.md) | Получить ближайший объект и address components по координатам. |
