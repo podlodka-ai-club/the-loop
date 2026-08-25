@@ -19,4 +19,4 @@ okf_version: "0.1"
 * [decisions](decisions/index.md) - Принятые решения, их обоснования и отвергнутые альтернативы.
 * [research](research/index.md) - Исследования предметной области геолокации по изображению.
 * [tools](tools/index.md) - Контракты инструментов Loci для геокодинга, внешней памяти и архивирования обучающих эпизодов.
-* [workflow](workflow/index.md) - Процессы работы и обучения Loci.
+* [workflows](workflows/index.md) - Процессы работы и обучения Loci.

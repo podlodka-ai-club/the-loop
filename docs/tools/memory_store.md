@@ -67,7 +67,7 @@ memory_store
 ```
 
 Полная структура `learning_observation` определена в
-[обучающем процессе](/workflow/train.md).
+[обучающем процессе](/workflows/train.md).
 
 ## Выход
 
