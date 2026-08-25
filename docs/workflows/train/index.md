@@ -29,32 +29,35 @@ tags: [loci, workflow, learning, memory, evaluation, catalog]
 
 | Цикл | Частота | Основной результат |
 |---|---|---|
+| [Отбор примеров](select.md) | Перед следующей обучающей партией | Дедуплицированный и сбалансированный `training_batch` |
 | [Обработка попытки](attempt.md) | Для каждого train-примера | `episode`, `memory_feedback[]`, `learning_candidate[]` |
 | [Валидация знаний](validate.md) | После появления новых кандидатов или по расписанию | `validated learning_observation[]`, кандидат версии памяти |
 | [Оценка памяти](evaluate.md) | Перед публикацией версии и периодически | `evaluation_report`, решение `publish | reject | rollback` |
-| [Отбор примеров](select.md) | Перед следующей обучающей партией | Дедуплицированный и сбалансированный `training_batch` |
+
+Между попыткой и валидатором действует отдельный [контракт событий](events.md): archive episode
+остаётся source of truth, а очередь доставляет идемпотентный указатель на принятую версию.
 
 ## Как циклы соединяются
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│ 4. Отбор примеров                                            │
-│    баланс + пробелы + ошибки + запросы на контрпримеры        │
+│ Отбор примеров                                               │
+│    баланс + пробелы + ошибки + запросы на контрпримеры       │
 └───────────────────────────────┬──────────────────────────────┘
                                 ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ 1. Обработка попыток                                         │
-│    blind answer → reveal → review → episode + candidates      │
+│ Обработка попыток                                            │
+│    blind answer → reveal → review → archived episode + event │
 └───────────────────────────────┬──────────────────────────────┘
                                 ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ 2. Валидация знаний                                          │
-│    grouping → evidence → counterexamples → validated records  │
+│ Валидация знаний                                             │
+│    grouping → evidence → counterexamples → validated records │
 └───────────────────────────────┬──────────────────────────────┘
                                 ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ 3. Оценка версии памяти                                      │
-│    frozen benchmark → memory off/on → regression gate         │
+│ Оценка версии памяти                                         │
+│    frozen benchmark → memory off/on → regression gate        │
 └───────────────────┬───────────────────────────────┬──────────┘
                     │ publish                       │ reject
                     ↓                               ↓
@@ -129,8 +132,12 @@ memory_snapshot
 ```text
 evaluation_report
   benchmark_version
+  stage_outcomes
+  budget_usage
   run_matrix
   geolocation_metrics
+  response_policy_metrics
+  hint_metrics
   calibration_metrics
   memory_metrics
   cost_metrics
@@ -143,16 +150,28 @@ evaluation_report
 
 ```text
 production_configuration
+  configuration_id
   agent_version
   model_id
   prompt_version
-  memory_snapshot_id
-  calibration_policy_id
+  primary
+    memory_mode — snapshot
+    memory_snapshot_id
+    calibration_policy_id
+    execution_mode — normal
+  fallback
+    memory_mode — off
+    calibration_policy_id | null
+    execution_mode — production_fallback
   tool_contract_versions
+  geocoder_provider
+  geocoder_version
+  response_policy_id
   publication_report_id
 ```
 
-Production-инференс закрепляет эту конфигурацию целиком до начала solve.
+Publication step регистрирует primary и fallback как одну атомарную конфигурацию.
+Production-инференс закрепляет её целиком до начала solve, а rollback переключает всю пару.
 
 ## Разделение данных
 
@@ -229,6 +248,9 @@ created_at
 delivery_status
 ```
 
+Для перехода attempt → validation используется `validation_event` с archive receipt и content
+hash; полный feedback и candidates повторно в очередь не копируются.
+
 Это позволяет ответить:
 
 - из каких попыток возникло знание;
@@ -249,27 +271,28 @@ delivery_status
 | [`episode_store`](/tools/episode_store.md) | Архивирование завершённой попытки |
 | [`memory_store`](/tools/memory_store.md) | Публикация только валидированных наблюдений |
 
-Для полной реализации этой архитектуры контракты памяти должны поддерживать:
+Контракты памяти поддерживают:
 
 - фиксированный `memory_snapshot_id` для воспроизводимого retrieval;
 - происхождение, validation status, область применимости и срок актуальности записи;
 - агрегированные знания с несколькими `source_attempt_ids`;
 - стабильный `knowledge_id`, версии и `supersedes`;
-- идемпотентный feedback по ранее извлечённым ссылкам.
+- requested/served snapshot IDs и явный `snapshot_mismatch`.
 
-До расширения контрактов соответствующие данные сохраняются в эпизодах и результатах валидации,
-но не должны неявно считаться применёнными рабочей памятью.
+Feedback по ранее извлечённым ссылкам поступает валидатору через archive episode и
+`validation_event`, а не через agent tool.
 
 ## Результат полного контура
 
 Один проход системы обучения считается завершённым, когда:
 
 1. обработана выбранная партия train-примеров;
-2. новые кандидаты прошли валидацию либо остались в карантине с явной причиной;
-3. сформирован кандидат версии памяти;
-4. версия проверена на замороженном benchmark;
-5. принято и записано решение `publish`, `reject` или `rollback`;
-6. ошибки и пробелы переданы следующему циклу отбора.
+2. episodes архивированы, а validation events обработаны либо имеют явный terminal status;
+3. новые кандидаты прошли валидацию либо остались в карантине с явной причиной;
+4. сформирован кандидат версии памяти;
+5. версия прошла staged benchmark и calibration sample policy;
+6. принято и записано решение `publish`, `reject` или `rollback` для primary/fallback bundle;
+7. ошибки и пробелы переданы следующему циклу отбора.
 
 Только решение `publish`, основанное на контрольном отчёте, позволяет утверждать, что накопленный
 опыт улучшил текущую конфигурацию Loci.

@@ -62,6 +62,26 @@ request_context
   metadata_policy
 ```
 
+Общие структуры пользовательского контекста:
+
+```text
+context_constraint
+  constraint_id
+  content
+  provenance — user | dataset | external
+
+context_hint
+  hint_id
+  content
+  provenance — user | dataset | external
+  expected_reliability — number, от 0 до 1 | null
+  created_at | null
+  created_before_ground_truth_access — boolean
+```
+
+Train/validation/test допускают hint только с проверяемым независимым происхождением и
+`created_before_ground_truth_access: true`.
+
 `user_constraints` задают явно согласованные границы задачи, например «известно, что фотография
 сделана в Канаде». `user_hints` являются ненадёжными подсказками. Оба типа хранятся отдельно от
 визуальных наблюдений и не маскируются под признаки изображения.
@@ -81,6 +101,8 @@ solve_config
   decoding_config
   image_preprocessing_version
   tool_contract_versions
+  execution_mode — normal | controlled_ablation | production_fallback
+  initial_degraded_reasons[]
   memory_mode — off | snapshot
   memory_snapshot_id | null
   geocoder_provider
@@ -100,6 +122,10 @@ solve_config
 условия и наличие ground truth не передаются в модель, если способны повлиять на её уверенность или
 стратегию. Для `memory_mode: snapshot` идентификатор обязателен и остаётся неизменным на протяжении
 всего запроса.
+
+`memory_mode: off` при `controlled_ablation` не является degradation. Тот же mode при
+`production_fallback` содержит причину outage в `initial_degraded_reasons` и возвращает
+`degraded: true`.
 
 ## Выход
 
@@ -201,7 +227,7 @@ observation
     width
     height
   origin — physical_world | capture_artifact | embedded_text
-  observed_stage — blind | memory_guided
+  observed_stage — blind | memory_guided | post_reveal
 ```
 
 Координаты `image_region` нормализованы от `0` до `1`; для свойства всей сцены поле может быть
@@ -211,6 +237,9 @@ observation
 Отрицательное наблюдение допустимо только при достаточной видимости области, где объект должен
 был бы находиться. `recognition_confidence` оценивает распознавание объекта, а не силу его связи с
 географией.
+
+Общий тип включает все стадии жизненного цикла. Сам blind solver создаёт только `blind` и
+`memory_guided`; `post_reveal` разрешён исключительно review-фазе обучающей попытки.
 
 ### 2. Целостное впечатление
 
@@ -349,7 +378,8 @@ retrieval_trace
   requested_at
   request
   response_status — success | unavailable | timeout | invalid_request | snapshot_mismatch
-  memory_snapshot_id
+  requested_snapshot_id
+  served_snapshot_id | null
   items[]
     reference
     knowledge_id | null

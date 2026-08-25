@@ -123,8 +123,7 @@ policy, утечка истины или недопустимый ground truth. 
 
 ```text
 episode_delivery — pending | archived | retryable_failure | permanent_failure
-feedback_delivery — pending | submitted | not_needed | retryable_failure | permanent_failure
-candidate_delivery — pending | submitted | not_needed | retryable_failure | permanent_failure
+validation_event_delivery — pending_episode | pending_publish | published | not_needed | retryable_failure | permanent_failure
 ```
 
 ## Фаза 1. Admission и контекст
@@ -169,6 +168,8 @@ solve_config
   decoding_config
   image_preprocessing_version
   tool_contract_versions
+  execution_mode — normal
+  initial_degraded_reasons[]
   memory_mode — off | snapshot
   memory_snapshot_id | null
   geocoder_provider
@@ -308,9 +309,9 @@ evaluation
 7. Какое минимальное изменение belief улучшило бы ответ?
 8. Что локально для этой сцены, а что является проверяемой переносимой гипотезой?
 
-Новый визуальный признак содержит `image_region`, `recognition_confidence` и
-`observed_stage: post_reveal`. Без привязки к конкретной области он не может поддерживать учебную
-гипотезу.
+Новый визуальный признак использует общую `observation` schema из
+[слепого решателя](../locate.md) с `observed_stage: post_reveal`. Он содержит `image_region` и
+`recognition_confidence`; без привязки к конкретной области не может поддерживать учебную гипотезу.
 
 Новый запрос к рабочей памяти после reveal запрещён. Межэпизодное сравнение происходит в
 валидаторе и не переписывает попытку.
@@ -349,7 +350,7 @@ memory_feedback
   knowledge_version | null
   query_id
   retrieved_rank
-  applicability_decision
+  applicability_decision — use | reject | unresolved
   used — boolean
   assessment — helpful | harmful | neutral | unverifiable
   affected_candidate_ids[]
@@ -387,6 +388,13 @@ learning_candidate
     capture_platform | null
     campaign_id | null
     captured_at | null
+  source_solve_quality
+    result_status
+    degraded — boolean
+    degraded_reasons[]
+    unavailable_tools[]
+    depends_on_degraded_component — boolean
+    dependency_explanation | null
   applicability_notes
   known_exceptions[]
   epistemic_status — observed_scene_fact | inferred_association
@@ -398,6 +406,13 @@ learning_candidate
 
 Один эпизод позволяет сказать только «cue согласуется с ground truth в этой сцене». Он не
 подтверждает измеренную надёжность правила.
+
+`degraded: true` не запрещает кандидата автоматически. Кандидат допустим, если grounded visual cue
+и ground truth не зависят от отказавшего компонента. Если вывод возник из отсутствия памяти,
+неразрешённого geocoding или несовместимой calibration, зависимость фиксируется явно и кандидат не
+может пройти admission валидатора без дополнительного независимого подтверждения.
+
+`ground_truth_issue` полностью блокирует доставку кандидата независимо от остальных полей.
 
 Хорошая гипотеза имеет форму:
 
@@ -425,6 +440,11 @@ episode
   dataset_assignment
   attempt_context
   answer_snapshot
+  solve_quality
+    result_status
+    degraded
+    degraded_reasons[]
+    unavailable_tools[]
   ground_truth
   evaluation
   post_analysis
@@ -450,8 +470,7 @@ episode
 
 - неизменяемый episode;
 - payload для `episode_store`;
-- payload feedback;
-- payload кандидатов для валидатора;
+- draft `validation_event`, содержащий только указатель на будущий archive receipt;
 - content hashes, delivery states и retry policy.
 
 После этого попытка переходит в `RECORDED`. Сбой больше не требует вызова модели.
@@ -467,13 +486,21 @@ episode
 Временная ошибка повторяет тот же payload. Исправление создаёт новую версию со связью
 `supersedes`; принятый эпизод не переписывается.
 
-### 16. Feedback и карантин кандидатов
+### 16. Событие валидации
 
-- Feedback доставляется независимо от наличия нового кандидата.
-- Learning candidate передаётся только в карантин [валидации](validate.md).
+После `episode_store: accepted` оркестратор дополняет event draft значениями
+`episode_receipt_id` и `episode_content_hash`, затем публикует его по
+[контракту очереди валидации](events.md).
+
+Если episode не содержит ни feedback, ни learning candidates, event не публикуется и delivery
+получает `not_needed`.
+
+- Episode archive является source of truth для feedback и candidates.
+- Queue содержит только идемпотентный указатель на принятую версию episode.
+- Learning candidate становится доступным только карантину [валидатора](validate.md).
+- Feedback и candidates одного episode сохраняют одну context group.
 - Текущий `memory_store` не принимает candidate из одной попытки.
-- Частичный или полный отказ сохраняет per-record состояние.
-- Повтор неизменяемого payload идемпотентен.
+- Потерянное событие восстанавливается по архиву.
 
 ## Сбои и восстановление
 
@@ -485,6 +512,7 @@ episode
 | Ошибка нормализации ground truth | Сохранить административные поля неизвестными или повторить orchestration-call. |
 | После review, до outbox | Восстановить delivery из сохранённых результатов без изменения snapshot. |
 | После outbox | Повторять только идемпотентную доставку. |
+| Episode принят, event не опубликован | Повторить publish указателя с тем же event ID. |
 | Постоянная ошибка схемы | Создать новую версию payload с `supersedes`. |
 
 ## Инварианты
@@ -498,8 +526,10 @@ episode
 - Post-reveal observation пространственно привязан к изображению.
 - Новый memory retrieval после reveal запрещён.
 - Одна попытка создаёт hypothesis, а не validated knowledge.
+- Degraded provenance переносится в каждый candidate.
 - Метрики рассчитываются оркестратором.
 - Episode не доступен через production memory retrieval.
+- Validation queue передаёт ссылку на episode, а не дублирует payload.
 - Tool acceptance не считается доказанным обучением.
 - Сбой доставки не повторяет solve раскрытого примера.
 
@@ -514,7 +544,7 @@ episode
 5. feedback по всем извлечённым memory items;
 6. `learning_candidate[]` либо `learning_decision: not_proposed`;
 7. неизменяемый episode;
-8. durable outbox для независимых доставок.
+8. durable outbox с episode payload и validation event draft.
 
 Следующие состояния принадлежат другим циклам:
 

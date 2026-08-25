@@ -35,7 +35,7 @@ production, train и benchmark.
 
 ```text
 memory_retrieve
-  memory_snapshot_id        string, required
+  requested_snapshot_id     string, required
   query_id                  string, required
   pass                      feature | candidate_counterevidence, required
   query                     string, required
@@ -63,7 +63,7 @@ memory_retrieve
 
 ### Snapshot
 
-`memory_snapshot_id` закрепляется вызывающим процессом до solve. Память обязана:
+`requested_snapshot_id` берётся из закреплённого `solve_config.memory_snapshot_id`. Память обязана:
 
 - выполнить все проходы запроса на одной версии;
 - вернуть использованный snapshot в ответе;
@@ -99,7 +99,7 @@ Feature query описывает cue и контекст, а не просит �
 
 ```json
 {
-  "memory_snapshot_id": "memory-snapshot-2026-08-25-03",
+  "requested_snapshot_id": "memory-snapshot-2026-08-25-03",
   "query_id": "request-0042:memory:feature:1",
   "pass": "feature",
   "query": "Validated geographic associations for a rural road with a single yellow center line, rectangular maximum-speed sign and roadside ferns",
@@ -140,7 +140,7 @@ Feature query описывает cue и контекст, а не просит �
 
 ```json
 {
-  "memory_snapshot_id": "memory-snapshot-2026-08-25-03",
+  "requested_snapshot_id": "memory-snapshot-2026-08-25-03",
   "query_id": "request-0042:memory:counterevidence:1",
   "pass": "candidate_counterevidence",
   "query": "Validated cues, prerequisites and exceptions for distinguishing rural Ontario from rural Quebec in this source domain",
@@ -174,7 +174,7 @@ Feature query описывает cue и контекст, а не просит �
 ```text
 memory_retrieve_result
   query_id
-  memory_snapshot_id
+  served_snapshot_id
   items[]
     reference
     rank
@@ -197,7 +197,8 @@ memory_retrieve_result
   truncated
 ```
 
-`memory_snapshot_id` в результате обязан совпадать с запросом. `rank` отражает внутренний порядок
+`served_snapshot_id` обязан совпадать с `requested_snapshot_id`. Несовпадение считается
+`snapshot_mismatch`, и items такого ответа не используются. `rank` отражает внутренний порядок
 релевантности, но не является confidence или доказательностью знания.
 
 `retrieval_reason` объясняет, какой cue, candidate или constraint вызвал совпадение. Он является

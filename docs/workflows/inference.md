@@ -166,6 +166,9 @@ normalized_user_context
 
 Противоречие между constraint и изображением сохраняется как ограничение результата. Hint может
 повлиять на prior, но не становится visual evidence.
+Constraints и hints нормализуются в общие `context_constraint` и `context_hint` из
+[слепого решателя](locate.md). Для пользовательского hint сохраняются `provenance: user` и факт,
+что он получен до любого ground truth.
 
 ## Фаза 2. Подготовка запуска
 
@@ -176,24 +179,34 @@ normalized_user_context
 ```text
 production_run_context
   request_id
+  production_configuration_id
   agent_version
   model_id
   prompt_version
   decoding_config
   image_preprocessing_version
   tool_contract_versions
-  active_memory_snapshot_id
+  primary
+    memory_mode — snapshot
+    memory_snapshot_id
+    calibration_policy_id
+    execution_mode — normal
+  fallback
+    memory_mode — off
+    calibration_policy_id | null
+    execution_mode — production_fallback
+  selected_mode — primary | fallback
   geocoder_provider
   geocoder_version
-  calibration_policy_id
+  response_policy_id
   require_point_estimate
   inference_budget
   created_at
 ```
 
-`active_memory_snapshot_id` и calibration policy были ранее приняты
-[циклом оценки памяти](train/evaluate.md). Они не меняются между retrieval-проходами одного
-запроса.
+Primary и fallback ранее зарегистрированы одним атомарным bundle в
+[цикле оценки памяти](train/evaluate.md). До solve оркестратор выбирает один mode и закрепляет его
+memory/calibration параметры. Между retrieval-проходами mode не меняется.
 
 Название экспериментального режима и внутренние production-флаги не передаются модели, если не
 нужны для решения.
@@ -239,11 +252,13 @@ locate_request
     decoding_config
     image_preprocessing_version
     tool_contract_versions
-    memory_mode — snapshot
-    memory_snapshot_id
+    execution_mode — normal | production_fallback
+    initial_degraded_reasons[]
+    memory_mode — snapshot | off, from selected mode
+    memory_snapshot_id | null
     geocoder_provider
     geocoder_version
-    calibration_policy_id
+    calibration_policy_id | null
     calibration_mode — published
     require_point_estimate
     inference_budget
@@ -408,6 +423,8 @@ inference_telemetry
   prompt_version
   memory_snapshot_id
   calibration_policy_id
+  production_configuration_id
+  selected_mode
   source_domain
   requested_precision
   achieved_precision
@@ -430,7 +447,8 @@ benchmark качества.
 |---|---|
 | Неподдерживаемый или повреждённый файл | `REJECTED`; модель не вызывается. |
 | Несколько несвязанных сцен | `REJECTED` либо `insufficient_evidence` согласно продуктовой policy. |
-| Активный memory snapshot недоступен | До solve переключиться на зарегистрированную memory-off fallback-конфигурацию и совместимый calibrator; при их отсутствии использовать raw mode. Отметить degraded. |
+| Primary memory snapshot недоступен до solve | Выбрать fallback из того же production bundle; при отсутствии calibrator использовать raw mode. Отметить degraded. |
+| Primary memory snapshot пропал после начала solve | Не переключать mode внутри запроса; завершить текущий solve как degraded memory failure. |
 | Geocoder недоступен | Вернуть доступный уровень без выдуманной точности; отметить degraded. |
 | Calibration несовместима | Не показывать raw score как вероятность; отметить degraded. |
 | Solver исчерпал budget | Сформировать честный текущий результат либо `insufficient_evidence`. |
@@ -442,7 +460,8 @@ benchmark качества.
 
 - Production использует общий blind solver, применяемый в train и benchmark.
 - Ground truth отсутствует.
-- Активные model, memory и calibration версии закреплены до solve.
+- Выбранные model, memory mode и calibration версии закреплены до solve.
+- Primary/fallback bundle зарегистрирован evaluation publication step и переключается атомарно.
 - Пользовательский hint не маскируется под visual evidence.
 - Tool outage не создаёт произвольный общий штраф confidence.
 - Raw confidence не выдаётся как калиброванная вероятность.

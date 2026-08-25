@@ -28,16 +28,18 @@ tags: [loci, workflow, learning, validation, memory, knowledge]
 
 ```text
 validation_input
-  learning_candidates[]
-  train_episodes[]
-  memory_feedback[]
+  validation_events[]
+  episode_reader
   active_knowledge_catalog
   validation_policy
   data_group_registry
+  trigger_context
 ```
 
-Валидатор может читать train-эпизоды из аналитического архива. Validation/test-эпизоды не могут
-поддерживать или опровергать конкретное знание, даже если доступны аналитическому контуру.
+События соответствуют [контракту validation queue](events.md). Валидатор получает archive receipt,
+читает неизменяемый train-эпизод и только после проверки content hash извлекает candidates и
+feedback. Validation/test-эпизоды не могут поддерживать или опровергать конкретное знание, даже
+если доступны аналитическому контуру.
 
 ## Результаты
 
@@ -50,7 +52,117 @@ learning_observation[]
 
 validation_requests[]
   запросы циклу отбора на недостающие положительные примеры или контрпримеры
+
+validation_run_report
+  run context, budget usage, event outcomes и агрегированные решения
 ```
+
+## Субъекты валидации
+
+Валидация состоит из двух обязательных и одного опционального слоя.
+
+### Детерминированный координатор
+
+- проверяет event, receipt, content hash и train split;
+- дедуплицирует попытки и evidence groups;
+- канонизирует административные идентификаторы;
+- применяет thresholds, expiry и decision policy;
+- сохраняет версии, provenance и outbox;
+- не делает visual-суждений по изображению.
+
+### Visual evidence verifier
+
+- проверяет присутствие или отсутствие cue на исходных изображениях;
+- сравнивает target и comparison scenes;
+- проверяет memory-guided и post-reveal observations;
+- фиксирует competing explanations;
+- не считает собственные повторные запуски независимыми evidence groups.
+
+Verifier может быть моделью или контролируемым agent workflow. Он не должен неявно наследовать
+ground-truth подсказки в prompt помимо данных, необходимых конкретному validation task.
+
+Предпочтительный порядок:
+
+```text
+1. blind cue verification — image + canonical cue, без target location
+2. deterministic join — verified cue + закрытый ground truth
+3. contrastive aggregation по independent groups
+```
+
+Если verifier получает target location, это сохраняется как `ground_truth_exposed: true`, а такое
+решение требует более строгой policy или независимой повторной проверки. Совпадение нескольких
+запусков одной model/prompt версии не считается независимостью geographic evidence.
+
+### Human reviewer
+
+Опционально применяется для правил с высоким ожидаемым влиянием, спорной visual-разметки,
+чувствительных данных и конфликтов нескольких verifier runs.
+
+## Запуск валидатора
+
+### Trigger policy
+
+```text
+validation_trigger_policy
+  policy_version
+  scheduled_interval
+  minimum_pending_events
+  maximum_queue_age
+  urgent_priority_threshold
+  minimum_candidate_group_size
+  manual_trigger_allowed
+```
+
+Запуск происходит при выполнении хотя бы одного разрешённого trigger. Пустой периодический запуск
+допустим для проверки queue health, но не создаёт snapshot без новых validation results.
+
+### Run context
+
+```text
+validator_run_context
+  validation_run_id
+  trigger
+  deterministic_validator_version
+  visual_verifier
+    verifier_type — model | agent | human | hybrid
+    validator_model_id | null
+    prompt_version | null
+    image_preprocessing_version | null
+    decoding_config | null
+    ground_truth_exposure_policy
+  validation_policy_version
+  archive_snapshot_id
+  active_knowledge_catalog_version
+  randomization_config
+  budget
+    max_events
+    max_candidates
+    max_episodes
+    max_images
+    max_model_calls
+    max_tokens
+    max_duration_ms
+  created_at
+```
+
+Любое изменение verifier model, prompt, preprocessing или policy создаёт новый run context. Старые
+validation decisions не переписываются; при необходимости они получают статус `revalidation_required`.
+
+### Состояния запуска
+
+```text
+TRIGGERED
+  → CLAIMING
+  → LOADING_EPISODES
+  → VALIDATING
+  → RECORDING_RESULTS
+  → ACKNOWLEDGING_EVENTS
+  → COMPLETE
+```
+
+При исчерпании budget необработанные события возвращаются в `available`. Частично обработанный
+candidate сохраняет checkpoint либо полностью повторяется идемпотентно согласно policy; неполный
+результат не получает `validated`.
 
 ## Состояния кандидата
 
@@ -80,6 +192,8 @@ PROPOSED
 
 Кандидат допускается к валидации, если:
 
+- validation event успешно claimed и соответствует [контракту очереди](events.md);
+- archive receipt, attempt ID и episode content hash совпадают;
 - его `source_attempt_id` существует в архиве;
 - эпизод относится к `split: train`;
 - ground truth имеет допустимый `label_status` и точность;
@@ -89,6 +203,23 @@ PROPOSED
 - схема и политика создания кандидата известны.
 
 Нарушение происхождения переводит кандидата в `REJECTED` с причиной `invalid_provenance`.
+
+Для degraded attempt дополнительно проверяется:
+
+```text
+source_solve_quality
+  result_status
+  degraded
+  degraded_reasons[]
+  unavailable_tools[]
+  depends_on_degraded_component
+  dependency_explanation | null
+```
+
+- `ground_truth_issue` отклоняет candidate;
+- зависимость от отказавшего компонента оставляет candidate в карантине до независимого evidence;
+- outage, не связанный с grounded cue и ground truth, не отклоняет candidate автоматически;
+- degraded episode не может быть единственным независимым подтверждением переносимого правила.
 
 ### 2. Атомарность
 
@@ -167,6 +298,32 @@ evidence_role
 Присутствие cue в целевом месте — только `positive_target`. Различающая способность требует
 данных из `comparison_set` и проверки мест, где cue встречается без target.
 
+### 6.1. Visual verification record
+
+Каждая проверка изображения создаёт воспроизводимую запись:
+
+```text
+visual_verification
+  verification_id
+  validation_run_id
+  source_attempt_id
+  image_ref
+  cue
+  expected_role
+  observed — present | absent | uncertain
+  image_region | null
+  recognition_confidence
+  verifier_run_index
+  verifier_model_id | null
+  prompt_version | null
+  ground_truth_exposed — boolean
+  decided_at
+```
+
+Несколько verifier runs одного изображения помогают оценить устойчивость разметки, но не
+увеличивают число независимых geographic evidence groups. `uncertain` не превращается в
+отрицательный пример.
+
 ## Фаза 3. Контрастная проверка
 
 ### 7. Проверка предусловий
@@ -237,10 +394,14 @@ validation_policy
   rule_class
   minimum_independent_positive_groups
   minimum_comparison_groups
+  minimum_non_degraded_positive_groups
   maximum_counterexample_rate
   required_source_domains[]
   expiry_policy
   confidence_method
+  degraded_evidence_policy
+  visual_verification_policy
+  human_review_policy
 ```
 
 Порог зависит от класса знания:
@@ -258,12 +419,16 @@ validation_policy
 ```text
 knowledge_validation
   candidate_knowledge_id
+  validation_run_id
+  validator_run_context_hash
   canonical_claim
   validation_policy_version
   source_attempt_ids[]
   independent_positive_groups
   independent_comparison_groups
   counterexample_attempt_ids[]
+  visual_verification_ids[]
+  degraded_source_attempt_ids[]
   competing_explanations[]
   estimated_reliability | null
   validated_scope
@@ -285,6 +450,10 @@ Feedback из попыток агрегируется отдельно:
 memory_feedback_summary
   knowledge_reference
   independent_context_groups
+  retrieved_count
+  applicability_used_count
+  applicability_rejected_count
+  applicability_unresolved_count
   helpful_count
   harmful_count
   neutral_count
@@ -293,8 +462,9 @@ memory_feedback_summary
   recommendation — retain | narrow_scope | revalidate | supersede
 ```
 
-Один `harmful` не удаляет запись. Повторяющийся вред в независимых контекстах может инициировать
-новую валидацию, сужение области или создание заменяющей версии.
+Applicability агрегируется до outcome assessment: запись, отклонённая gate, не считается `neutral`
+или `harmful`, пока она не была применена. Один `harmful` не удаляет запись. Повторяющийся вред в
+независимых контекстах может инициировать новую валидацию, сужение области или заменяющую версию.
 
 ## Фаза 5. Публикация валидированного знания
 
@@ -323,6 +493,7 @@ learning_observation
     independent_positive_groups
     independent_comparison_groups
     counterexample_count
+    degraded_source_count
     estimated_reliability | null
   known_exceptions[]
   validation_policy_version
@@ -403,6 +574,9 @@ validation_request
 - Артефакты съёмки имеют доменное и временное ограничение.
 - Недостаток данных оставляет гипотезу в карантине.
 - Feedback не является прямой командой изменить знание.
+- Validator runtime, verifier и budget имеют версии.
+- Degraded provenance учитывается до решения.
+- Visual verifier runs одного изображения не считаются независимыми geographic groups.
 - Публикация записи идемпотентна и версионирована.
 - Новая версия памяти не активируется без контрольной оценки.
 
@@ -416,7 +590,9 @@ validation_request
 4. сохранён `knowledge_validation` с решением и причиной;
 5. для `validated` сформирована версионированная запись;
 6. доставки находятся в долговечном outbox;
-7. при наличии новых знаний сформирован snapshot-кандидат для benchmark.
+7. при наличии новых знаний сформирован snapshot-кандидат для benchmark;
+8. обработанные validation events подтверждены только после записи результатов;
+9. необработанные из-за budget события возвращены в очередь без потери lease semantics.
 
 Цикл может закончиться без новых знаний. Это корректный результат, если ни одна гипотеза не
 прошла политику проверки.

@@ -108,6 +108,7 @@ idempotency_key
           "independent_positive_groups": 3,
           "independent_comparison_groups": 4,
           "counterexample_count": 1,
+          "degraded_source_count": 1,
           "estimated_reliability": null
         },
         "known_exceptions": [],
@@ -121,7 +122,8 @@ idempotency_key
 ```
 
 Пример показывает оболочку и основные поля; фактические административные идентификаторы и
-свидетельства должны соответствовать результату валидации.
+свидетельства должны соответствовать результату валидации. `degraded_source_count` сохраняет
+происхождение поддержки, но не означает, что валидатор принял зависимое от outage свидетельство.
 
 ## Выход
 

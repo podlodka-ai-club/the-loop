@@ -91,6 +91,7 @@ selection_policy
   geography_constraints
   source_domain_constraints
   difficulty_constraints
+  hint_cohort_constraints
   curriculum_stage
   privacy_requirements
 ```
@@ -111,6 +112,7 @@ selection_reason
   geographic_gap
   source_domain_gap
   calibration_gap
+  hint_robustness_gap
   exploration
 ```
 
@@ -341,6 +343,33 @@ Ground truth и закрытые group IDs передаются обучающе
 truth. `user_constraints` и `user_hints` остаются пустыми, если для них нет независимого от метки
 источника; их нельзя синтезировать из истинного места для облегчения solve.
 
+Каждый непустой hint соответствует общей структуре `context_hint` из
+[слепого решателя](../locate.md) и содержит:
+
+```text
+hint_id
+content
+provenance
+expected_reliability | null
+created_at | null
+created_before_ground_truth_access — true
+```
+
+Для validation/test assignment заранее размечается hint cohort:
+
+```text
+no_hint
+independent_helpful_hint
+independent_noisy_or_misleading_hint
+```
+
+Noisy hint создаётся из независимого источника или заранее определённой stress-test policy, а не
+путём просмотра ответа агента или адаптации под конкретный ground truth.
+
+Train batches включают измеряемую долю примеров с independently sourced hints, если production
+поддерживает такой вход. Это не позволяет всему обучению схлопнуться в `no_hint` path и оставляет
+отдельную долю без hints для базовой сопоставимости.
+
 ### 17. Freeze и dispatch
 
 До первой попытки фиксируются:
@@ -395,6 +424,7 @@ batch_outcome
 - Редкие меты не вытесняют базовые устойчивые признаки без измеренного основания.
 - Источник, кампания и время сохраняются вместе с примером.
 - Причина выбора каждого train-примера доступна для аудита.
+- Hint имеет независимое provenance и создаётся до доступа к ground truth.
 - Состав партии фиксируется до обработки.
 - Количество эпизодов не подменяет разнообразие и качество данных.
 
