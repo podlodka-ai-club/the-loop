@@ -45,13 +45,12 @@ tags: [loci, workflow, learning, memory, geolocation]
 ## Состояния цикла
 
 ```text
-NEW → INITIALIZED → OBSERVED → REASONED → ANSWERED → REVEALED → REVIEWED → COMPLETE
+STARTED → OBSERVED → REASONED → ANSWERED → REVEALED → REVIEWED → COMPLETE
 ```
 
 | Состояние | Результат |
 |---|---|
-| `NEW` | Получена фотография, попытка ещё не создана. |
-| `INITIALIZED` | Созданы идентификатор попытки и ссылка на фотографию; истинное место скрыто. |
+| `STARTED` | Получена фотография, созданы идентификатор попытки и ссылка на неё; истинное место скрыто. |
 | `OBSERVED` | Зафиксированы видимые признаки без географического вывода. |
 | `REASONED` | Получен релевантный опыт из памяти и сформированы кандидаты. |
 | `ANSWERED` | Итоговая гипотеза и уверенность сохранены неизменяемым снимком. |
