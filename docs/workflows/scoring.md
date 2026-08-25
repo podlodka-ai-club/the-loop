@@ -21,16 +21,18 @@ tags: [loci, workflow, evaluation, scoring, geolocation]
 sample_score
   sample_id
   distance_km
+  penalized
 ```
 
 Если общий [`answer_snapshot.location`](models.md#answer-snapshot) содержит latitude и longitude,
 `distance_km` равен длине кратчайшей геодезической линии на эллипсоиде WGS84 до
-[`ground_truth`](models.md#ground-truth).
+[`ground_truth`](models.md#ground-truth), а `penalized: false`.
 
 Если ответа нет, `location: null` или одна из координат отсутствует:
 
 ```text
 distance_km = 20_004
+penalized = true
 ```
 
 Это фиксированный штраф, близкий к максимальному расстоянию между двумя точками Земли. Тот же
@@ -43,23 +45,28 @@ distance_km = 20_004
 
 ```text
 mean_distance_km = sum(sample.distance_km) / sample_count
+median_distance_km = median(sample.distance_km)
+penalized_count = count(sample.penalized)
 ```
 
+Для чётного числа samples median равна среднему двух центральных значений отсортированного ряда.
 Вычисления выполняются с полной точностью. Округление допускается только при отображении отчёта.
-Меньшее значение означает лучший результат.
+Меньшее расстояние означает лучший результат.
 
 ## Сравнение памяти
 
 ```text
 delta_km = baseline_mean_distance_km - memory_mean_distance_km
+median_delta_km = baseline_median_distance_km - memory_median_distance_km
 ```
 
-Положительный `delta_km` означает, что включение memory snapshot уменьшило среднюю ошибку.
-Отрицательный — что средняя ошибка выросла.
+Положительная delta означает уменьшение соответствующей ошибки. Mean остаётся основной метрикой;
+median и penalized counts показывают устойчивость результата к редким крупным сбоям.
 
 ## Инварианты
 
 - Оба прогона используют policy `geodesic-v1`.
 - Каждый sample корпуса учитывается ровно один раз в каждом прогоне.
 - Отсутствующий ответ получает штраф, а не удаляется из выборки.
+- Penalized samples учитываются и в mean, и в median.
 - Ground truth доступен scorer только после фиксации `answer_snapshot`.

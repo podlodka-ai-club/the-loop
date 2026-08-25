@@ -38,19 +38,23 @@ training_run
 ```text
 training_result
   run_id
+  status — completed | aborted
+  abort_reason | null
   corpus_ref
   runner_config_id
   base_memory_snapshot_id | null
   memory_snapshot_id | null
   processed_samples
   failed_samples
+  remaining_samples
   notes_added
 ```
 
 `memory_snapshot_id` указывает на память после последнего успешного шага. Каждый snapshot
 неизменяем, поэтому предыдущую версию всегда можно использовать повторно. `processed_samples`
-считает полностью завершённые шаги, `failed_samples` — шаги без reveal и рефлексии; их сумма равна
-размеру корпуса.
+считает успешно завершённые шаги, включая шаги без новых notes. `failed_samples` считает начатые
+шаги, завершившиеся terminal error до или после reveal. `remaining_samples` — часть корпуса, не
+начатая из-за abort; сумма трёх counters равна размеру корпуса.
 
 ## Цикл
 
@@ -68,8 +72,11 @@ training_result
 Полученный [`answer_snapshot`](models.md#answer-snapshot) фиксируется до reveal. После этого
 слепой ответ не изменяется и не запускается повторно в том же обучающем шаге.
 
-Если любой `memory_call` завершился с ненулевым `error`, sample получает failed status, ground
-truth не раскрывается, а текущий snapshot не меняется.
+При `unavailable` или `timeout` памяти оркестратор повторяет sample в новом blind context с теми же
+runner config и snapshot. Число попыток ограничено `runner_config.retry_policy.max_sample_attempts`.
+`invalid_request` завершает только текущий sample. Ошибка общей доступности snapshot или исчерпание
+retry дополнительно переводит весь run в `aborted`. Ground truth не раскрывается, а текущий snapshot
+не меняется.
 
 ### 3. Reveal
 
@@ -95,26 +102,56 @@ snapshot и `attempt_id`. Инструмент возвращает новый i
 
 ```text
 current_snapshot = base_memory_snapshot_id
+status = completed
+abort_reason = null
 
 for sample in corpus:
   attempt_id = run_id + ":" + sample.sample_id
-  answer = locate(sample.image, runner_config_id, current_snapshot)  # truth hidden
+  answer = locate_with_retries(
+    sample.image,
+    runner_config_id,
+    current_snapshot,
+    retry_on=[unavailable, timeout]
+  )
+  if answer is null:
+    failed_samples += 1
+    continue
+  if answer has shared_memory_failure:
+    failed_samples += 1
+    status = aborted
+    abort_reason = answer.memory_error
+    break
   if any(call.error for call in answer.memory_calls):
     failed_samples += 1
     continue
   notes = reflect(answer, sample.ground_truth)
   if notes:
-    current_snapshot = memory_store(current_snapshot, attempt_id, notes)
+    stored = memory_store_with_retries(current_snapshot, attempt_id, notes)
+    if stored has shared_memory_failure:
+      failed_samples += 1
+      status = aborted
+      abort_reason = stored.error
+      break
+    if stored is null:
+      failed_samples += 1
+      continue
+    current_snapshot = stored.snapshot_id
   processed_samples += 1
 
-return current_snapshot
+remaining_samples = corpus.size - processed_samples - failed_samples
+return training_result(status, abort_reason, current_snapshot, counters)
 ```
 
 ## Ошибки
 
-- Сбой до reveal не изменяет память; sample учитывается в `failed_samples`.
+- Сбой до reveal повторяется только в новом blind context и не изменяет память.
+- `snapshot_not_found`, `snapshot_mismatch` или исчерпание retry для `unavailable/timeout`
+  означают общую недоступность текущей памяти и прерывают training-run, чтобы не создавать каскад
+  одинаковых failures.
+- Sample-specific `invalid_request` помечает только текущий sample как failed и не останавливает run.
 - Сбой после reveal не разрешает повторно продолжать прежний blind context; `memory_store`
-  повторяется идемпотентно, а при terminal failure sample учитывается в `failed_samples`.
+  повторяется тем же payload не более `runner_config.retry_policy.max_store_attempts`, а при
+  terminal failure sample учитывается в `failed_samples`.
 - Недоступность памяти не допускает reveal для текущего sample и не изменяет snapshot.
 - Неудачный training-run можно отбросить целиком, вернувшись к `base_memory_snapshot_id`.
 

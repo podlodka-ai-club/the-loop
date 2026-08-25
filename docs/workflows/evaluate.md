@@ -43,8 +43,10 @@ evaluation_run
 evaluation_report
   run_id
   corpus_ref
+  corpus_content_hash
   memory_snapshot_id
   runner_config_id
+  runner_config_content_hash
   scoring_policy_id
   baseline_run_id
   memory_run_id
@@ -55,18 +57,33 @@ evaluation_report
     memory_request_id
     baseline_distance_km
     memory_distance_km
+    baseline_penalized
+    memory_penalized
   baseline_mean_distance_km
   memory_mean_distance_km
+  baseline_median_distance_km
+  memory_median_distance_km
+  baseline_penalized_count
+  memory_penalized_count
+  memory_call_count
+  samples_with_memory_calls
   delta_km
+  median_delta_km
 ```
 
 Score рассчитывается по [контракту `geodesic-v1`](scoring.md):
 
 ```text
 delta_km = baseline_mean_distance_km - memory_mean_distance_km
+median_delta_km = baseline_median_distance_km - memory_median_distance_km
 ```
 
-Положительный `delta_km` означает уменьшение средней ошибки.
+Положительная delta означает уменьшение соответствующей ошибки. Penalized counts показывают,
+сколько samples получили фиксированный штраф из scoring contract.
+
+`memory_call_count` и `samples_with_memory_calls` считаются по финальным принятым answers, без
+неуспешных retry attempts. Нулевые значения допустимы и явно показывают, что агент не обращался к
+доступной памяти.
 
 ## Прогон 1. Без памяти
 
@@ -95,11 +112,20 @@ Snapshot закреплён на весь прогон. Ground truth раскр�
 
 ## Проверка memory-run
 
+При `unavailable` или `timeout` оркестратор повторяет тот же sample в новом blind context с теми же
+runner config и snapshot. Число попыток ограничено `runner_config.retry_policy.max_sample_attempts`.
+Каждая попытка получает отдельный request ID; `memory_request_id` в report указывает на успешную
+финальную попытку.
+
+`invalid_request`, `snapshot_not_found` и `snapshot_mismatch` являются terminal. Если retryable
+ошибка не исчезла после разрешённого числа попыток, memory-run также завершается неуспешно.
+
 Memory-run действителен, если:
 
 - каждый выполненный memory call имеет `error: null`;
 - каждый result возвращает запрошенный `snapshot_id`;
-- runner config и eval-корпус не менялись между прогонами.
+- `runner_config.content_hash` и `corpus_manifest.content_hash` совпадают в обоих прогонах и с
+  хэшами, сохранёнными в report.
 
 Ошибка памяти не превращается в результат без памяти. При нарушении этих условий memory-run
 завершается без `evaluation_report`.

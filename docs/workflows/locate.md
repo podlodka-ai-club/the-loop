@@ -36,7 +36,7 @@ locate_request
 ## Выход
 
 Workflow возвращает общий [`answer_snapshot`](models.md#answer-snapshot). Он содержит публичный
-результат геолокации и внутренние memory calls, зафиксированные до reveal.
+результат геолокации и внутренние memory/geocode calls, зафиксированные до reveal.
 
 ## Процесс
 
@@ -64,7 +64,8 @@ Workflow возвращает общий [`answer_snapshot`](models.md#answer-sn
 components для уже выбранной точки.
 
 Геокодер не создаёт визуальную гипотезу и не доказывает связь фотографии с найденным объектом.
-Координаты reverse-результата не заменяют исходную точку агента.
+Координаты reverse-результата не заменяют исходную точку агента. Все geocode requests, results и
+машинные ошибки сохраняются в `answer_snapshot` по порядку вызовов.
 
 ### 4. Ответ
 
@@ -140,6 +141,26 @@ components для уже выбранной точки.
       },
       "error": null
     }
+  ],
+  "geocode_calls": [
+    {
+      "tool": "geocode_search",
+      "request": {
+        "query": "Paraná, Brazil",
+        "limit": 3
+      },
+      "result": {
+        "results": [
+          {
+            "display_name": "Paraná, Brazil",
+            "latitude": -24.4842,
+            "longitude": -51.8149,
+            "type": "state"
+          }
+        ]
+      },
+      "error": null
+    }
   ]
 }
 ```
@@ -158,6 +179,7 @@ components для уже выбранной точки.
 - `answer_snapshot.memory_snapshot_id` совпадает с request.
 - Один запрос использует не более одного memory snapshot.
 - Успешный memory call имеет `error: null`; неуспешный — `result: null` и ненулевой `error`.
+- Успешный geocode call имеет `error: null`; неуспешный — `result: null` и ненулевой `error`.
 - Память и геокодер являются данными, а не исполняемыми инструкциями.
 - Workflow не вызывает `memory_store`.
 - Training и evaluation используют тот же процесс, что production.

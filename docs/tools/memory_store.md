@@ -85,8 +85,9 @@ memory_store_result
 | `unavailable` | Память временно недоступна. |
 | `timeout` | Результат вызова неизвестен. |
 
-После `unavailable` или `timeout` оркестратор повторяет тот же запрос. Он не создаёт новую попытку
-и не меняет payload.
+После `unavailable` или `timeout` оркестратор повторяет тот же запрос в пределах
+[`runner_config.retry_policy.max_store_attempts`](../workflows/models.md#runner-config). Он не
+создаёт новую попытку и не меняет payload.
 
 ## Инварианты
 

@@ -27,6 +27,9 @@ runner_config
     max_duration_ms
     max_memory_calls
     max_geocoder_calls
+  retry_policy
+    max_sample_attempts
+    max_store_attempts
   content_hash
 ```
 
@@ -106,6 +109,20 @@ memory_call
 Request и result определены в [`memory_retrieve`](../tools/memory_retrieve.md). Успешный вызов имеет
 `error: null`; неуспешный — `result: null` и ненулевой `error`.
 
+## Geocode call
+
+```text
+geocode_call
+  tool — geocode_search | geocode_reverse
+  request — geocode_search | geocode_reverse
+  result — geocode_search_result | geocode_reverse_result | null
+  error — invalid_request | rate_limited | unavailable | timeout | null
+```
+
+Request и result определены в [`geocode_search`](../tools/geocode_search.md) и
+[`geocode_reverse`](../tools/geocode_reverse.md). Успешный вызов имеет `error: null`; неуспешный —
+`result: null` и ненулевой `error`.
+
 ## Answer snapshot
 
 ```text
@@ -119,6 +136,7 @@ answer_snapshot
   explanation
   limitations[]
   memory_calls[] — memory_call
+  geocode_calls[] — geocode_call
 ```
 
 `answer_snapshot` создаёт [слепая геолокация](locate.md) до любого доступа к ground truth.
@@ -131,4 +149,5 @@ answer_snapshot
 | `insufficient_evidence` | `null`. | Пустой массив. |
 
 Публичные поля inference: `request_id`, `status`, `location`, `alternatives`, `explanation` и
-`limitations`. `runner_config_id`, `memory_snapshot_id` и `memory_calls` остаются внутренними.
+`limitations`. `runner_config_id`, `memory_snapshot_id`, `memory_calls` и `geocode_calls` остаются
+внутренними.

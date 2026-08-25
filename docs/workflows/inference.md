@@ -43,7 +43,8 @@ inference_response
 ```
 
 `location_candidate` и граница публичных полей определены в [общих моделях](models.md). Response
-копирует их из `answer_snapshot` без повторного вызова модели.
+копирует их из `answer_snapshot` без повторного вызова модели. Memory и geocode calls остаются
+внутренними.
 
 Если запрос невозможно обработать, возвращается:
 
@@ -54,6 +55,10 @@ inference_error
   retryable
   message
 ```
+
+`failed` используется только когда input прошёл проверку, но workflow слепой геолокации не вернул
+пригодный `answer_snapshot`. Ошибка memory или geocoder при наличии результата остаётся успешным
+response с описанием в `limitations`.
 
 ## Процесс
 
