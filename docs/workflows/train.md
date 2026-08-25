@@ -24,19 +24,12 @@ training_run
   run_id
   corpus_ref
   base_memory_snapshot_id | null
-  runner_config
+  runner_config_id
 ```
 
-`corpus_ref` указывает на упорядоченный набор:
-
-```text
-training_sample
-  sample_id
-  image_ref
-  ground_truth
-```
-
-Ground truth хранится в закрытом контексте оркестратора и не входит в запрос решателя.
+`corpus_ref` разрешается в общий [`corpus_manifest`](models.md#corpus-manifest), а
+`runner_config_id` — в [`runner_config`](models.md#runner-config). Ground truth хранится в
+закрытом контексте оркестратора и не входит в запрос решателя.
 `base_memory_snapshot_id: null` означает начало с пустой памяти.
 Для каждого sample оркестратор создаёт стабильный `attempt_id` из `run_id` и `sample_id`.
 
@@ -45,13 +38,19 @@ Ground truth хранится в закрытом контексте оркес�
 ```text
 training_result
   run_id
+  corpus_ref
+  runner_config_id
+  base_memory_snapshot_id | null
   memory_snapshot_id | null
   processed_samples
+  failed_samples
   notes_added
 ```
 
 `memory_snapshot_id` указывает на память после последнего успешного шага. Каждый snapshot
-неизменяем, поэтому предыдущую версию всегда можно использовать повторно.
+неизменяем, поэтому предыдущую версию всегда можно использовать повторно. `processed_samples`
+считает полностью завершённые шаги, `failed_samples` — шаги без reveal и рефлексии; их сумма равна
+размеру корпуса.
 
 ## Цикл
 
@@ -59,38 +58,36 @@ training_result
 
 ### 1. Слепой ответ
 
-Оркестратор вызывает общий [цикл геолокации](locate.md) с текущим snapshot памяти. Для первой
-попытки без памяти используется `memory_snapshot_id: null`.
+Оркестратор вызывает [слепую геолокацию](locate.md) с `runner_config_id` и текущим snapshot
+памяти. Если `base_memory_snapshot_id: null`, первая попытка выполняется без памяти.
 
 Решателю доступно только изображение. Ground truth недоступен.
 
 ### 2. Фиксация
 
-Полученный `answer_snapshot` фиксируется до reveal. После этого слепой ответ не изменяется и не
-запускается повторно в том же обучающем шаге.
+Полученный [`answer_snapshot`](models.md#answer-snapshot) фиксируется до reveal. После этого
+слепой ответ не изменяется и не запускается повторно в том же обучающем шаге.
+
+Если любой `memory_call` завершился с ненулевым `error`, sample получает failed status, ground
+truth не раскрывается, а текущий snapshot не меняется.
 
 ### 3. Reveal
 
-Оркестратор раскрывает правильное место и показывает его агенту вместе с изображением и
-зафиксированным ответом. Ответ содержит все запросы к памяти, их результаты и IDs заметок, которые
-агент использовал до reveal.
+Для успешного шага оркестратор раскрывает правильное место. Рефлексия выполняется в новом чистом
+контексте, который содержит только изображение, зафиксированный `answer_snapshot` со всеми memory
+calls и ground truth. Внутренний контекст blind solver не продолжается.
 
 ### 4. Рефлексия
 
 Агент сравнивает ответ с ground truth, учитывает влияние полученных заметок и формулирует ноль или
-несколько коротких `memory_note`. Заметка должна быть понятна без исходного эпизода и помогать
-решать новые фотографии. Формат намеренно свободный:
-
-```text
-memory_note
-  content
-```
+несколько [`memory_note_input`](models.md#memory-notes). Заметка должна быть понятна без
+исходного эпизода и помогать решать новые фотографии.
 
 Если полезного обобщения нет, заметка не создаётся.
 
 ### 5. Обновление памяти
 
-Если заметки есть, оркестратор вызывает [`memory_store`](/tools/memory_store.md), передавая текущий
+Если заметки есть, оркестратор вызывает [`memory_store`](../tools/memory_store.md), передавая текущий
 snapshot и `attempt_id`. Инструмент возвращает новый immutable snapshot, который используется на
 следующем примере.
 
@@ -101,20 +98,24 @@ current_snapshot = base_memory_snapshot_id
 
 for sample in corpus:
   attempt_id = run_id + ":" + sample.sample_id
-  answer = locate(sample.image, current_snapshot)   # ground truth hidden
+  answer = locate(sample.image, runner_config_id, current_snapshot)  # truth hidden
+  if any(call.error for call in answer.memory_calls):
+    failed_samples += 1
+    continue
   notes = reflect(answer, sample.ground_truth)
   if notes:
     current_snapshot = memory_store(current_snapshot, attempt_id, notes)
+  processed_samples += 1
 
 return current_snapshot
 ```
 
 ## Ошибки
 
-- Сбой до reveal не изменяет память; пример можно начать заново в чистом контексте.
-- Сбой после reveal не разрешает повторно продолжать прежний blind context; заметки либо
-  сохраняются тем же идемпотентным вызовом, либо шаг пропускается.
-- Недоступность памяти останавливает обновление, но не изменяет последний успешный snapshot.
+- Сбой до reveal не изменяет память; sample учитывается в `failed_samples`.
+- Сбой после reveal не разрешает повторно продолжать прежний blind context; `memory_store`
+  повторяется идемпотентно, а при terminal failure sample учитывается в `failed_samples`.
+- Недоступность памяти не допускает reveal для текущего sample и не изменяет snapshot.
 - Неудачный training-run можно отбросить целиком, вернувшись к `base_memory_snapshot_id`.
 
 ## Инварианты
@@ -125,8 +126,8 @@ return current_snapshot
 - Новая заметка сохраняет ссылку на создавшую её попытку.
 - Snapshot создаётся append-only; его базовая версия не переписывается.
 - Внутри обучения нет baseline-run, score, A/B-сравнения или валидации отдельных заметок.
-- Train-корпус не пересекается с корпусом оценки.
-- Очередь событий, карантин знаний и отдельный архив эпизодов не используются.
+- Порядок samples и content hash задаёт `corpus_ref`.
+- Train-корпус не пересекается с eval-корпусом по `data_group_id`.
 
 ## За пределами цикла
 

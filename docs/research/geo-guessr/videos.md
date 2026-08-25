@@ -28,12 +28,12 @@ tags: [geo-guessr, video, geolocation, research]
 
 | Видео | Автор | Длительность | Что показывает | Разбор |
 |---|---|---:|---|---|
-| [Every Trick a Pro GeoGuessr Player Uses to Win](https://www.youtube.com/watch?v=0p5Eb4OSZCs) | WIRED, RAINBOLT | 7:02 | Сжатую систему признаков: столбы, болларды, номера, почву, растительность, артефакты Street View и геометрическую привязку дороги. | [Исследование](/research/geo-guessr/rainbolt-wired.md) |
-| [Geoguessr Pro Explains his ENTIRE Thought Process](https://www.youtube.com/watch?v=GNFQ7VEI9NY) | zi8gzag | 28:21 | Десять No Move-раундов с подробно проговорёнными рассуждениями, альтернативами и разбором ошибок после ответа. | [Исследование](/research/geo-guessr/zigzag-entire-thought-process.md) |
-| [2 Geoguessr Pro Players Explain their ENTIRE Thought Process](https://www.youtube.com/watch?v=P18WJSADjl0) | zi8gzag, Radu | 56:08 | Два профессиональных взгляда на одинаковые сцены и переход от явных признаков к трудно формализуемому опыту. | [Исследование](/research/geo-guessr/zigzag-radu-two-pros.md) |
-| [The BEST GeoGuessr Game Of All Time - Grand Finals 25](https://www.youtube.com/watch?v=9Wbau6wdKzI) | GeoGuessr | 1:01:28 | Финал чемпионата 2025: поиск информации и стратегия в Moving, No Move и NMPZ. | [Исследование](/research/geo-guessr/world-championship-2025-final.md) |
-| [35 Tips and Metas That ONLY Pros Know](https://www.youtube.com/watch?v=LqIZAEDr2b0) | zi8gzag | 16:01 | Редкие региональные меты: варианты столбов, номера, дорожная разметка, почва, камера и локальные особенности покрытия. | [Исследование](/research/geo-guessr/zigzag-pro-tips-and-metas.md) |
-| [Beginners Guide to Geoguessr in 2026](https://www.youtube.com/watch?v=H3L9bZ8s3yE) | zi8gzag | 5:32 | Учебный маршрут: покрытие Street View, сторона движения, справочники признаков и практика с объяснением ошибки. | [Исследование](/research/geo-guessr/zigzag-beginners-guide.md) |
+| [Every Trick a Pro GeoGuessr Player Uses to Win](https://www.youtube.com/watch?v=0p5Eb4OSZCs) | WIRED, RAINBOLT | 7:02 | Сжатую систему признаков: столбы, болларды, номера, почву, растительность, артефакты Street View и геометрическую привязку дороги. | [Исследование](rainbolt-wired.md) |
+| [Geoguessr Pro Explains his ENTIRE Thought Process](https://www.youtube.com/watch?v=GNFQ7VEI9NY) | zi8gzag | 28:21 | Десять No Move-раундов с подробно проговорёнными рассуждениями, альтернативами и разбором ошибок после ответа. | [Исследование](zigzag-entire-thought-process.md) |
+| [2 Geoguessr Pro Players Explain their ENTIRE Thought Process](https://www.youtube.com/watch?v=P18WJSADjl0) | zi8gzag, Radu | 56:08 | Два профессиональных взгляда на одинаковые сцены и переход от явных признаков к трудно формализуемому опыту. | [Исследование](zigzag-radu-two-pros.md) |
+| [The BEST GeoGuessr Game Of All Time - Grand Finals 25](https://www.youtube.com/watch?v=9Wbau6wdKzI) | GeoGuessr | 1:01:28 | Финал чемпионата 2025: поиск информации и стратегия в Moving, No Move и NMPZ. | [Исследование](world-championship-2025-final.md) |
+| [35 Tips and Metas That ONLY Pros Know](https://www.youtube.com/watch?v=LqIZAEDr2b0) | zi8gzag | 16:01 | Редкие региональные меты: варианты столбов, номера, дорожная разметка, почва, камера и локальные особенности покрытия. | [Исследование](zigzag-pro-tips-and-metas.md) |
+| [Beginners Guide to Geoguessr in 2026](https://www.youtube.com/watch?v=H3L9bZ8s3yE) | zi8gzag | 5:32 | Учебный маршрут: покрытие Street View, сторона движения, справочники признаков и практика с объяснением ошибки. | [Исследование](zigzag-beginners-guide.md) |
 
 ## Как читать подборку
 

@@ -11,7 +11,7 @@ tags: [loci, workflow, inference, production, geolocation]
 ## Назначение
 
 Production-инференс принимает одну пользовательскую фотографию, проверяет вход, закрепляет
-активный snapshot памяти и вызывает общий [workflow геолокации](locate.md).
+активный snapshot памяти и вызывает [слепую геолокацию](locate.md).
 
 Он не содержит собственного географического reasoning и не изменяет память.
 
@@ -23,8 +23,12 @@ inference_request
   image_ref
 ```
 
-Активный `memory_snapshot_id` является частью конфигурации сервиса, а не пользовательского
-запроса. Если активной памяти нет, inference вызывает solver с `memory_snapshot_id: null`.
+[`runner_config_id`](models.md#runner-config) и активный `memory_snapshot_id` являются частью
+конфигурации сервиса, а не пользовательского запроса. Если активной памяти нет, inference вызывает
+workflow с `memory_snapshot_id: null`.
+
+Активный snapshot меняется вручную после просмотра evaluation report; автоматического promotion
+в базовом контуре нет.
 
 ## Выход
 
@@ -38,16 +42,16 @@ inference_response
   limitations[]
 ```
 
-`location_candidate` определён в [контракте геолокации](locate.md). Response копирует публичные
-поля `answer_snapshot` без повторного вызова модели. Внутренние `memory_calls` и
-`used_memory_note_ids` пользователю не возвращаются.
+`location_candidate` и граница публичных полей определены в [общих моделях](models.md). Response
+копирует их из `answer_snapshot` без повторного вызова модели.
 
 Если запрос невозможно обработать, возвращается:
 
 ```text
 inference_error
   request_id
-  code — invalid_image | not_allowed | failed
+  code — invalid_image | not_allowed | timeout | failed
+  retryable
   message
 ```
 
@@ -55,17 +59,18 @@ inference_error
 
 ### 1. Проверка изображения
 
-Оркестратор проверяет, что файл доступен, декодируется, имеет поддерживаемый формат, относится к
-одной сцене и может быть обработан по продуктовой policy.
+Оркестратор проверяет, что файл доступен, декодируется, имеет поддерживаемый формат и может быть
+обработан по продуктовой policy.
 
 ### 2. Запуск
 
-До solve оркестратор закрепляет текущий `memory_snapshot_id` и создаёт:
+До solve оркестратор закрепляет текущие `runner_config_id`, `memory_snapshot_id` и создаёт:
 
 ```text
 locate_request
   request_id
   image_ref
+  runner_config_id
   memory_snapshot_id | null
 ```
 
@@ -80,7 +85,7 @@ Snapshot не переключается внутри запроса.
 ## Инварианты
 
 - Ground truth отсутствует.
-- Один production-запрос вызывает один blind solve.
+- Один production-запрос вызывает один workflow слепой геолокации.
 - Inference не вызывает `memory_store`.
 - Пользовательская фотография не становится training-данными автоматически.
 

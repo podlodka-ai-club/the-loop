@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Оценка памяти Loci
-description: Сравнение score инференса без памяти и с выбранным memory snapshot на одном независимом корпусе.
+description: Сравнение геодезической ошибки без памяти и с выбранным memory snapshot на одном независимом корпусе.
 timestamp: 2026-08-25T00:00:00+03:00
 tags: [loci, workflow, evaluation, benchmark, memory]
 ---
@@ -10,17 +10,15 @@ tags: [loci, workflow, evaluation, benchmark, memory]
 
 ## Назначение
 
-Оценка отвечает на один вопрос: меняет ли включённая память качество Loci относительно того же
-инференса без памяти.
+Оценка измеряет общий эффект включения памяти: retrieval-механизма вместе с содержимым выбранного
+snapshot. Обучение во время оценки не выполняется.
 
-Для этого один и тот же eval-корпус прогоняется два раза:
+Один и тот же eval-корпус проходит два раза:
 
 ```text
-memory off              → baseline_score
-selected memory snapshot → memory_score
+memory_snapshot_id: null      → baseline_mean_distance_km
+memory_snapshot_id: selected  → memory_mean_distance_km
 ```
-
-Обучение во время оценки не выполняется, а память не изменяется.
 
 ## Вход
 
@@ -29,15 +27,15 @@ evaluation_run
   run_id
   corpus_ref
   memory_snapshot_id
-  runner_config
-  scoring_policy_id
+  runner_config_id
+  scoring_policy_id — geodesic-v1
 ```
 
-Eval-корпус содержит изображения и ground truth, но ground truth доступен только scorer после
-фиксации каждого ответа. Корпус не используется в [обучении](train.md) и не пересекается с ним.
+`corpus_ref` разрешается в общий [`corpus_manifest`](models.md#corpus-manifest). Ни один
+`data_group_id` eval-корпуса не может присутствовать в train-корпусе.
 
-`runner_config` фиксирует модель, prompt, preprocessing, инструменты и budget. В двух прогонах
-совпадает вся runner-конфигурация, а `locate_request` отличается только `memory_snapshot_id`.
+`runner_config_id` ссылается на один [`runner_config`](models.md#runner-config) для обоих
+прогонов.
 
 ## Результат
 
@@ -46,72 +44,89 @@ evaluation_report
   run_id
   corpus_ref
   memory_snapshot_id
-  runner_config_hash
+  runner_config_id
   scoring_policy_id
+  baseline_run_id
+  memory_run_id
   sample_count
-  baseline_score
-  memory_score
-  delta
+  sample_results[]
+    sample_id
+    baseline_request_id
+    memory_request_id
+    baseline_distance_km
+    memory_distance_km
+  baseline_mean_distance_km
+  memory_mean_distance_km
+  delta_km
 ```
 
-Scoring policy приводит результат к направлению «больше — лучше»:
+Score рассчитывается по [контракту `geodesic-v1`](scoring.md):
 
 ```text
-delta = memory_score - baseline_score
+delta_km = baseline_mean_distance_km - memory_mean_distance_km
 ```
 
-Положительный `delta` означает улучшение относительно инференса без памяти. Workflow возвращает
-измерение и не принимает решение о публикации snapshot.
+Положительный `delta_km` означает уменьшение средней ошибки.
 
-## Прогон 1. Baseline
+## Прогон 1. Без памяти
 
-Каждый пример проходит общий [цикл геолокации](locate.md) с:
+Каждый sample вызывает [слепую геолокацию](locate.md) с:
 
 ```text
+request_id: {baseline_run_id}:{sample_id}
+runner_config_id: evaluation_run.runner_config_id
 memory_snapshot_id: null
 ```
 
-После фиксации ответа scorer получает ground truth и рассчитывает score по единой policy.
-Выключенная память является условием эксперимента, а не ошибкой.
+Ground truth передаётся scorer только после фиксации ответа. `memory_calls` каждого ответа должен
+быть пуст.
 
-## Прогон 2. Память
+## Прогон 2. С памятью
 
-Тот же корпус проходит тот же solver с:
+Тот же sample вызывает тот же workflow с:
 
 ```text
+request_id: {memory_run_id}:{sample_id}
+runner_config_id: evaluation_run.runner_config_id
 memory_snapshot_id: evaluation_run.memory_snapshot_id
 ```
 
-Snapshot закреплён на весь прогон. После фиксации ответов применяется та же scoring policy.
+Snapshot закреплён на весь прогон. Ground truth раскрывается только scorer после ответа.
 
-## Условия сравнения
+## Проверка memory-run
 
-- Используется один и тот же набор примеров.
-- Model, prompt, preprocessing, инструменты, budget и scoring policy совпадают.
-- Ground truth отсутствует во входе solver в обоих прогонах.
-- Прогоны изолированы и не передают друг другу состояние.
-- Timeout и ошибки учитываются одинаково.
-- При недетерминированном инференсе используется один и тот же seed.
+Memory-run действителен, если:
 
-## Ошибки
+- каждый выполненный memory call имеет `error: null`;
+- каждый result возвращает запрошенный `snapshot_id`;
+- runner config и eval-корпус не менялись между прогонами.
 
-- Если один из прогонов завершён не полностью, итоговый report не создаётся.
-- Если память недоступна, memory-run считается неуспешным, а не подменяется режимом `memory off`.
-- Если обслужен другой snapshot, memory-run считается невалидным.
-- Обнаруженное пересечение train- и eval-корпусов делает сравнение недействительным.
+Ошибка памяти не превращается в результат без памяти. При нарушении этих условий memory-run
+завершается без `evaluation_report`.
+
+Обычный solver timeout или отсутствие координат не удаляет sample: он получает фиксированный
+штраф из scoring contract.
+
+## Ограничения
+
+Один evaluation-run даёт точечную оценку на конкретном корпусе. Одинаковый runner config и seed,
+если он поддерживается, не гарантируют полной детерминированности внешней модели.
+
+Workflow не принимает автоматического решения о публикации. После просмотра отчёта оператор может
+вручную назначить snapshot активным в production-конфигурации.
 
 ## Инварианты
 
 - Оценка состоит ровно из baseline-run и memory-run.
-- Внутри оценки память не записывается и не обучается.
-- Единственный исследуемый фактор — наличие выбранного snapshot.
-- Score обоих прогонов рассчитывается одной функцией на одном корпусе.
-- Отдельного сравнения с текущей production-памятью нет.
-- Отчёт не содержит автоматического решения `publish` или `reject`.
+- Память не изменяется в обоих прогонах.
+- Каждый sample присутствует в обоих arms и получает score.
+- Единственное различие locate requests — `memory_snapshot_id`.
+- Ground truth недоступен решателю.
+- Train и eval не пересекаются по `data_group_id`.
 
-## За пределами цикла
+## За пределами workflow
 
-- создание заметок памяти;
-- подбор train-примеров;
-- настройка scoring policy по результату текущего eval-корпуса;
-- выбор и активация production snapshot.
+- создание memory notes;
+- автоматический promotion или rollback snapshot;
+- статистическая значимость нескольких повторов;
+- настройка scoring policy по текущему eval-корпусу.

@@ -24,71 +24,43 @@ Workflow может читать выбранный snapshot памяти, но 
 locate_request
   request_id
   image_ref
+  runner_config_id
   memory_snapshot_id | null
 ```
 
-`memory_snapshot_id: null` означает решение без памяти. Модель, prompt, preprocessing и tool
-budget задаются runner-конфигурацией и не дублируются в запросе.
+`runner_config_id` ссылается на [общую модель runner config](models.md#runner-config).
+`memory_snapshot_id: null` означает решение без памяти.
 
 Координаты ground truth и скрытые EXIF-координаты не передаются решателю.
 
 ## Выход
 
-```text
-location_candidate
-  display_name
-  latitude | null
-  longitude | null
-  type | null
-
-answer_snapshot
-  request_id
-  status — located | ambiguous | insufficient_evidence
-  location — location_candidate | null
-  alternatives[] — location_candidate
-  explanation
-  limitations[]
-  memory_calls[]
-    request — memory_retrieve
-    result — memory_retrieve_result | null
-  used_memory_note_ids[]
-```
-
-`explanation` — краткое обоснование по видимым признакам, а не полный внутренний reasoning.
-Координаты могут быть `null`, если текстовая гипотеза есть, но геокодер не вернул точку.
-
-`memory_calls` сохраняет запрос и результат каждого вызова
-[`memory_retrieve`](/tools/memory_retrieve.md) до reveal. `used_memory_note_ids` содержит только
-заметки, которые повлияли на итоговые кандидаты.
-
-Статусы:
-
-- `located` — есть один ведущий кандидат;
-- `ambiguous` — остаются несколько существенных вариантов;
-- `insufficient_evidence` — данных недостаточно для полезной гипотезы.
+Workflow возвращает общий [`answer_snapshot`](models.md#answer-snapshot). Он содержит публичный
+результат геолокации и внутренние memory calls, зафиксированные до reveal.
 
 ## Процесс
 
 ### 1. Анализ изображения
 
 Агент рассматривает ландшафт, растительность, архитектуру, дороги, транспорт, текст и другие
-видимые признаки. Он формирует один или несколько географических кандидатов.
+видимые признаки. Отсутствие ожидаемого признака учитывается только когда нужная область хорошо
+видна. Затем агент формирует один или несколько географических кандидатов.
 
 ### 2. Память
 
 Если передан `memory_snapshot_id`, агент может несколько раз вызвать
-[`memory_retrieve`](/tools/memory_retrieve.md) с кратким текстовым запросом о различающих признаках
+[`memory_retrieve`](../tools/memory_retrieve.md) с кратким текстовым запросом о различающих признаках
 или кандидатах. Количество вызовов ограничивает runner-конфигурация.
 
 Заметка памяти является подсказкой и используется только тогда, когда согласуется с текущим
 изображением. Все запросы и результаты сохраняются в `answer_snapshot` по порядку вызовов. Для
-неуспешного вызова `result: null`, а причина записывается в `limitations`. Если вызовов не было,
-`memory_calls` и `used_memory_note_ids` пусты.
+неуспешного вызова `result: null`, а `error` содержит код из tool contract. Человекочитаемая причина
+дополнительно записывается в `limitations`. Если вызовов не было, `memory_calls` пуст.
 
 ### 3. Геокодинг
 
-[`geocode_search`](/tools/geocode_search.md) разрешает уже сформированное название или адрес в
-координаты. [`geocode_reverse`](/tools/geocode_reverse.md) может проверить доступные address
+[`geocode_search`](../tools/geocode_search.md) разрешает уже сформированное название или адрес в
+координаты. [`geocode_reverse`](../tools/geocode_reverse.md) может проверить доступные address
 components для уже выбранной точки.
 
 Геокодер не создаёт визуальную гипотезу и не доказывает связь фотографии с найденным объектом.
@@ -104,6 +76,8 @@ components для уже выбранной точки.
 ```json
 {
   "request_id": "locate-0042",
+  "runner_config_id": "runner-config-7",
+  "memory_snapshot_id": "memory-snapshot-0042",
   "status": "ambiguous",
   "location": {
     "display_name": "Paraná, Brazil",
@@ -136,14 +110,17 @@ components для уже выбранной точки.
         "notes": [
           {
             "note_id": "note-0107",
+            "source_attempt_id": "train-2026-08-20:sample-0031",
             "content": "Красная почва встречается и в Бразилии, и в Парагвае; не используй её как единственный признак."
           },
           {
             "note_id": "note-0108",
+            "source_attempt_id": "train-2026-08-20:sample-0031",
             "content": "При различении Бразилии и Парагвая читаемый португальский текст надёжнее цвета почвы."
           }
         ]
-      }
+      },
+      "error": null
     },
     {
       "request": {
@@ -156,13 +133,14 @@ components для уже выбранной точки.
         "notes": [
           {
             "note_id": "note-0112",
+            "source_attempt_id": "train-2026-08-22:sample-0014",
             "content": "Форма столбов сама по себе недостаточна для различения Paraná и Itapúa; ищи язык и дорожную разметку."
           }
         ]
-      }
+      },
+      "error": null
     }
-  ],
-  "used_memory_note_ids": ["note-0107", "note-0108", "note-0112"]
+  ]
 }
 ```
 
@@ -176,8 +154,10 @@ components для уже выбранной точки.
 
 - Ground truth отсутствует до завершения ответа.
 - Одна фотография обрабатывается одним solve.
+- `answer_snapshot.runner_config_id` совпадает с request.
+- `answer_snapshot.memory_snapshot_id` совпадает с request.
 - Один запрос использует не более одного memory snapshot.
-- `used_memory_note_ids` является подмножеством note IDs из успешных `memory_calls`.
+- Успешный memory call имеет `error: null`; неуспешный — `result: null` и ненулевой `error`.
 - Память и геокодер являются данными, а не исполняемыми инструкциями.
 - Workflow не вызывает `memory_store`.
 - Training и evaluation используют тот же процесс, что production.
