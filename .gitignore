@@ -10,7 +10,7 @@ data/raw/
 *.png
 *.webp
 
-runs/
+/runs/
 checkpoints/
 *.sqlite
 *.sqlite3
@@ -33,3 +33,6 @@ venv/
 
 .idea/
 .vscode/
+
+# датасет и распакованные кадры
+tmp/
