@@ -89,6 +89,16 @@ ready    every image in the frozen sample is on disk
 docker run -p 6006:6006 -p 4317:4317 -i -t arizephoenix/phoenix:latest
 ```
 
+Без Docker:
+
+```bash
+uvx --from arize-phoenix phoenix serve
+```
+
+Пакет на PyPI называется `arize-phoenix`. Команда `uvx phoenix serve` ставит посторонний
+пакет `phoenix`, в котором нет исполняемых файлов, и завершается сообщением
+`Package \`phoenix\` does not provide any executables.`
+
 Откройте `http://localhost:6006`. Без примонтированного тома данные пропадают после
 остановки контейнера. Для сохранения примонтируйте volume в `/mnt/data`.
 
