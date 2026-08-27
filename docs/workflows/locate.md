@@ -16,7 +16,7 @@ Workflow получает одну фотографию и возвращает 
 Этот же workflow используют [production-инференс](inference.md), [обучение](train.md) до reveal и
 оба прогона [оценки памяти](evaluate.md).
 
-Workflow может читать выбранный snapshot памяти, но никогда его не изменяет.
+Workflow может читать выбранную систему памяти, но никогда её не изменяет.
 
 ## Вход
 
@@ -29,7 +29,8 @@ locate_request
 ```
 
 `runner_config_id` ссылается на [общую модель runner config](models.md#runner-config).
-`memory_snapshot_id: null` означает решение без памяти.
+`memory_snapshot_id` — историческое имя opaque ID привязки к системе/инстансу памяти. Он не
+означает версию данных внутри провайдера; `null` означает решение без памяти.
 
 Координаты ground truth и скрытые EXIF-координаты не передаются решателю.
 
@@ -51,6 +52,9 @@ Workflow возвращает общий [`answer_snapshot`](models.md#answer-sn
 Если передан `memory_snapshot_id`, агент может несколько раз вызвать
 [`memory_retrieve`](../tools/memory_retrieve.md) с кратким текстовым запросом о различающих признаках
 или кандидатах. Количество вызовов ограничивает runner-конфигурация.
+
+Все обращения в одном solve используют одну и ту же привязку; workflow не выбирает другую систему
+памяти и не переключает версии данных внутри провайдера.
 
 Заметка памяти является подсказкой и используется только тогда, когда согласуется с текущим
 изображением. Все запросы и результаты сохраняются в `answer_snapshot` по порядку вызовов. Для
@@ -78,7 +82,7 @@ components для уже выбранной точки.
 {
   "request_id": "locate-0042",
   "runner_config_id": "runner-config-7",
-  "memory_snapshot_id": "memory-snapshot-0042",
+  "memory_snapshot_id": "memory-binding-xmemory-prod",
   "status": "ambiguous",
   "location": {
     "display_name": "Paraná, Brazil",
@@ -102,12 +106,12 @@ components для уже выбранной точки.
   "memory_calls": [
     {
       "request": {
-        "snapshot_id": "memory-snapshot-0042",
+        "snapshot_id": "memory-binding-xmemory-prod",
         "query": "Сельская дорога с красной почвой и бетонными столбами. Возможны Бразилия или Парагвай.",
         "limit": 3
       },
       "result": {
-        "snapshot_id": "memory-snapshot-0042",
+        "snapshot_id": "memory-binding-xmemory-prod",
         "notes": [
           {
             "note_id": "note-0107",
@@ -125,12 +129,12 @@ components для уже выбранной точки.
     },
     {
       "request": {
-        "snapshot_id": "memory-snapshot-0042",
+        "snapshot_id": "memory-binding-xmemory-prod",
         "query": "Контрпризнаки для Paraná и Itapúa в сельской дорожной сцене.",
         "limit": 3
       },
       "result": {
-        "snapshot_id": "memory-snapshot-0042",
+        "snapshot_id": "memory-binding-xmemory-prod",
         "notes": [
           {
             "note_id": "note-0112",
@@ -171,13 +175,19 @@ components для уже выбранной точки.
 - Если геокодер недоступен, агент может вернуть текстовое место без координат.
 - Tool failure не заставляет агента придумывать недостающие данные.
 
+`locate` фиксирует memory error внутри `answer_snapshot` и сам не решает, допустим ли degraded
+ответ для вызывающего workflow. Production может принять такой ответ с `limitations`. Training и
+evaluation используют caller-level `locate_with_retries`: binding-ошибка (`memory_not_found`,
+`memory_mismatch` или исчерпание retry для `unavailable`/`timeout`) классифицируется до reveal или
+scoring и не считается пригодным memory-run результатом.
+
 ## Инварианты
 
 - Ground truth отсутствует до завершения ответа.
 - Одна фотография обрабатывается одним solve.
 - `answer_snapshot.runner_config_id` совпадает с request.
 - `answer_snapshot.memory_snapshot_id` совпадает с request.
-- Один запрос использует не более одного memory snapshot.
+- Один запрос использует не более одной привязки к системе памяти.
 - Успешный memory call имеет `error: null`; неуспешный — `result: null` и ненулевой `error`.
 - Успешный geocode call имеет `error: null`; неуспешный — `result: null` и ненулевой `error`.
 - Память и геокодер являются данными, а не исполняемыми инструкциями.

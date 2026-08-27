@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Обучение Loci
-description: Последовательное накопление текстового опыта в версионированной памяти после раскрытия правильного места.
+description: Последовательное накопление текстового опыта в выбранной системе памяти после раскрытия правильного места.
 timestamp: 2026-08-25T00:00:00+03:00
 tags: [loci, workflow, learning, memory, training]
 ---
@@ -23,14 +23,16 @@ tags: [loci, workflow, learning, memory, training]
 training_run
   run_id
   corpus_ref
-  base_memory_snapshot_id | null
+  memory_snapshot_id | null
   runner_config_id
 ```
 
 `corpus_ref` разрешается в общий [`corpus_manifest`](models.md#corpus-manifest), а
 `runner_config_id` — в [`runner_config`](models.md#runner-config). Ground truth хранится в
 закрытом контексте оркестратора и не входит в запрос решателя.
-`base_memory_snapshot_id: null` означает начало с пустой памяти.
+`memory_snapshot_id: null` означает обучение без подключённой системы памяти; заметки в таком
+режиме не сохраняются. Поле `memory_snapshot_id` — историческое имя opaque ID привязки к системе
+памяти, а не идентификатор версии данных.
 Для каждого sample оркестратор создаёт стабильный `attempt_id` из `run_id` и `sample_id`.
 
 ## Результат
@@ -42,7 +44,6 @@ training_result
   abort_reason | null
   corpus_ref
   runner_config_id
-  base_memory_snapshot_id | null
   memory_snapshot_id | null
   processed_samples
   failed_samples
@@ -50,11 +51,13 @@ training_result
   notes_added
 ```
 
-`memory_snapshot_id` указывает на память после последнего успешного шага. Каждый snapshot
-неизменяем, поэтому предыдущую версию всегда можно использовать повторно. `processed_samples`
+`memory_snapshot_id` указывает на выбранную привязку к системе памяти и остаётся одним и тем же
+на протяжении run; новый ID после записи не создаётся. Состояние провайдера может изменяться
+последовательными training-записями. `processed_samples`
 считает успешно завершённые шаги, включая шаги без новых notes. `failed_samples` считает начатые
 шаги, завершившиеся terminal error до или после reveal. `remaining_samples` — часть корпуса, не
-начатая из-за abort; сумма трёх counters равна размеру корпуса.
+начатая из-за abort; сумма трёх counters равна размеру корпуса. `notes_added` считает заметки,
+принятые `memory_store`; при `memory_snapshot_id: null` он равен нулю.
 
 ## Цикл
 
@@ -62,8 +65,8 @@ training_result
 
 ### 1. Слепой ответ
 
-Оркестратор вызывает [слепую геолокацию](locate.md) с `runner_config_id` и текущим snapshot
-памяти. Если `base_memory_snapshot_id: null`, первая попытка выполняется без памяти.
+Оркестратор вызывает [слепую геолокацию](locate.md) с `runner_config_id` и выбранной привязкой к
+системе памяти. Если `memory_snapshot_id: null`, попытка выполняется без памяти.
 
 Решателю доступно только изображение. Ground truth недоступен.
 
@@ -73,10 +76,15 @@ training_result
 слепой ответ не изменяется и не запускается повторно в том же обучающем шаге.
 
 При `unavailable` или `timeout` памяти оркестратор повторяет sample в новом blind context с теми же
-runner config и snapshot. Число попыток ограничено `runner_config.retry_policy.max_sample_attempts`.
-`invalid_request` завершает только текущий sample. Ошибка общей доступности snapshot или исчерпание
-retry дополнительно переводит весь run в `aborted`. Ground truth не раскрывается, а текущий snapshot
-не меняется.
+runner config и memory binding. Число попыток ограничено `runner_config.retry_policy.max_sample_attempts`.
+`invalid_request` завершает только текущий sample. Ошибка общей доступности memory binding или
+исчерпание retry дополнительно переводит весь run в `aborted`. Ground truth не раскрывается, а
+выбранная привязка не переключается.
+
+`locate_with_retries` возвращает blind answer при доступной memory binding. Binding-level ошибка
+(`memory_not_found`, `memory_mismatch` или исчерпание retry) возвращается отдельным terminal
+outcome до reveal; sample-specific `invalid_request` возвращается как failed sample без reveal.
+Production может использовать тот же `locate` в degraded режиме, но training этого не делает.
 
 ### 3. Reveal
 
@@ -94,14 +102,17 @@ calls и ground truth. Внутренний контекст blind solver не �
 
 ### 5. Обновление памяти
 
-Если заметки есть, оркестратор вызывает [`memory_store`](../tools/memory_store.md), передавая текущий
-snapshot и `attempt_id`. Инструмент возвращает новый immutable snapshot, который используется на
-следующем примере.
+Если заметки есть и задан `memory_snapshot_id`, оркестратор вызывает
+[`memory_store`](../tools/memory_store.md), передавая выбранную привязку и `attempt_id`. Инструмент
+изменяет ту же систему памяти и возвращает тот же ID привязки.
 
-Если заметок нет, текущий snapshot не меняется.
+Если заметок нет, система памяти не изменяется.
+
+`memory_store_with_retries` возвращает результат или `memory_binding_failure` с кодом ошибки;
+неясный результат записи не используется как повод сменить привязку.
 
 ```text
-current_snapshot = base_memory_snapshot_id
+memory_binding = memory_snapshot_id
 status = completed
 abort_reason = null
 
@@ -110,24 +121,24 @@ for sample in corpus:
   answer = locate_with_retries(
     sample.image,
     runner_config_id,
-    current_snapshot,
+    memory_binding,
     retry_on=[unavailable, timeout]
   )
   if answer is null:
     failed_samples += 1
     continue
-  if answer has shared_memory_failure:
+  if answer is memory_binding_failure:
     failed_samples += 1
     status = aborted
-    abort_reason = answer.memory_error
+    abort_reason = answer.error
     break
-  if any(call.error for call in answer.memory_calls):
+  if answer is sample_memory_failure:
     failed_samples += 1
     continue
   notes = reflect(answer, sample.ground_truth)
-  if notes:
-    stored = memory_store_with_retries(current_snapshot, attempt_id, notes)
-    if stored has shared_memory_failure:
+  if notes and memory_binding is not null:
+    stored = memory_store_with_retries(memory_binding, attempt_id, notes)
+    if stored is memory_binding_failure:
       failed_samples += 1
       status = aborted
       abort_reason = stored.error
@@ -135,33 +146,34 @@ for sample in corpus:
     if stored is null:
       failed_samples += 1
       continue
-    current_snapshot = stored.snapshot_id
   processed_samples += 1
 
 remaining_samples = corpus.size - processed_samples - failed_samples
-return training_result(status, abort_reason, current_snapshot, counters)
+return training_result(status, abort_reason, memory_binding, counters)
 ```
 
 ## Ошибки
 
 - Сбой до reveal повторяется только в новом blind context и не изменяет память.
-- `snapshot_not_found`, `snapshot_mismatch` или исчерпание retry для `unavailable/timeout`
-  означают общую недоступность текущей памяти и прерывают training-run, чтобы не создавать каскад
+- `memory_not_found`, `memory_mismatch` или исчерпание retry для `unavailable/timeout`
+  означают общую недоступность выбранной системы памяти и прерывают training-run, чтобы не создавать каскад
   одинаковых failures.
 - Sample-specific `invalid_request` помечает только текущий sample как failed и не останавливает run.
 - Сбой после reveal не разрешает повторно продолжать прежний blind context; `memory_store`
   повторяется тем же payload не более `runner_config.retry_policy.max_store_attempts`, а при
   terminal failure sample учитывается в `failed_samples`.
-- Недоступность памяти не допускает reveal для текущего sample и не изменяет snapshot.
-- Неудачный training-run можно отбросить целиком, вернувшись к `base_memory_snapshot_id`.
+- Недоступность памяти не допускает reveal для текущего sample и не переключает memory binding.
+- Неудачный training-run не откатывает записи в провайдере автоматически; восстановление состояния
+  выполняется политикой конкретного адаптера или отдельным manifest/ledger.
 
 ## Инварианты
 
 - Ground truth скрыт до фиксации ответа.
 - Обучение изменяет только память, а не веса модели и не общий solver.
-- Каждый шаг видит ровно один закреплённый snapshot.
+- Каждый шаг видит ровно одну закреплённую привязку к системе памяти.
 - Новая заметка сохраняет ссылку на создавшую её попытку.
-- Snapshot создаётся append-only; его базовая версия не переписывается.
+- Провайдер памяти может быть mutable; его versioning, если он есть, не является частью этого
+  workflow-контракта.
 - Внутри обучения нет baseline-run, score, A/B-сравнения или валидации отдельных заметок.
 - Порядок samples и content hash задаёт `corpus_ref`.
 - Train-корпус не пересекается с eval-корпусом по `data_group_id`.
@@ -170,6 +182,6 @@ return training_result(status, abort_reason, current_snapshot, counters)
 
 - подготовка и очистка train-корпуса;
 - оценка эффективности памяти;
-- выбор snapshot для production;
+- выбор memory binding для production;
 - редактирование весов модели;
 - автоматическое обучение по пользовательским запросам.

@@ -1,7 +1,7 @@
 ---
 type: Tool Contract
 title: memory_store
-description: Добавление текстовых заметок к memory snapshot после обучающей попытки.
+description: Добавление текстовых заметок в выбранную систему памяти после обучающей попытки.
 timestamp: 2026-08-25T00:00:00+03:00
 tags: [loci, memory, learning, tools, agent-tools, contract]
 ---
@@ -10,24 +10,30 @@ tags: [loci, memory, learning, tools, agent-tools, contract]
 
 ## Назначение
 
-Инструмент добавляет заметки к существующему snapshot и возвращает новый immutable snapshot. Он
-вызывается только в [обучении](../workflows/train.md) после reveal ground truth.
+Инструмент добавляет заметки в выбранную систему памяти. Он вызывается только в
+[обучении](../workflows/train.md) после reveal ground truth.
 
-Инструмент не валидирует заметки и не активирует snapshot в production.
+Поле `snapshot_id` — историческое имя opaque ID привязки к memory backend/instance, например
+xmemory instance или Cognee dataset. Инструмент не просит провайдера создавать snapshot,
+переключаться между версиями или выполнять rollback. Если провайдер изменяемый, идемпотентность
+и журнал операций обеспечиваются адаптером/оркестратором.
+Формат registry привязок описан в [общих моделях](../workflows/models.md#memory-binding-identifier).
+
+Инструмент не валидирует заметки и не выбирает привязку для production.
 
 ## Вход
 
 ```text
 memory_store
-  base_snapshot_id  string | null, required
+  snapshot_id       string, required  # ID привязки к системе памяти; историческое имя поля
   attempt_id        string, required
   notes[]           memory_note_input, required
 ```
 
 `memory_note_input` определён в [общих моделях](../workflows/models.md#memory-notes).
 
-`base_snapshot_id: null` создаёт первую версию памяти. Один `attempt_id` допускает один логический
-вызов относительно одной базовой версии. Если заметок нет, инструмент не вызывается.
+`snapshot_id` должен разрешаться в заранее настроенную систему памяти. Один `attempt_id` допускает
+один логический вызов в рамках этой привязки. Если заметок нет, инструмент не вызывается.
 
 Для каждой новой заметки память сохраняет `source_attempt_id = attempt_id`.
 
@@ -38,14 +44,15 @@ memory_store
 
 ```text
 memory_store_result
-  snapshot_id
+  snapshot_id       # тот же ID привязки, не новый snapshot
   note_ids[]
 ```
 
-Новый snapshot содержит все записи базовой версии и новые заметки. Базовый snapshot не изменяется.
+Запрос изменяет выбранную систему памяти и возвращает ID созданных заметок. Сам провайдер может
+быть mutable; новые версии его состояния этим контрактом не создаются.
 
-Повтор того же запроса возвращает тот же результат. Повтор с теми же `base_snapshot_id` и
-`attempt_id`, но другим содержимым возвращает `conflict`.
+Повтор того же запроса возвращает тот же результат. Повтор с теми же `snapshot_id` и `attempt_id`,
+но другим содержимым возвращает `conflict`.
 
 ## Пример
 
@@ -53,7 +60,7 @@ memory_store_result
 
 ```json
 {
-  "base_snapshot_id": "memory-snapshot-0041",
+  "snapshot_id": "memory-binding-xmemory-prod",
   "attempt_id": "train-2026-08-25:sample-0042",
   "notes": [
     {
@@ -70,7 +77,7 @@ memory_store_result
 
 ```json
 {
-  "snapshot_id": "memory-snapshot-0042",
+  "snapshot_id": "memory-binding-xmemory-prod",
   "note_ids": ["note-0107", "note-0108"]
 }
 ```
@@ -80,7 +87,7 @@ memory_store_result
 | Код | Значение |
 |---|---|
 | `invalid_request` | Вход не соответствует контракту. |
-| `snapshot_not_found` | Базовый snapshot не существует. |
+| `memory_not_found` | Привязка к системе памяти не существует или недоступна. |
 | `conflict` | Попытка уже использована с другим содержимым. |
 | `unavailable` | Память временно недоступна. |
 | `timeout` | Результат вызова неизвестен. |
@@ -92,7 +99,7 @@ memory_store_result
 ## Инварианты
 
 - Запись разрешена только после reveal в training-контуре.
-- Каждый вызов создаёт новую версию и не меняет базовую.
+- Каждый вызов изменяет только явно выбранную систему памяти; новая provider-версия не создаётся.
 - Каждая заметка возвращается retrieval-контрактом вместе с создавшим её `source_attempt_id`.
-- Инструмент не выбирает active production snapshot.
+- Инструмент не выбирает систему памяти для production и не переключает привязки.
 - Evaluation и production не вызывают `memory_store`.

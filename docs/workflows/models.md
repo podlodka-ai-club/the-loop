@@ -35,6 +35,8 @@ runner_config
 
 Runner config неизменяем. Любое изменение поля создаёт новый `runner_config_id` и `content_hash`.
 Workflow передаёт только ID, а оркестратор разрешает его в полную конфигурацию.
+`memory_retriever_id` выбирает код адаптера retrieval, а `memory_snapshot_id` в конкретном
+workflow выбирает его registry-привязку к provider и instance.
 
 ## Corpus manifest
 
@@ -97,13 +99,37 @@ memory_note
   content
 ```
 
+## Memory binding identifier
+
+`memory_snapshot_id` — историческое имя поля для opaque ID привязки к выбранной системе памяти.
+Оркестратор разрешает его через конфигурацию в конкретный provider и instance (например, xmemory
+instance, Cognee dataset или Mem0 tenant). Это не версия содержимого и не provider snapshot:
+системе памяти не нужны операции создания, переключения, клонирования или rollback snapshots.
+
+Одна привязка фиксируется на время workflow. Сменить её можно только изменением конфигурации между
+запусками. `null` означает отсутствие memory binding.
+
+Оркестратор хранит registry привязок вне memory provider:
+
+```text
+memory_binding
+  snapshot_id       # opaque ID, который видит workflow
+  provider          # xmemory | cognee | mem0 | ...
+  instance_ref      # instance / dataset / namespace провайдера
+  access_policy
+```
+
+Например, `memory-binding-xmemory-prod` может указывать на один xmemory instance, а
+`memory-binding-cognee-prod` — на dataset Cognee. Эти записи выбираются конфигурацией сервиса;
+провайдер не обязан знать или поддерживать поле `snapshot_id`.
+
 ## Memory call
 
 ```text
 memory_call
   request — memory_retrieve
   result — memory_retrieve_result | null
-  error — invalid_request | snapshot_not_found | snapshot_mismatch | unavailable | timeout | null
+  error — invalid_request | memory_not_found | memory_mismatch | unavailable | timeout | null
 ```
 
 Request и result определены в [`memory_retrieve`](../tools/memory_retrieve.md). Успешный вызов имеет
@@ -129,7 +155,7 @@ Request и result определены в [`geocode_search`](../tools/geocode_se
 answer_snapshot
   request_id
   runner_config_id
-  memory_snapshot_id | null
+  memory_snapshot_id | null  # ID memory binding; историческое имя поля
   status — located | ambiguous | insufficient_evidence
   location — location_candidate | null
   alternatives[] — location_candidate
@@ -140,7 +166,8 @@ answer_snapshot
 ```
 
 `answer_snapshot` создаёт [слепая геолокация](locate.md) до любого доступа к ground truth.
-После создания snapshot не изменяется.
+После создания answer snapshot не изменяется. Это snapshot аудита ответа, не snapshot внешней
+системы памяти.
 
 | Status | `location` | `alternatives` |
 |---|---|---|

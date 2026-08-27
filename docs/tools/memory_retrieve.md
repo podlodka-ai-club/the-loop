@@ -1,7 +1,7 @@
 ---
 type: Tool Contract
 title: memory_retrieve
-description: Получение релевантных текстовых заметок из заданного memory snapshot.
+description: Получение релевантных текстовых заметок из выбранной системы памяти.
 timestamp: 2026-08-25T00:00:00+03:00
 tags: [loci, memory, retrieval, tools, agent-tools, contract]
 ---
@@ -10,8 +10,13 @@ tags: [loci, memory, retrieval, tools, agent-tools, contract]
 
 ## Назначение
 
-Инструмент ищет релевантные заметки в конкретном snapshot памяти. Он не получает изображение, не
+Инструмент ищет релевантные заметки в выбранной системе памяти. Он не получает изображение, не
 определяет место и не изменяет память.
+
+Поле `snapshot_id` — историческое имя opaque ID привязки к конкретному memory backend/instance,
+например экземпляру xmemory или dataset Cognee. Это не snapshot и не версия данных внутри
+провайдера; провайдеру не нужны операции переключения или rollback.
+Формат registry привязок описан в [общих моделях](../workflows/models.md#memory-binding-identifier).
 
 Основной потребитель — [слепая геолокация](../workflows/locate.md).
 
@@ -19,7 +24,7 @@ tags: [loci, memory, retrieval, tools, agent-tools, contract]
 
 ```text
 memory_retrieve
-  snapshot_id  string, required
+  snapshot_id  string, required  # ID привязки к системе памяти; историческое имя поля
   query        string, required
   limit        integer, optional, default: 5
 ```
@@ -31,14 +36,14 @@ memory_retrieve
 
 ```text
 memory_retrieve_result
-  snapshot_id
+  snapshot_id  # тот же ID привязки, не новый snapshot
   notes[] — memory_note
 ```
 
 `memory_note` определён в [общих моделях](../workflows/models.md#memory-notes).
 
 Порядок `notes` отражает релевантность поиска, но не является confidence. Возвращённый
-`snapshot_id` обязан совпадать с запрошенным.
+`snapshot_id` обязан совпадать с запрошенным ID привязки.
 
 ## Пример
 
@@ -46,7 +51,7 @@ memory_retrieve_result
 
 ```json
 {
-  "snapshot_id": "memory-snapshot-0042",
+  "snapshot_id": "memory-binding-xmemory-prod",
   "query": "Сельская дорога с красной почвой и бетонными столбами. Возможны Бразилия или Парагвай.",
   "limit": 3
 }
@@ -56,7 +61,7 @@ memory_retrieve_result
 
 ```json
 {
-  "snapshot_id": "memory-snapshot-0042",
+  "snapshot_id": "memory-binding-xmemory-prod",
   "notes": [
     {
       "note_id": "note-0107",
@@ -74,7 +79,8 @@ memory_retrieve_result
 
 ## Использование
 
-- Один solve использует один snapshot во всех вызовах.
+- Один solve использует одну привязку к системе памяти во всех вызовах; провайдер внутри неё не
+  переключается.
 - Заметка является подсказкой и может быть ошибочной.
 - Агент использует заметку только после сопоставления с текущим изображением.
 - Пустой ответ не доказывает отсутствие географического признака.
@@ -85,16 +91,17 @@ memory_retrieve_result
 | Код | Значение |
 |---|---|
 | `invalid_request` | Вход не соответствует контракту. |
-| `snapshot_not_found` | Snapshot не существует. |
-| `snapshot_mismatch` | Нельзя гарантировать чтение указанной версии. |
+| `memory_not_found` | Привязка к системе памяти не существует или недоступна оркестратору. |
+| `memory_mismatch` | Интеграционный слой обнаружил, что ответ не соответствует привязке `provider + instance`, разрешённой через registry. |
 | `unavailable` | Память временно недоступна. |
 | `timeout` | Вызов не завершился в срок. |
 
-При ошибке решатель продолжает без результата этого вызова и не переключается на другой snapshot.
+При ошибке решатель продолжает без результата этого вызова и не переключается на другую систему
+памяти.
 
 ## Инварианты
 
-- Инструмент читает только явно указанный snapshot.
+- Инструмент читает только явно указанную привязку к системе памяти.
 - Каждая заметка сохраняет `source_attempt_id`, переданный при её создании.
 - Инструмент не видит ground truth и изображение.
 - Инструмент не изменяет память.

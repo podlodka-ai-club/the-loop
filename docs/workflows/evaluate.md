@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Оценка памяти Loci
-description: Сравнение геодезической ошибки без памяти и с выбранным memory snapshot на одном независимом корпусе.
+description: Сравнение геодезической ошибки без памяти и с выбранной системой памяти на одном независимом корпусе.
 timestamp: 2026-08-25T00:00:00+03:00
 tags: [loci, workflow, evaluation, benchmark, memory]
 ---
@@ -10,14 +10,14 @@ tags: [loci, workflow, evaluation, benchmark, memory]
 
 ## Назначение
 
-Оценка измеряет общий эффект включения памяти: retrieval-механизма вместе с содержимым выбранного
-snapshot. Обучение во время оценки не выполняется.
+Оценка измеряет общий эффект включения памяти: retrieval-механизма вместе с содержимым выбранной
+системы памяти. Обучение во время оценки не выполняется.
 
 Один и тот же eval-корпус проходит два раза:
 
 ```text
 memory_snapshot_id: null      → baseline_mean_distance_km
-memory_snapshot_id: selected  → memory_mean_distance_km
+memory_snapshot_id: <binding id> → memory_mean_distance_km
 ```
 
 ## Вход
@@ -30,6 +30,9 @@ evaluation_run
   runner_config_id
   scoring_policy_id — geodesic-v1
 ```
+
+`memory_snapshot_id` — историческое имя opaque ID привязки к системе/инстансу памяти. Он не
+указывает на версию данных и не требует от провайдера snapshot API.
 
 `corpus_ref` разрешается в общий [`corpus_manifest`](models.md#corpus-manifest). Ни один
 `data_group_id` eval-корпуса не может присутствовать в train-корпусе.
@@ -108,22 +111,27 @@ runner_config_id: evaluation_run.runner_config_id
 memory_snapshot_id: evaluation_run.memory_snapshot_id
 ```
 
-Snapshot закреплён на весь прогон. Ground truth раскрывается только scorer после ответа.
+Привязка к системе памяти закреплена на весь прогон и не переключается внутри него. Ground truth
+раскрывается только scorer после ответа.
 
 ## Проверка memory-run
 
 При `unavailable` или `timeout` оркестратор повторяет тот же sample в новом blind context с теми же
-runner config и snapshot. Число попыток ограничено `runner_config.retry_policy.max_sample_attempts`.
+runner config и memory binding. Число попыток ограничено `runner_config.retry_policy.max_sample_attempts`.
 Каждая попытка получает отдельный request ID; `memory_request_id` в report указывает на успешную
 финальную попытку.
 
-`invalid_request`, `snapshot_not_found` и `snapshot_mismatch` являются terminal. Если retryable
+Оценка принимает memory-run только после caller-level `locate_with_retries` с доступной binding:
+если произошла binding-level ошибка, ответ с degraded `limitations` отбрасывается до scoring и
+sample повторяется или memory-run завершается неуспешно.
+
+`invalid_request`, `memory_not_found` и `memory_mismatch` являются terminal. Если retryable
 ошибка не исчезла после разрешённого числа попыток, memory-run также завершается неуспешно.
 
 Memory-run действителен, если:
 
 - каждый выполненный memory call имеет `error: null`;
-- каждый result возвращает запрошенный `snapshot_id`;
+- каждый result возвращает запрошенный ID привязки `snapshot_id`;
 - `runner_config.content_hash` и `corpus_manifest.content_hash` совпадают в обоих прогонах и с
   хэшами, сохранёнными в report.
 
@@ -139,20 +147,21 @@ Memory-run действителен, если:
 если он поддерживается, не гарантируют полной детерминированности внешней модели.
 
 Workflow не принимает автоматического решения о публикации. После просмотра отчёта оператор может
-вручную назначить snapshot активным в production-конфигурации.
+вручную выбрать memory binding в production-конфигурации; это не promotion/rollback provider
+snapshot.
 
 ## Инварианты
 
 - Оценка состоит ровно из baseline-run и memory-run.
 - Память не изменяется в обоих прогонах.
 - Каждый sample присутствует в обоих arms и получает score.
-- Единственное различие locate requests — `memory_snapshot_id`.
+- Единственное различие locate requests — наличие выбранной memory binding в `memory_snapshot_id`.
 - Ground truth недоступен решателю.
 - Train и eval не пересекаются по `data_group_id`.
 
 ## За пределами workflow
 
 - создание memory notes;
-- автоматический promotion или rollback snapshot;
+- автоматическое переключение memory binding;
 - статистическая значимость нескольких повторов;
 - настройка scoring policy по текущему eval-корпусу.
