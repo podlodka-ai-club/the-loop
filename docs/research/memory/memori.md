@@ -48,17 +48,15 @@ const facts = await mem.recall("concrete poles versus red soil", { limit: 5 });
 - Attribution хорошо отображает provider scope: `entity_id` может быть Loci project, а
   `process_id` — версия inference/training workflow. Manual `recall` ближе к Loci retrieval,
   чем автоматическая инъекция.
-- Основной write path — автоматический capture разговоров/трейсов. Для строгого правила Loci
-  «записывать только после reveal» потребуется отдельный training writer и отключение capture на
-  inference; внешнее operation ledger всё равно нужно для idempotency.
-- Cloud augmentation и recall асинхронны, а structured memory и graph triples являются derived
-  представлением. Нельзя считать их безусловно равными исходной заметке или доказательству.
+- Основной write path — автоматический capture разговоров/трейсов. Для правила Loci «записывать
+  только после reveal» потребуется отдельный training writer и отключение capture на inference.
+- Cloud augmentation, structured memory и graph triples являются полноценными provider-native
+  представлениями, которые можно возвращать агенту через `memory_retrieve`.
 
 ## Открытые вопросы
 
-- Есть ли стабильный low-level write API для одиночной `memory_note`, или Loci придётся отправлять
-  synthetic conversation/trace?
-- Как связать manual recall с внешним audit ledger без потери attribution?
+- Как лучше передавать Markdown training experience: как document или synthetic conversation/trace?
+- Какой manual recall/augmentation payload даёт лучший geolocation score?
 - Насколько BYODB сохраняет равенство Cloud surface, особенно для TS SDK и background augmentation?
 
 ## Источники

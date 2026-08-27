@@ -82,19 +82,18 @@ REST-документация использует snake_case (`return_context`,
 - Zep Cloud — managed; Zep comparison на официальном сайте описывает SDK для Python, TypeScript и Go.
 - Graph backend Cloud скрыт в Context Graph Engine; для self-hosted Graphiti требуется отдельный
   отчёт и эксплуатация graph database.
-- Registry направляет ID привязки Loci на Zep project, `userId` или отдельный graph scope, а
+- Registry разрешает `memory_ref` Loci в Zep project, `userId` или отдельный graph scope, а
   `run_id` — на session/thread.
-- `thread.getUserContext()` возвращает скомпонованный текст, что удобно для prompt, но хуже для строгого
-  `memory_note`-контракта: приложение должно сохранять UUID, источник и provenance отдельно.
+- `thread.getUserContext()` возвращает скомпонованный текст, который можно передавать агенту как
+  provider-native payload наряду с graph search results.
 - Запись в Zep выполняется асинхронно и меняет граф; интеграционный слой проверяет готовность
   episodes, использует read-only credentials для locate/evaluation и извлекает raw facts/provenance.
 
 ## Открытые вопросы
 
-- Какой Zep scope (project, user, thread или graph) станет значением registry для Loci `memory_snapshot_id`,
+- Какой Zep scope (project, user, thread или graph) должен стоять за Loci `memory_ref`,
   и как проверяется tenant isolation?
-- Можно ли принимать готовый `context` Zep, или retrieval должен возвращать только типизированные
-  raw facts и provenance для последующего prompt assembly?
+- Что даёт лучший geolocation score: готовый `context` Zep или graph search payload?
 
 ## Источники
 

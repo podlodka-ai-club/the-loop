@@ -65,22 +65,18 @@ const result = await client.send(new RetrieveMemoryRecordsCommand({
 
 - Не требуется отдельная база или extraction worker: storage, strategy processing и retrieval
   managed AWS. Есть IAM, CloudWatch и integration с AgentCore/Strands.
-- `memoryId` естественно становится registry binding, `actorId` — scope dataset/project,
-  `sessionId` — attempt. Metadata/indexed keys могут хранить provider note IDs, но выдачу raw note
-  и порядок processing нужно проверить на реальном response.
+- `memory_ref` разрешается в `memoryId`, `actorId` и namespace выбранной стратегии; event/session
+  lifecycle остаётся provider-specific.
 - AWS service поддерживает automatic expiration и namespace isolation; это полезно для cleanup,
   но provider retention не равен Loci snapshot/version semantics.
-- Главные риски — eventual consistency, стоимость event/record/retrieval, AWS lock-in и то, что
-  встроенные strategies извлекают derived records вместо сохранения канонической заметки. Для
-  Loci нужны отдельные IAM roles для training writer и inference reader.
+- Главные риски — eventual consistency, стоимость event/record/retrieval и AWS lock-in. Встроенные
+  strategies и их derived records являются основной проверяемой возможностью backend.
 
 ## Открытые вопросы
 
-- Можно ли получить из `RetrieveMemoryRecords` стабильный raw record с provider ID и content,
-  достаточный для нашего DTO?
-- Какая strategy/custom strategy лучше сохраняет короткие географические notes без обобщения?
-- Какой polling и retry policy нужен после `CreateEvent`, чтобы training sample не читала
-  незавершённую ingestion?
+- Какой `RetrieveMemoryRecords` payload удобнее всего использовать агенту?
+- Какая strategy/custom strategy лучше извлекает географический опыт из Markdown?
+- Какой settle period нужен после `CreateEvent` перед evaluation?
 
 ## Источники
 

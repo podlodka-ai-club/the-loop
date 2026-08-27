@@ -42,15 +42,14 @@ fact: "Concrete utility poles are more discriminative than red soil for this com
 - Multimodal understanding может принимать текст/изображение на пути GenerateMemories и сохранять
   текстовый insight. Это полезно для эксперимента с visual cues, но provider сам выбирает, какую
   информацию извлечь.
-- `memory_bank` instance становится binding, scope — dataset/project, а `CreateMemory` после
+- `memory_bank` instance и scope dataset/project разрешаются через `memory_ref`, а `CreateMemory` после
   reveal — training write. Для inference нужны только memory viewer/retrieve permissions.
-- Ограничения — GCP/Gemini coupling, REST вместо native TS, asynchronous generation и риск того,
-  что generated fact потеряет точную формулировку исходной заметки. Memory Bank не заменяет внешний
-  audit ledger и raw note store.
+- Ограничения — GCP/Gemini coupling, REST вместо native TS и asynchronous generation. Generated
+  facts являются допустимым provider-native результатом, а не копией исходного training content.
 
 ## Открытые вопросы
 
-- Достаточно ли REST response/revision IDs для внешнего аудита и воспроизводимого evaluation?
+- Какой generated payload лучше использовать в prompt агента?
 - Сохраняются ли изображения или только generated textual insights, и где выполняется ML processing
   для выбранного региона?
 - Как сравнить Memory Bank с self-hosted multimodal candidate на одном наборе фотографий и notes?

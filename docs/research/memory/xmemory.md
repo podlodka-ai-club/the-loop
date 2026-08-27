@@ -24,11 +24,10 @@ xmemory — schema-grounded memory layer: агент пишет и читает 
 описывает хранение и правила extraction; `primary_key`, enum, relation cardinality и описания
 используются для идентификации, дедупликации и валидации.
 
-Для Loci это самый близкий из исследованных вариантов по форме контракта: есть детерминированные
-structured mutations без LLM, режимы `xresponse`/`raw-tables`, trace IDs, журнал операций и
-явные schema migrations. В этой архитектуре Loci `memory_snapshot_id` является внешним ID привязки к
-xmemory instance; сам instance может оставаться mutable, потому что provider snapshots и
-переключение между ними не являются требованиями Loci.
+Для Loci особенно важен schema-grounded путь: свободное Markdown-описание training experience
+можно передать в native extraction, а XMD использовать для моделирования признаков, мест, ошибок и
+связей между ними. Режимы `single-answer`, `xresponse` и `raw-tables` позволяют экспериментально
+выбрать лучший agent-facing результат. `memory_ref` указывает на xmemory instance и его настройки.
 
 ## Архитектура и модель данных
 
@@ -162,7 +161,7 @@ primary key и создать дубликат. Для retry-safe операци
 Non-additive изменения (rename/remove/type change) требуют migration plan; операции, удаляющие
 данные, требуют `confirmDestructive: true`. История миграций содержит `prior_version` и
 `new_version`, а также YAML до/после при запросе. Публичный API описывает atomic abort при ошибке.
-`prior_version`/`new_version` относятся к схеме, а не к значению Loci `memory_snapshot_id` и не требуют
+`prior_version`/`new_version` относятся к схеме, а не к значению Loci `memory_ref` и не требуют
 переключения memory backend.
 
 ## Развёртывание и интеграции
@@ -185,42 +184,40 @@ Non-additive изменения (rename/remove/type change) требуют migra
 
 ### Что совпадает с текущим контрактом
 
-- XMD позволяет явно задать `content` и `note_id` вместо хранения полного transcript.
-- Structured mutations подходят для записи заметок после `reveal`: они не требуют LLM и дают
-  предсказуемый create/update/delete.
-- `raw-tables`/`xresponse` ближе к `memory_retrieve`, чем synthesized `single-answer`.
-- `trace_id`, `write_id`, operation history и schema migrations полезны для evaluation,
-  debugging и provenance.
-- Instance может быть ограничен scope-ом чтения; отдельный instance естественно изолирует схему
-  одного workflow.
+- `write(text)` принимает свободное описание training experience и запускает schema-aware
+  extraction без заранее заданной Loci-модели memory items.
+- XMD может описать географические cues, hypotheses, locations, counter-signals и связи между ними.
+- `single-answer`, `raw-tables` и `xresponse` можно возвращать как provider-native payload без
+  нормализации в общий список заметок.
+- Instance естественно задаёт изолированную область данных для одной `memory_ref`.
 
 ### Несовпадения и ограничения
 
-- `write()` изменяет текущий instance, а `primary_key` специально разрешает deduplication и
-  stateful update. Registry и operation ledger фиксируют, какой instance используется в конкретном
-  workflow.
+- `write()` изменяет текущий instance, а extraction и diff/merge могут менять уже существующие
+  объекты; это ожидаемая часть поведения памяти.
 - Версионирование `prior_version`/`new_version` относится к XMD migration и не должно
-  интерпретироваться как смена Loci `memory_snapshot_id` или версия memory state.
+  интерпретироваться как смена Loci `memory_ref` или версия memory state.
 - Read scope в SDK ограничивает известные объекты, но не заменяет проверку tenant access и
   policy на уровне API key. Object-level RBAC на pricing page отмечен как coming soon.
-- XMD v1 не имеет scalar attributes у relations и не поддерживает массивы/вложенные поля; схему
-  `memory_note` следует держать плоской или моделировать дополнительные сущности.
-- `writeAsync` удобен для latency, но training pipeline обязан дождаться `completed`, если следующий
-  пример должен читать только что добавленную заметку.
+- XMD v1 не имеет scalar attributes у relations и не поддерживает массивы/вложенные поля; сложный
+  географический опыт придётся моделировать несколькими объектами и relations.
+- `writeAsync` удобен для latency, но нужно решить, выполняется ли ingestion между samples или
+  завершается пакетно перед evaluation.
 
-Registry хранит соответствие `memory_snapshot_id → provider + instance` и отдаёт `raw-tables` или
-`xresponse` из той же привязки. Идемпотентность операций остаётся на стороне адаптера/оркестратора.
+Registry хранит соответствие `memory_ref → provider + instance + provider_config`. Адаптер
+передаёт Markdown в native `write(text)` и возвращает настроенный `read` payload без canonical
+store или общей модели IDs.
 
 ## Открытые вопросы
 
-- Как устроить registry `memory_snapshot_id → provider + instance` и lifecycle credentials для xmemory?
+- Как устроить registry `memory_ref → provider + instance + provider_config` и lifecycle credentials для xmemory?
 - Как на практике настроить отдельные read-only и training write credentials, и какие гарантии
   tenant isolation даёт текущий API key/RBAC слой?
 - Какая опубликованная версия `xmemory` совместима со всеми описанными методами: документация
   уже ссылается на возможности `xmemory@3.6.0+`, тогда как npm-метаданные могут отставать.
 - Доступны ли structured writes на выбранном deployment и какова фактическая задержка
   `writeAsync` на типичной XMD схеме заметок?
-- Можно ли безопасно хранить геолокационные заметки в hosted/Temporal history; передаются ли
+- Можно ли безопасно хранить геолокационные training experiences в hosted/Temporal history; передаются ли
   изображения внешнему extraction LLM; какие retention/zero-retention условия применимы к нашему
   тарифу?
 

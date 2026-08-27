@@ -78,10 +78,9 @@ await store.delete(namespace, "note-1");
 ## Fit для Loci
 
 Сильная сторона — минимальная инфраструктурная поверхность для уже существующего LangGraph и
-естественная модель namespace/key, сопоставляемая с Loci `memory_snapshot_id` (ID привязки к
-конкретному Store) и `note_id`. Слабая сторона — отсутствие официальной TS extraction-библиотеки.
-Прямой `put` из training можно направить в выбранный namespace, но идемпотентность по
-`attempt_id`, валидацию заметок и read-only policy реализует интеграционный слой.
+естественная модель namespace/key, сопоставляемая с Loci `memory_ref`. Слабая сторона — отсутствие
+официальной TS extraction-библиотеки: прямой LangGraph Store не использует возможности полноценной
+memory extraction поверх Markdown training experience.
 
 Если Loci остаётся на TypeScript, LangMem следует рассматривать как архитектурный ориентир и
 контракт Store, а не как готовую зависимость. Если появится Python worker, можно вынести в него
@@ -89,11 +88,10 @@ background extraction, оставив TypeScript runner клиентом Store-�
 
 ## Открытые вопросы
 
-- Нужен ли Loci автоматический extraction, или достаточно сохранять короткие заметки напрямую
-  после `reveal`?
+- Нужен ли для LangMem Python worker с automatic extraction после `reveal`?
 - Если нужен extraction, допустимы ли Python worker и сетевой hop, либо требуется собственный
   TypeScript manager с теми же namespace/JSON-правилами?
-- Как registry будет связывать Loci `memory_snapshot_id` с namespace и backend Store, чтобы один solve не
+- Как registry будет связывать Loci `memory_ref` с namespace и backend Store, чтобы один solve не
   переключал привязку в середине запроса?
 
 ## Источники

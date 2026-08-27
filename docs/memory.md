@@ -9,24 +9,28 @@ tags: [loci, memory, shortlist, typescript, architecture]
 # Шорт-лист memory backends Loci
 
 Базовая версия Loci поддерживает три memory backend. Все они имеют TypeScript API и могут быть
-подключены через единый [memory_store](/tools/memory_store.md) / [memory_retrieve](/tools/memory_retrieve.md)
-adapter. Production binding выбирается через registry по `snapshot_id`; этот документ фиксирует
+подключены через общий envelope [memory_store](/tools/memory_store.md) / [memory_retrieve](/tools/memory_retrieve.md).
+Production memory выбирается через registry по `memory_ref`; этот документ фиксирует
 кандидатов baseline, а не решение использовать все три одновременно.
 
 | Backend | TypeScript API | Роль в базовой версии | Почему выбран |
 |---|---|---|---|
-| [xmemory](/research/memory/xmemory.md) | `xmemory` | Основной structured backend | XMD позволяет описать `memory_note`, использовать явные LLM-free mutations, primary keys, deduplication и `raw-tables`/`xresponse`. Это наиболее близкое соответствие контрактам Loci и лучше всего подходит для воспроизводимой записи после `reveal`. |
-| [Mem0](/research/memory/mem0.md) | `mem0ai` | Общий fact-retrieval baseline | У Mem0 есть зрелый TypeScript API, scopes, extraction, semantic/keyword retrieval и OSS/Platform варианты. Он даёт понятную generic baseline для сравнения качества retrieval, но требует внешнего контроля async ingestion, scope и idempotency. |
+| [xmemory](/research/memory/xmemory.md) | `xmemory` | Schema-grounded backend | XMD позволяет извлекать из свободного training experience типизированные признаки, места и связи, а `read` возвращает synthesized или structured result. |
+| [Mem0](/research/memory/mem0.md) | `mem0ai` | Fact-retrieval baseline | У Mem0 есть зрелый TypeScript API, автоматическая extraction, scopes, semantic/keyword retrieval и OSS/Platform варианты. |
 | [Hindsight](/research/memory/hindsight.md) | `@vectorize-io/hindsight-client` | Temporal/hybrid retrieval baseline | Hindsight объединяет semantic, BM25, graph и temporal search, возвращает raw memory units, metadata и source facts, а `retain`/`recall` доступны напрямую из TypeScript. Это позволяет проверить, дают ли временные и evidence-связи преимущество на географических cues. |
 
 ## Общие правила интеграции
 
 - В inference вызывается только retrieval; запись разрешена training workflow после `reveal`.
-- Каждый backend получает отдельный binding; idempotency и журнал операций остаются на стороне
-  адаптера/оркестратора.
-- Derived answers, profiles, observations и graph completions не заменяют raw note в evaluation.
-- Для каждого backend нужны contract tests на `limit`, scope isolation, retry/idempotency и
-  задержку видимости новой заметки.
+- Каждый backend получает отдельную `memory_ref` с provider-specific write и retrieval policy.
+- `memory_store` передаёт свободное Markdown-описание опыта; provider сам решает, какие внутренние
+  memories, facts, relations или observations создать.
+- `memory_retrieve` возвращает provider-native payload: derived answers, profiles, observations,
+  graph results и source facts являются полноценной частью оцениваемой памяти.
+- Адаптер не хранит canonical copy, не вводит общие IDs memory items и не навязывает
+  идемпотентность или общий `limit`.
+- Для каждого backend проверяются scope isolation, отсутствие ground-truth leakage, корректная
+  передача native payload и фактическое влияние на итоговую геолокацию.
 
 ## Почему не другие кандидаты
 

@@ -11,9 +11,9 @@ tags: [loci, workflow, inference, production, geolocation]
 ## Назначение
 
 Production-инференс принимает одну пользовательскую фотографию, проверяет вход, закрепляет
-активную привязку к системе памяти и вызывает [слепую геолокацию](locate.md).
+активную `memory_ref` и вызывает [слепую геолокацию](locate.md).
 
-Он не содержит собственного географического reasoning и не изменяет память.
+Он не содержит собственного географического reasoning и не вызывает `memory_store`.
 
 ## Вход
 
@@ -23,13 +23,12 @@ inference_request
   image_ref
 ```
 
-[`runner_config_id`](models.md#runner-config) и активный `memory_snapshot_id` являются частью
-конфигурации сервиса, а не пользовательского запроса. Это историческое поле содержит opaque ID
-привязки к системе/инстансу памяти, а не provider snapshot. Если активной памяти нет, inference
-вызывает workflow с `memory_snapshot_id: null`.
+[`runner_config_id`](models.md#runner-config) и активная `memory_ref` являются частью конфигурации
+сервиса, а не пользовательского запроса. Если активной памяти нет, inference вызывает workflow с
+`memory_ref: null`.
 
-Активная привязка меняется вручную в конфигурации сервиса между запусками; это выбор системы
-памяти, а не promotion/rollback её внутреннего snapshot. Автоматической смены привязки в базовом
+Активная `memory_ref` меняется вручную в конфигурации сервиса между запусками; это выбор системы
+памяти, а не promotion/rollback её внутреннего snapshot. Автоматической смены ссылки в базовом
 контуре нет.
 
 ## Выход
@@ -71,17 +70,17 @@ response с описанием в `limitations`.
 
 ### 2. Запуск
 
-До solve оркестратор закрепляет текущие `runner_config_id`, `memory_snapshot_id` и создаёт:
+До solve оркестратор закрепляет текущие `runner_config_id`, `memory_ref` и создаёт:
 
 ```text
 locate_request
   request_id
   image_ref
   runner_config_id
-  memory_snapshot_id | null
+  memory_ref | null
 ```
 
-Привязка к системе памяти не переключается внутри запроса.
+`memory_ref` не переключается внутри запроса.
 
 ### 3. Ответ
 

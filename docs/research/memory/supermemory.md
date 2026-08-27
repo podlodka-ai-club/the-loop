@@ -67,23 +67,18 @@ Cloud API работает через `https://api.supermemory.ai`; self-hosted 
 поставляется как бинарный дистрибутив; перед production следует отдельно проверить источник и
 лицензию конкретного дистрибутива.
 
-Registry использует `containerTag` как значение Loci `memory_snapshot_id` и ограничивает пользователя,
-проект или другой memory binding. Движок по смыслу эволюционирует: новые факты обновляют старые,
-временные факты забываются, а `documents.delete` необратим. Это не требует provider snapshots,
-но для Loci нужно явно определить, какие updates/forgetting допустимы и как интеграционный слой
-обеспечивает operation idempotency.
+Registry разрешает `memory_ref` в `containerTag` и ограничивает пользователя или проект. Движок по
+смыслу эволюционирует: новые факты обновляют старые, временные факты забываются, а
+`documents.delete` необратим. Эти native updates и forgetting являются частью оцениваемой памяти.
 
 Сильные стороны — автоматическая экстракция, профиль и related-memory context без ручной схемы;
-риски — black-box extraction/forgetting, asynchronous processing и необходимость проверять
-статус документа перед retrieval. Для audit важно сохранять исходный документ и version metadata,
-а не только результат поиска.
+риски — black-box extraction/forgetting и asynchronous processing.
 
 ## Открытые вопросы
 
-- Какой `containerTag` и scope становятся значением registry для Loci `memory_snapshot_id`, и как проверяется
+- Какой `containerTag` и scope должны стоять за Loci `memory_ref`, и как проверяется
   tenant isolation?
-- Можно ли в выбранной версии отключить automatic forgetting/updates или зафиксировать их политику
-  для заметок, которые добавляет training?
+- Какая политика automatic forgetting/updates даёт лучший результат после training?
 - Какую поверхность фиксируем для адаптера — текущую `client.search`/`client.add` или legacy
   `search.execute`/`memories.add` — и как проверяем совместимость Cloud и self-hosted?
 

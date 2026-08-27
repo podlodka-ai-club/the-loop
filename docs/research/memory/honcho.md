@@ -59,17 +59,15 @@ peer знает о другом. Это полезно для multi-agent memory
   self-hosted FastAPI deployment.
 - `created_at` и metadata позволяют импортировать исторические события и сохранять контекст
   сообщения. Batch API допускает до 100 сообщений.
-- В Loci `workspace_id` можно связать с provider binding, session — с training attempt, а
-  `session.search()` использовать как основной raw retrieval. `representation()` полезен как
-  дополнительный derived view, но не должен подменять заметки в evaluation.
+- В Loci `memory_ref` можно связать с workspace/peer/session policy. `session.search()`, context и
+  `representation()` являются равноправными native retrieval surfaces для evaluation.
 - Основные риски — background LLM reasoning и eventual consistency, а также AGPL-3.0 для
   self-hosted кода. Default peer representations могут смешать контексты, если неверно настроить
   workspace, peer и session scopes.
 
 ## Открытые вопросы
 
-- Нужен ли Loci peer-centric graph, или его сущности проще моделировать в обычных заметках и
-  metadata?
+- Даёт ли peer-centric graph преимущество на географических training experiences?
 - Как отключать derivation на inference и как тестировать отсутствие cross-workspace leakage?
 - Какие условия AGPL и hosted service подходят для production deployment Loci?
 

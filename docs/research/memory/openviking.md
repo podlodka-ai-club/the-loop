@@ -55,12 +55,11 @@ extraction изображение может быть преобразовано
 
 - Официальный пакет `@openviking/sdk` — HTTP-only ESM/CommonJS TypeScript client для Node.js 18+;
   сервер остаётся отдельным процессом. Доступны CLI, HTTP API и MCP.
-- URI и directory scope естественно выражают `memory_snapshot_id → user/project namespace`, а
+- URI и directory scope естественно выражают `memory_ref → user/project namespace`, а
   frontmatter можно использовать для metadata L2 Markdown. L0/L1 следует рассматривать как
   derived index, не как источник истины.
-- Для `memory_retrieve` лучше использовать `find()`/list/read и возвращать raw L2 note вместе с
-  URI; `search(mode="context")` удобен для prompt assembly, но скрывает часть решения на стороне
-  сервера.
+- Для `memory_retrieve` можно сравнить `find()`/list/read с `search(mode="context")`; оба
+  provider-native результата допустимы, а лучший режим выбирается по качеству Loci.
 - Session `commit()` и semantic processing асинхронны. В inference их нужно запретить, а training
   writer должен дождаться task status. Для полного self-hosted deployment потребуются storage,
   vector index, LLM/VLM и мониторинг очереди.
@@ -71,7 +70,7 @@ extraction изображение может быть преобразовано
   прямой REST endpoint?
 - Какая схема URI изолирует production, training и evaluation без использования agent-driven
   auto-memory?
-- Нужны ли Loci L0/L1 summaries и VLM extraction, или достаточно хранить text notes как L2?
+- Нужны ли Loci L0/L1 summaries и VLM extraction поверх Markdown training experience?
 
 ## Источники
 

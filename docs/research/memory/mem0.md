@@ -15,7 +15,7 @@ tags: [memory, mem0, typescript, vector-search, research]
 
 Mem0 — memory layer с автоматическим извлечением фактов из сообщений, областью видимости
 `user`/`agent`/`app`/`run` и семантическим поиском. TypeScript-пакет покрывает и локальный OSS-
-режим, и облачный Platform API. ID привязки Loci сопоставляется со стабильным scope Mem0, а
+режим, и облачный Platform API. `memory_ref` Loci сопоставляется со стабильным scope Mem0, а
 различия OSS/Platform скрываются за единым контрактом.
 
 ## Архитектура и жизненный цикл
@@ -90,22 +90,21 @@ const page = await client.getAll({ filters: { user_id: "alice" }, page: 1, pageS
 
 ## Fit для Loci
 
-Mem0 подходит как внешний retrieval-движок: registry привязок сопоставляет Loci
-`memory_snapshot_id` со стабильным Mem0 scope (обычно `userId`/`agentId` + tenant metadata;
-`runId` лучше оставить операционным/session ID) и различает read-only вызовы locate/evaluation от
-training-записи. Протокол Loci требует идемпотентность по `attempt_id`; Mem0 не заменяет внешний
-operation ledger, поэтому это реализует интеграционный слой.
+Mem0 подходит как внешний memory backend: registry сопоставляет Loci `memory_ref` со стабильным
+Mem0 scope (обычно `userId`/`agentId` + tenant metadata; `runId` лучше оставить операционным/session
+ID). Training передаёт Markdown-описание эпизода через `add()` с включённой native extraction, а
+retrieval возвращает результаты `search()` без преобразования в общий формат заметок.
 
-Основные риски — асинхронная видимость записи, стоимость LLM extraction и несовпадение текущего
-OSS поведения с заявленной в исходном ответе операцией SUPERSEDE. Для графовых запросов нужен
-Platform или отдельный graph backend.
+Основные риски — асинхронная видимость записи, стоимость LLM extraction и различия OSS/Platform.
+Для графовых запросов нужен Platform или отдельный graph backend.
 
 ## Открытые вопросы
 
 - Достаточна ли задержка cloud/OSS ingestion для training-run, или нужен отдельный staging queue?
-- Какой стабильный Mem0 scope (`userId`/`agentId` и tenant metadata) использовать для ID привязки
+- Какой стабильный Mem0 scope (`userId`/`agentId` и tenant metadata) использовать для `memory_ref`
   без смешения tenant-данных?
-- Как интеграционный слой дождётся завершения async `add()` и безопасно повторит запись при `timeout`?
+- Нужно ли ждать завершения async `add()` перед следующим sample или достаточно дать Mem0
+  завершить ingestion перед evaluation?
 
 ## Источники
 

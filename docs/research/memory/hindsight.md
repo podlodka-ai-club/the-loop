@@ -32,9 +32,11 @@ const client = new HindsightClient({
   apiKey: process.env.HINDSIGHT_API_KEY,
 });
 
-await client.retain("loci-prod", "Concrete utility poles are a stronger clue than red soil.", {
-  documentId: "train-2026-08-27:sample-0042",
-});
+await client.retain(
+  "loci-prod",
+  "# Observation\n\nRed soil, concrete utility poles, Portuguese text.\n\n# Reveal\n\nParaná, Brazil.",
+  { context: "Loci training episode after reveal" },
+);
 
 const result = await client.recall("loci-prod", "How should red soil be weighted?", {
   types: ["world", "observation"],
@@ -43,8 +45,8 @@ const result = await client.recall("loci-prod", "How should red soil be weighted
 
 `metadata` возвращается вместе с recalled memory, а `document_id` группирует содержимое и
 позволяет повторную загрузку как upsert. `include_source_facts` и `include_chunks` дают путь от
-сводного observation к исходному факту и текстовому chunk. `reflect` не следует использовать в
-`memory_retrieve`: он возвращает LLM-generated ответ, а не канонический список заметок.
+сводного observation к исходному факту и текстовому chunk. `recall` и `reflect` являются
+равноправными кандидатами для `memory_retrieve`: лучший режим выбирается по итоговому качеству Loci.
 
 ## Развёртывание и fit для Loci
 
@@ -52,20 +54,17 @@ const result = await client.recall("loci-prod", "How should red soil be weighted
   server используют PostgreSQL с pgvector.
 - Memory bank изолирует область данных. Доступны self-hosted, managed Cloud и enterprise-вариант;
   при self-hosting остаётся операционная стоимость PostgreSQL, фоновых LLM-вызовов и миграций.
-- Loci может сопоставить `memory_snapshot_id` с bank, а `document_id` — с `attempt_id`. Для
-  retrieval следует выбирать `world`/`experience` или `observation` отдельно и возвращать raw
-  facts с их IDs.
-- Асинхронная консолидация observations означает, что только что добавленная заметка может быть
-  видна раньше как raw fact, чем как observation. Training pipeline должен дождаться готовности
-  ingestion; inference получает только read-only доступ.
+- Loci сопоставляет `memory_ref` с bank и provider-specific настройками `retain`, `recall` и
+  `reflect`. Общий контракт не требует `document_id`, IDs memory units или выбора только raw facts.
+- Асинхронная консолидация observations означает, что результат памяти может развиваться после
+  `retain`. Нужно определить подходящий settle period перед evaluation, не заменяя native lifecycle
+  внешним ledger.
 
 ## Открытые вопросы
 
-- Достаточно ли Hindsight document-level IDs для внешнего аудита training operations?
-- Нужны ли Loci observations, или для воспроизводимости evaluation лучше хранить и читать только
-  raw `world` facts?
-- Какова фактическая задержка между `retain` и доступностью raw fact/observation на выбранном
-  deployment?
+- Что даёт лучший geolocation score: `recall` с facts/observations/source facts или `reflect`?
+- Какой набор `world`/`experience`/`observation` лучше подходит для географических эпизодов?
+- Какой settle period между training и evaluation нужен выбранному deployment?
 
 ## Источники
 

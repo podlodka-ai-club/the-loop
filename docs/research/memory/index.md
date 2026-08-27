@@ -7,14 +7,14 @@
 Memory, Memobase, Memori, Amazon Bedrock AgentCore Memory и Google Agent Platform Memory Bank.
 Первые четыре наиболее интересны для self-hosted или graph/file-based пилота; два Memory Bank —
 отдельная cloud baseline; Memobase и Memori требуют проверки того, насколько их user/agent-centric
-модель подходит для коротких географических notes. Более ранние и harness-oriented проекты собраны
+модель подходит для географических training experiences. Более ранние и harness-oriented проекты собраны
 в [watchlist](/research/memory/watchlist.md).
 
 Для сравнения используем целевые ограничения текущего Loci: [memory_store](/tools/memory_store.md)
-записывает только после `reveal`, а [memory_retrieve](/tools/memory_retrieve.md) читает явно
-выбранную систему и возвращает заметки с provider-independent `note_id` и `content`. Поле `snapshot_id` в этих контрактах
-— историческое имя ID привязки к системе памяти, не provider snapshot. Формулировки в разделах Fit
-— выводы и варианты интеграции, не принятые архитектурные решения.
+после `reveal` передаёт выбранной системе свободное Markdown-описание обучающего эпизода, а
+[memory_retrieve](/tools/memory_retrieve.md) возвращает provider-native payload без общей модели
+memory items. `memory_ref` указывает на настроенный provider и его instance/bank/scope. Формулировки
+в разделах Fit — выводы и варианты интеграции, не принятые архитектурные решения.
 
 | Система | Статус | TypeScript surface | Основная модель | Главный риск для Loci |
 |---|---|---|---|---|
@@ -25,7 +25,7 @@ Memory, Memobase, Memori, Amazon Bedrock AgentCore Memory и Google Agent Platfo
 | [Letta](letta.md) | База | `@letta-ai/letta-client` | Agent-managed blocks + archival passages | Агент сам меняет память в inference |
 | [Cognee](cognee.md) | База | `@cognee/cognee-ts` | Relational + vector + graph, session bridge | Native TS binding, indexing и generated retrieval |
 | [Supermemory](supermemory.md) | База | `supermemory` | Fact-based temporal vector graph + profiles | Automatic updates/forgetting и API version drift |
-| [xmemory](xmemory.md) | База | `xmemory` | XMD schema + typed objects/relations | Service access, credentials и schema-fit для notes |
+| [xmemory](xmemory.md) | База | `xmemory` | XMD schema + typed objects/relations | Service access, credentials и качество extraction географического опыта |
 | [Hindsight](hindsight.md) | Добавить | `@vectorize-io/hindsight-client` | World/experience/observation facts + temporal hybrid retrieval | Async consolidation, PostgreSQL и выбор raw facts против reflect |
 | [Honcho](honcho.md) | Добавить | `@honcho-ai/sdk` | Peer/session/message model + background representations | User-centric semantics, AGPL и generated conclusions |
 | [OpenViking](openviking.md) | Добавить | `@openviking/sdk` | Filesystem memory/resources/skills + L0/L1/L2 | Отдельный server, async extraction и custom write boundary |

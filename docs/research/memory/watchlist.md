@@ -25,7 +25,7 @@ tags: [memory, watchlist, multimodal, memory-os, research]
 
 Кандидат следует поднять из watchlist после минимального пилота: explicit write после `reveal`,
 read-only retrieval с `limit`, стабильные provider IDs или внешний operation audit, повторяемость
-после retry, изоляция двух memory bindings и измеримая задержка до видимости новой заметки.
+после ingestion, изоляция двух `memory_ref` и влияние native retrieval на качество Loci.
 
 ## Источники
 

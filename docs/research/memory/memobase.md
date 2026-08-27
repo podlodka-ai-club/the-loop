@@ -57,10 +57,10 @@ snake_case. Нужны pin версии `@memobase/memobase` и contract test п
 - Batch buffer снижает стоимость extraction, но делает видимость памяти eventual-consistent:
   flush запускается автоматически по размеру/idle timeout или вручную, а `flush(sync=true)` ждёт
   завершения.
-- Registry может связать `memory_snapshot_id` с Memobase project/user. `created_at` и metadata дают
-  путь для timeline, однако обязательный DTO Loci придётся собирать поверх profile/event API.
+- Registry может связать `memory_ref` с Memobase project/user. `created_at`, metadata и
+  profile/event/context API остаются частью provider-native payload.
 - Основное ограничение — Memobase оптимизирован под сведения о пользователе. Для набора
-  географических заметок нужно спроектировать custom profile slots и проверить, не теряет ли
+  географических training experiences нужно спроектировать custom profile slots и проверить, не теряет ли
   extraction факты, которые не являются user attributes. `context()` также возвращает готовую
   строку, а не только raw notes.
 
@@ -69,8 +69,7 @@ snake_case. Нужны pin версии `@memobase/memobase` и contract test п
 - Можно ли выразить taxonomy Loci (`cue`, `region`, `alternative`, `confidence`) без перегрузки
   profile slots?
 - Сохраняются ли metadata и исходные event IDs во всех путях `profile`, `event` и `context`?
-- Какой flush/latency режим нужен, чтобы следующая training sample видела только что записанную
-  заметку?
+- Какой flush/latency режим нужен между training и evaluation?
 
 ## Источники
 

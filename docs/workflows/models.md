@@ -21,7 +21,6 @@ runner_config
   prompt_id
   preprocessing_id
   generation_config
-  memory_retriever_id
   geocoder_id
   tool_budget
     max_duration_ms
@@ -29,14 +28,13 @@ runner_config
     max_geocoder_calls
   retry_policy
     max_sample_attempts
-    max_store_attempts
   content_hash
 ```
 
 Runner config неизменяем. Любое изменение поля создаёт новый `runner_config_id` и `content_hash`.
 Workflow передаёт только ID, а оркестратор разрешает его в полную конфигурацию.
-`memory_retriever_id` выбирает код адаптера retrieval, а `memory_snapshot_id` в конкретном
-workflow выбирает его registry-привязку к provider и instance.
+`memory_ref` в конкретном workflow выбирает настроенную систему памяти вместе с её адаптером и
+provider-specific policy.
 
 ## Corpus manifest
 
@@ -81,46 +79,29 @@ location_candidate
 `type` — необязательная строка провайдера. Координаты могут отсутствовать, если геокодер не вернул
 точку.
 
-## Memory notes
+## Memory reference
 
-До записи training создаёт:
+`memory_ref` — opaque ссылка на настроенную систему памяти. Оркестратор разрешает её в конкретный
+provider, instance/bank/scope, credentials и provider-specific policy записи и retrieval. Это не
+ID элемента памяти, не версия содержимого и не provider snapshot.
 
-```text
-memory_note_input
-  content
-```
+Одна ссылка фиксируется на время workflow. Сменить её можно только изменением конфигурации между
+запусками. `null` означает запуск без памяти.
 
-После [`memory_store`](../tools/memory_store.md) заметка имеет provider-independent форму:
-
-```text
-memory_note
-  note_id
-  content
-```
-
-## Memory binding identifier
-
-`memory_snapshot_id` — историческое имя поля для opaque ID привязки к выбранной системе памяти.
-Оркестратор разрешает его через конфигурацию в конкретный provider и instance (например, xmemory
-instance, Cognee dataset или Mem0 tenant). Это не версия содержимого и не provider snapshot:
-системе памяти не нужны операции создания, переключения, клонирования или rollback snapshots.
-
-Одна привязка фиксируется на время workflow. Сменить её можно только изменением конфигурации между
-запусками. `null` означает отсутствие memory binding.
-
-Оркестратор хранит registry привязок вне memory provider:
+Оркестратор хранит registry ссылок вне memory provider:
 
 ```text
-memory_binding
-  snapshot_id       # opaque ID, который видит workflow
+memory_source
+  memory_ref        # opaque ссылка, которую видит workflow
   provider          # xmemory | cognee | mem0 | ...
   instance_ref      # instance / dataset / namespace провайдера
   access_policy
+  provider_config
 ```
 
-Например, `memory-binding-xmemory-prod` может указывать на один xmemory instance, а
-`memory-binding-cognee-prod` — на dataset Cognee. Эти записи выбираются конфигурацией сервиса;
-провайдер не обязан знать или поддерживать поле `snapshot_id`.
+Например, `memory/xmemory-prod` может указывать на один xmemory instance и его read/write modes, а
+`memory/hindsight-prod` — на Hindsight bank и настройки `retain`/`recall`/`reflect`. Провайдер не
+обязан знать значение `memory_ref`.
 
 ## Memory call
 
@@ -154,7 +135,7 @@ Request и result определены в [`geocode_search`](../tools/geocode_se
 answer_snapshot
   request_id
   runner_config_id
-  memory_snapshot_id | null  # ID memory binding; историческое имя поля
+  memory_ref | null
   status — located | ambiguous | insufficient_evidence
   location — location_candidate | null
   alternatives[] — location_candidate
@@ -175,5 +156,5 @@ answer_snapshot
 | `insufficient_evidence` | `null`. | Пустой массив. |
 
 Публичные поля inference: `request_id`, `status`, `location`, `alternatives`, `explanation` и
-`limitations`. `runner_config_id`, `memory_snapshot_id`, `memory_calls` и `geocode_calls` остаются
+`limitations`. `runner_config_id`, `memory_ref`, `memory_calls` и `geocode_calls` остаются
 внутренними.

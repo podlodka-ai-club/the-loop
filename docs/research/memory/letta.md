@@ -74,7 +74,7 @@ streaming и `baseURL` для self-hosted сервера.
 ## Fit для Loci
 
 Плюсы — готовые typed blocks/passages, shared memory и self-hosted deployment; archival passages
-можно использовать как backend для `memory_retrieve`, а Loci `memory_snapshot_id` связать с
+можно использовать как backend для `memory_retrieve`, а Loci `memory_ref` связать с
 agent/archive ID в registry. Для locate/evaluation используются read-only credentials и отдельный
 training writer; agent messages/tools не должны напрямую менять память во время blind solve.
 При необходимости provenance добавляется отдельным интеграционным tool/worker.
@@ -87,8 +87,7 @@ agent-managed runtime. Если нужен только внешний read-only
 
 - Разрешаем ли мы агенту Loci редактировать `memory blocks` во время inference, или все записи
   должны проходить только через training tool?
-- Какой Letta agent/archive ID станет значением registry для Loci `memory_snapshot_id`, и как связать
-  passage IDs с внешним audit ledger?
+- Какой Letta agent/archive ID и native memory policy должны стоять за `memory_ref`?
 - Можно ли отключить или ограничить agent tools, чтобы inference не изменял память, а training
   запись выполнялась отдельным разрешённым tool?
 

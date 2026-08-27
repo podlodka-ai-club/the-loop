@@ -67,10 +67,9 @@ Cloud — отдельный продукт с собственным TypeScript
 ## Fit для Loci
 
 Graphiti даёт provenance и возможность спросить «что было верно на дату», поэтому может быть
-  полезен для исследования temporal geolocation cues. Для Loci registry сопоставляет
-  `memory_snapshot_id` с `group_id`/graph, а read-only access layer для inference и
-детерминированная выдача заметок вместо LLM-generated answer. Provider episode IDs при
-необходимости можно сопоставлять с внешним audit ledger.
+полезен для исследования temporal geolocation cues. Для Loci registry разрешает `memory_ref` в
+`group_id`/graph и provider-specific retrieval policy; raw facts, provenance и generated context
+могут возвращаться как native payload.
 
 Эксплуатационная стоимость выше vector-only store: нужен Neo4j/FalkorDB/Neptune, индексы,
 concurrency tuning и мониторинг фоновых LLM вызовов. Для TypeScript-проекта это также означает
@@ -80,8 +79,7 @@ concurrency tuning и мониторинг фоновых LLM вызовов. Д
 
 - Какая база (Neo4j, FalkorDB или Neptune) обеспечивает приемлемые стоимость и latency для
   train/eval-корпуса Loci?
-- Какой REST/MCP или Python-worker boundary сопоставляет Loci `memory_snapshot_id` с Graphiti `group_id` и
-  возвращает нужные raw facts/provenance?
+- Какой REST/MCP или Python-worker boundary сопоставляет Loci `memory_ref` с Graphiti `group_id`?
 - Какой read-only credential и схема DTO нужны, чтобы inference не мог вызвать Graphiti write?
 
 ## Источники
