@@ -5,6 +5,7 @@ okf_version: "0.1"
 # Concept
 
 * [Loci](concept.md) - Фоновый агент, который определяет место съёмки по фотографии и накапливает опыт между задачами.
+* [Шорт-лист memory backends Loci](memory.md) - Три memory backend с TypeScript API, которые входят в базовую версию Loci.
 
 # Questions
 
