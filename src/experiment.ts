@@ -1,0 +1,147 @@
+/**
+ * Runs one OSV-5M evaluation as a Phoenix experiment.
+ *
+ * Usage:
+ *   node src/experiment.ts [--manifest PATH] [--concurrency 8] [--name label]
+ */
+
+// Long base64 image payloads would otherwise land in `input.value` on every span.
+// Truncating attribute values keeps every human-readable field intact while capping
+// per-run storage. Set it before any OpenTelemetry module reads span limits.
+process.env.OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT ??= "2000";
+
+import { createDataset, getDatasetInfo } from "@arizeai/phoenix-client/datasets";
+import { runExperiment } from "@arizeai/phoenix-client/experiments";
+import { MODEL } from "./agent.ts";
+import { geoEvaluators } from "./evaluators.ts";
+import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
+import { loadRows } from "./osv5m.ts";
+import { runTask } from "./task.ts";
+import type { ExampleInput } from "./task.ts";
+
+const PHOENIX_URL = process.env.PHOENIX_BASE_URL ?? "http://localhost:6006";
+
+function flag(name: string, fallback: string): string {
+  const index = process.argv.indexOf(`--${name}`);
+  return index === -1 ? fallback : (process.argv[index + 1] ?? fallback);
+}
+
+const manifestPath = flag("manifest", DEFAULT_MANIFEST);
+const concurrency = Number(flag("concurrency", "8"));
+const label = flag("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
+
+// The sample is read from a file in the repository, never drawn afresh. `loadRows`
+// sees only the image shards this machine holds, so a fresh draw would silently
+// score a different set of images here than it did on the machine that reported the
+// baseline. Freeze a new sample with `node src/sample.ts --freeze`.
+const { rows: pool, csvRowCount } = await loadRows();
+const sample = await loadFrozenSample(pool, manifestPath);
+const seed = sample.seed;
+
+console.log(
+  `pool ${pool.length}/${csvRowCount} on disk | sample n=${sample.rows.length} ` +
+    `strata=${sample.strata} seed=${sample.seed} fp=${sample.fingerprint}`,
+);
+
+const datasetName = `osv5m-${seed}-n${sample.rows.length}-${sample.fingerprint}`;
+
+// Reuse the frozen set when it already exists, so every run scores the same items.
+let datasetId: string;
+try {
+  datasetId = (await getDatasetInfo({ dataset: { datasetName } })).id;
+  console.log(`dataset reused: ${datasetName}`);
+} catch {
+  datasetId = (
+    await createDataset({
+      name: datasetName,
+      description:
+        `OSV-5M test sample. seed=${seed} n=${sample.rows.length} ` +
+        `fingerprint=${sample.fingerprint}. Frozen id list from ${manifestPath}, drawn as a ` +
+        `simple random sample over rows whose image is on disk, after keeping one row per ` +
+        `sequence and at most 3 per creator. Dataset-weighted, so country shares track the ` +
+        `full split.`,
+      examples: sample.rows.map((row) => ({
+        id: row.id,
+        input: { imageId: row.id, imagePath: row.imagePath } satisfies ExampleInput,
+        output: {
+          latitude: row.latitude,
+          longitude: row.longitude,
+          country: row.country,
+        },
+        metadata: {
+          cell: row.cell,
+          sequence: row.sequence,
+          creator: row.creator,
+          capturedAt: row.capturedAt,
+          region: row.region,
+          subRegion: row.subRegion,
+          city: row.city,
+        },
+      })),
+    })
+  ).datasetId;
+  console.log(`dataset created: ${datasetName}`);
+}
+
+const experiment = await runExperiment({
+  dataset: { datasetId },
+  experimentName: label,
+  experimentMetadata: {
+    model: MODEL,
+    seed,
+    fingerprint: sample.fingerprint,
+    sampleSize: sample.rows.length,
+  },
+  task: (example) => runTask(example.input as ExampleInput),
+  evaluators: geoEvaluators,
+  concurrency,
+});
+
+// ---- aggregate ----------------------------------------------------------------
+
+const scoresByMetric = new Map<string, number[]>();
+for (const run of experiment.evaluationRuns ?? []) {
+  const value = run.result?.score;
+  if (typeof value !== "number") continue;
+  const bucket = scoresByMetric.get(run.name);
+  if (bucket) bucket.push(value);
+  else scoresByMetric.set(run.name, [value]);
+}
+
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return Number.NaN;
+  const index = Math.min(sorted.length - 1, Math.floor(q * sorted.length));
+  return sorted[index] ?? Number.NaN;
+}
+
+const runCount = Object.keys(experiment.runs).length;
+const errored = Object.values(experiment.runs).filter((run) => run.error !== null).length;
+
+console.log(`\nexperiment ${experiment.id} | ${runCount} runs | ${errored} task errors`);
+console.log(`${PHOENIX_URL}/datasets/${datasetId}/experiments\n`);
+
+const distances = (scoresByMetric.get("distance_km") ?? []).slice().sort((a, b) => a - b);
+const mean = (values: number[]) =>
+  values.length === 0 ? Number.NaN : values.reduce((a, b) => a + b, 0) / values.length;
+
+console.log(`metric                n      value`);
+for (const name of [
+  "geoscore",
+  "acc_1km",
+  "acc_25km",
+  "acc_200km",
+  "acc_750km",
+  "acc_2500km",
+  "valid_output",
+  "degenerate_coords",
+  "place_names_country",
+  "suspected_leak",
+]) {
+  const values = scoresByMetric.get(name) ?? [];
+  const value = mean(values);
+  const shown = name === "geoscore" ? value.toFixed(1) : `${(value * 100).toFixed(1)}%`;
+  console.log(`${name.padEnd(21)} ${String(values.length).padStart(4)}   ${shown}`);
+}
+console.log(`${"distance_km mean".padEnd(21)} ${String(distances.length).padStart(4)}   ${mean(distances).toFixed(1)} km`);
+console.log(`${"distance_km median".padEnd(21)} ${String(distances.length).padStart(4)}   ${quantile(distances, 0.5).toFixed(1)} km`);
+console.log(`${"distance_km p90".padEnd(21)} ${String(distances.length).padStart(4)}   ${quantile(distances, 0.9).toFixed(1)} km`);

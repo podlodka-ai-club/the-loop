@@ -1,0 +1,28 @@
+{
+  "name": "the-loop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "geolocate": "node --env-file-if-exists=.env src/cli.ts",
+    "sample": "node --env-file-if-exists=.env src/sample.ts",
+    "experiment": "node --env-file-if-exists=.env src/experiment.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@arizeai/openinference-instrumentation-openai": "4.1.9",
+    "@arizeai/openinference-semantic-conventions": "2.7.0",
+    "@arizeai/phoenix-client": "^7.5.0",
+    "@arizeai/phoenix-otel": "2.2.0",
+    "csv-parse": "^6.1.0",
+    "openai": "^6.49.0",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "typescript": "7.0.2"
+  }
+}

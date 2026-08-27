@@ -5,6 +5,7 @@
 
 data/snapshot/
 data/raw/
+tmp/
 *.jpg
 *.jpeg
 *.png
