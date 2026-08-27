@@ -43,9 +43,7 @@ const learner = await honcho.peer("loci-agent");
 const session = await honcho.session("train-2026-08-27:sample-0042");
 
 await session.addMessages([
-  learner.message("Concrete poles are a useful cue in this region.", {
-    metadata: { source_attempt_id: "train-2026-08-27:sample-0042" },
-  }),
+  learner.message("Concrete poles are a useful cue in this region."),
 ]);
 
 const hits = await session.search("concrete utility poles", { limit: 5 });
@@ -59,8 +57,8 @@ peer знает о другом. Это полезно для multi-agent memory
 
 - Есть официальный TypeScript SDK `@honcho-ai/sdk`, REST API, MCP-интеграция, managed service и
   self-hosted FastAPI deployment.
-- `created_at` и metadata позволяют импортировать исторические события и передавать
-  `source_attempt_id`. Batch API допускает до 100 сообщений.
+- `created_at` и metadata позволяют импортировать исторические события и сохранять контекст
+  сообщения. Batch API допускает до 100 сообщений.
 - В Loci `workspace_id` можно связать с provider binding, session — с training attempt, а
   `session.search()` использовать как основной raw retrieval. `representation()` полезен как
   дополнительный derived view, но не должен подменять заметки в evaluation.

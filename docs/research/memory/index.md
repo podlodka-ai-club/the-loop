@@ -12,7 +12,7 @@ Memory, Memobase, Memori, Amazon Bedrock AgentCore Memory и Google Agent Platfo
 
 Для сравнения используем целевые ограничения текущего Loci: [memory_store](/tools/memory_store.md)
 записывает только после `reveal`, а [memory_retrieve](/tools/memory_retrieve.md) читает явно
-выбранную систему и возвращает заметки с `source_attempt_id`. Поле `snapshot_id` в этих контрактах
+выбранную систему и возвращает заметки с provider-independent `note_id` и `content`. Поле `snapshot_id` в этих контрактах
 — историческое имя ID привязки к системе памяти, не provider snapshot. Формулировки в разделах Fit
 — выводы и варианты интеграции, не принятые архитектурные решения.
 

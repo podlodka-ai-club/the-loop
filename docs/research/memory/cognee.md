@@ -75,8 +75,8 @@ Bindings поддерживают локальные настройки, `serve(
 
 Cognee хорошо отражает разделение short-term и long-term памяти: registry сопоставляет
 Loci `memory_snapshot_id` с dataset, а `sessionId` — с solve или временным контекстом. `improve` и `forget`
-изменяют выбранный backend, что допустимо при внешнем контракте Loci, но требует operation ledger,
-provenance `source_attempt_id` и запрета training-записей из inference. Для `memory_retrieve`
+изменяют выбранный backend, что допустимо при внешнем контракте Loci, но требует operation ledger
+и запрета training-записей из inference. Для `memory_retrieve`
 лучше запрашивать source-tagged/raw results, а не полагаться только на generated completion.
 
 ## Открытые вопросы
@@ -85,8 +85,8 @@ provenance `source_attempt_id` и запрета training-записей из in
   доступны для целевых окружений Loci?
 - Нужен ли полный graph completion, или следует ограничить retrieval типами `CHUNKS`/`HYBRID`
   и хранить generated answer отдельно от заметки?
-- Какой mapping registry фиксирует для Loci `memory_snapshot_id` → dataset/user и
-  `source_attempt_id` → session entries без смешения пользователей?
+- Какой mapping registry фиксирует для Loci `memory_snapshot_id` → dataset/user и session entries
+  без смешения пользователей?
 
 ## Источники
 

@@ -58,8 +58,7 @@ snake_case. Нужны pin версии `@memobase/memobase` и contract test п
   flush запускается автоматически по размеру/idle timeout или вручную, а `flush(sync=true)` ждёт
   завершения.
 - Registry может связать `memory_snapshot_id` с Memobase project/user. `created_at` и metadata дают
-  путь для timeline и `source_attempt_id`, однако обязательный DTO Loci придётся собирать поверх
-  profile/event API.
+  путь для timeline, однако обязательный DTO Loci придётся собирать поверх profile/event API.
 - Основное ограничение — Memobase оптимизирован под сведения о пользователе. Для набора
   географических заметок нужно спроектировать custom profile slots и проверить, не теряет ли
   extraction факты, которые не являются user attributes. `context()` также возвращает готовую

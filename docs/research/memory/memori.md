@@ -50,7 +50,7 @@ const facts = await mem.recall("concrete poles versus red soil", { limit: 5 });
   чем автоматическая инъекция.
 - Основной write path — автоматический capture разговоров/трейсов. Для строгого правила Loci
   «записывать только после reveal» потребуется отдельный training writer и отключение capture на
-  inference; внешнее operation ledger всё равно нужно для idempotency и `source_attempt_id`.
+  inference; внешнее operation ledger всё равно нужно для idempotency.
 - Cloud augmentation и recall асинхронны, а structured memory и graph triples являются derived
   представлением. Нельзя считать их безусловно равными исходной заметке или доказательству.
 
@@ -58,7 +58,7 @@ const facts = await mem.recall("concrete poles versus red soil", { limit: 5 });
 
 - Есть ли стабильный low-level write API для одиночной `memory_note`, или Loci придётся отправлять
   synthetic conversation/trace?
-- Как передать и получить `source_attempt_id` в manual recall без потери attribution?
+- Как связать manual recall с внешним audit ledger без потери attribution?
 - Насколько BYODB сохраняет равенство Cloud surface, особенно для TS SDK и background augmentation?
 
 ## Источники

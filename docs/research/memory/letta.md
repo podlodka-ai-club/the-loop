@@ -77,7 +77,7 @@ streaming и `baseURL` для self-hosted сервера.
 можно использовать как backend для `memory_retrieve`, а Loci `memory_snapshot_id` связать с
 agent/archive ID в registry. Для locate/evaluation используются read-only credentials и отдельный
 training writer; agent messages/tools не должны напрямую менять память во время blind solve.
-Provenance `source_attempt_id` также добавляется интеграционным tool/worker.
+При необходимости provenance добавляется отдельным интеграционным tool/worker.
 
 Если нужен самостоятельный долгоживущий геолокационный агент, Letta предоставляет готовый
 agent-managed runtime. Если нужен только внешний read-only retrieval с контролируемым обучением,
@@ -87,8 +87,8 @@ agent-managed runtime. Если нужен только внешний read-only
 
 - Разрешаем ли мы агенту Loci редактировать `memory blocks` во время inference, или все записи
   должны проходить только через training tool?
-- Какой Letta agent/archive ID станет значением registry для Loci `memory_snapshot_id`, и как передавать
-  `source_attempt_id` в passage metadata?
+- Какой Letta agent/archive ID станет значением registry для Loci `memory_snapshot_id`, и как связать
+  passage IDs с внешним audit ledger?
 - Можно ли отключить или ограничить agent tools, чтобы inference не изменял память, а training
   запись выполнялась отдельным разрешённым tool?
 

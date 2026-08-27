@@ -70,8 +70,8 @@ Cloud API работает через `https://api.supermemory.ai`; self-hosted 
 Registry использует `containerTag` как значение Loci `memory_snapshot_id` и ограничивает пользователя,
 проект или другой memory binding. Движок по смыслу эволюционирует: новые факты обновляют старые,
 временные факты забываются, а `documents.delete` необратим. Это не требует provider snapshots,
-но для Loci нужно явно определить, какие updates/forgetting допустимы и как интеграционный слой добавляет
-`source_attempt_id` и operation idempotency.
+но для Loci нужно явно определить, какие updates/forgetting допустимы и как интеграционный слой
+обеспечивает operation idempotency.
 
 Сильные стороны — автоматическая экстракция, профиль и related-memory context без ручной схемы;
 риски — black-box extraction/forgetting, asynchronous processing и необходимость проверять

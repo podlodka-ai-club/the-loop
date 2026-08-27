@@ -24,8 +24,8 @@ tags: [memory, watchlist, multimodal, memory-os, research]
 ## Критерий перехода в основной список
 
 Кандидат следует поднять из watchlist после минимального пилота: explicit write после `reveal`,
-read-only retrieval с `limit`, сохранение `source_attempt_id`, повторяемость после retry,
-изоляция двух memory bindings и измеримая задержка до видимости новой заметки.
+read-only retrieval с `limit`, стабильные provider IDs или внешний operation audit, повторяемость
+после retry, изоляция двух memory bindings и измеримая задержка до видимости новой заметки.
 
 ## Источники
 

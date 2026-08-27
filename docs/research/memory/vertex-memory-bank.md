@@ -33,7 +33,6 @@ TypeScript memory SDK в проверенных материалах нет. И�
 ```text
 scope: { agent_name: "loci", user: "training" }
 fact: "Concrete utility poles are more discriminative than red soil for this comparison."
-metadata: { source_attempt_id: "train-2026-08-27:sample-0042" }
 ```
 
 ## Развёртывание и fit для Loci
@@ -51,7 +50,7 @@ metadata: { source_attempt_id: "train-2026-08-27:sample-0042" }
 
 ## Открытые вопросы
 
-- Достаточно ли REST response/revision IDs для `source_attempt_id` и воспроизводимого evaluation?
+- Достаточно ли REST response/revision IDs для внешнего аудита и воспроизводимого evaluation?
 - Сохраняются ли изображения или только generated textual insights, и где выполняется ML processing
   для выбранного региона?
 - Как сравнить Memory Bank с self-hosted multimodal candidate на одном наборе фотографий и notes?

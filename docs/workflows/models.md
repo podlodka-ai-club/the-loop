@@ -90,12 +90,11 @@ memory_note_input
   content
 ```
 
-После [`memory_store`](../tools/memory_store.md) заметка имеет provenance:
+После [`memory_store`](../tools/memory_store.md) заметка имеет provider-independent форму:
 
 ```text
 memory_note
   note_id
-  source_attempt_id
   content
 ```
 

@@ -58,8 +58,8 @@ SDK: проект предоставляет отдельные short-term, long
 - TypeScript пакет `@neo4j-labs/agent-memory` поддерживает hosted NAMS REST и локальный Neo4j
   backend; есть MCP и integrations для Vercel AI SDK, LangChain JS, Mastra и Strands.
 - `Location` nodes, temporal relations и provenance хорошо совпадают с задачами geolocation. Для
-  Loci можно хранить краткую заметку как message/observation, а `source_attempt_id` — как
-  metadata и внешний ledger ID.
+  Loci можно хранить краткую заметку как message/observation, а provider IDs связывать с внешним
+  operation ledger при необходимости.
 - Registry сопоставляет `memory_snapshot_id` с workspace/endpoint/graph. Для inference следует
   выдавать read-only search и provenance, а entity mutation и extraction включать только в
   training writer.
@@ -71,8 +71,8 @@ SDK: проект предоставляет отдельные short-term, long
 
 - Даст ли graph model измеримое преимущество на наших location cues по сравнению с Hindsight или
   обычным hybrid retrieval?
-- Какая версия и какой backend поддерживают стабильный raw DTO с `source_attempt_id`, а не только
-  graph/context view?
+- Какая версия и какой backend поддерживают стабильный raw DTO с provider IDs и content, а не
+  только graph/context view?
 - Как разделить curated geography knowledge и новые training notes так, чтобы untrusted input не
   изменял доверенный entity neighborhood?
 

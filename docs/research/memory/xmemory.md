@@ -118,7 +118,6 @@ const result = await inst.write([
       create: {
         key: { note_id: "note-0107" },
         values: {
-          source_attempt_id: "train-2026-08-25:sample-0042",
           content: "Red soil is not sufficient to distinguish Brazil from Paraguay.",
         },
       },
@@ -186,8 +185,7 @@ Non-additive изменения (rename/remove/type change) требуют migra
 
 ### Что совпадает с текущим контрактом
 
-- XMD позволяет явно задать `content`, `source_attempt_id` и `note_id` вместо хранения полного
-  transcript.
+- XMD позволяет явно задать `content` и `note_id` вместо хранения полного transcript.
 - Structured mutations подходят для записи заметок после `reveal`: они не требуют LLM и дают
   предсказуемый create/update/delete.
 - `raw-tables`/`xresponse` ближе к `memory_retrieve`, чем synthesized `single-answer`.
@@ -210,9 +208,8 @@ Non-additive изменения (rename/remove/type change) требуют migra
 - `writeAsync` удобен для latency, но training pipeline обязан дождаться `completed`, если следующий
   пример должен читать только что добавленную заметку.
 
-Registry хранит соответствие `memory_snapshot_id → provider + instance`,
-передаёт `source_attempt_id` в structured mutation/metadata и отдаёт `raw-tables` или `xresponse`
-из той же привязки. Это вариант интеграции, а не требование к самому провайдеру.
+Registry хранит соответствие `memory_snapshot_id → provider + instance` и отдаёт `raw-tables` или
+`xresponse` из той же привязки. Идемпотентность операций остаётся на стороне адаптера/оркестратора.
 
 ## Открытые вопросы
 

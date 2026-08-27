@@ -69,8 +69,8 @@ Cloud — отдельный продукт с собственным TypeScript
 Graphiti даёт provenance и возможность спросить «что было верно на дату», поэтому может быть
   полезен для исследования temporal geolocation cues. Для Loci registry сопоставляет
   `memory_snapshot_id` с `group_id`/graph, а read-only access layer для inference и
-детерминированная выдача заметок вместо LLM-generated answer. `source_episode_id` можно
-сопоставить с `source_attempt_id` во внешнем DTO.
+детерминированная выдача заметок вместо LLM-generated answer. Provider episode IDs при
+необходимости можно сопоставлять с внешним audit ledger.
 
 Эксплуатационная стоимость выше vector-only store: нужен Neo4j/FalkorDB/Neptune, индексы,
 concurrency tuning и мониторинг фоновых LLM вызовов. Для TypeScript-проекта это также означает

@@ -16,14 +16,14 @@ adapter. Production binding выбирается через registry по `snaps
 | Backend | TypeScript API | Роль в базовой версии | Почему выбран |
 |---|---|---|---|
 | [xmemory](/research/memory/xmemory.md) | `xmemory` | Основной structured backend | XMD позволяет описать `memory_note`, использовать явные LLM-free mutations, primary keys, deduplication и `raw-tables`/`xresponse`. Это наиболее близкое соответствие контрактам Loci и лучше всего подходит для воспроизводимой записи после `reveal`. |
-| [Mem0](/research/memory/mem0.md) | `mem0ai` | Общий fact-retrieval baseline | У Mem0 есть зрелый TypeScript API, scopes, extraction, semantic/keyword retrieval и OSS/Platform варианты. Он даёт понятную generic baseline для сравнения качества retrieval, но требует внешнего контроля async ingestion, scope и `source_attempt_id`. |
+| [Mem0](/research/memory/mem0.md) | `mem0ai` | Общий fact-retrieval baseline | У Mem0 есть зрелый TypeScript API, scopes, extraction, semantic/keyword retrieval и OSS/Platform варианты. Он даёт понятную generic baseline для сравнения качества retrieval, но требует внешнего контроля async ingestion, scope и idempotency. |
 | [Hindsight](/research/memory/hindsight.md) | `@vectorize-io/hindsight-client` | Temporal/hybrid retrieval baseline | Hindsight объединяет semantic, BM25, graph и temporal search, возвращает raw memory units, metadata и source facts, а `retain`/`recall` доступны напрямую из TypeScript. Это позволяет проверить, дают ли временные и evidence-связи преимущество на географических cues. |
 
 ## Общие правила интеграции
 
 - В inference вызывается только retrieval; запись разрешена training workflow после `reveal`.
-- Каждый backend получает отдельный binding и должен сохранять `source_attempt_id` вместе с
-  заметкой или metadata.
+- Каждый backend получает отдельный binding; idempotency и журнал операций остаются на стороне
+  адаптера/оркестратора.
 - Derived answers, profiles, observations и graph completions не заменяют raw note в evaluation.
 - Для каждого backend нужны contract tests на `limit`, scope isolation, retry/idempotency и
   задержку видимости новой заметки.

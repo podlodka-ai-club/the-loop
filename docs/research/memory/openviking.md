@@ -56,7 +56,7 @@ extraction изображение может быть преобразовано
 - Официальный пакет `@openviking/sdk` — HTTP-only ESM/CommonJS TypeScript client для Node.js 18+;
   сервер остаётся отдельным процессом. Доступны CLI, HTTP API и MCP.
 - URI и directory scope естественно выражают `memory_snapshot_id → user/project namespace`, а
-  frontmatter и `source_attempt_id` можно хранить в L2 Markdown. L0/L1 следует рассматривать как
+  frontmatter можно использовать для metadata L2 Markdown. L0/L1 следует рассматривать как
   derived index, не как источник истины.
 - Для `memory_retrieve` лучше использовать `find()`/list/read и возвращать raw L2 note вместе с
   URI; `search(mode="context")` удобен для prompt assembly, но скрывает часть решения на стороне

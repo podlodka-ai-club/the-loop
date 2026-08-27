@@ -34,7 +34,6 @@ const client = new HindsightClient({
 
 await client.retain("loci-prod", "Concrete utility poles are a stronger clue than red soil.", {
   documentId: "train-2026-08-27:sample-0042",
-  metadata: { source_attempt_id: "train-2026-08-27:sample-0042" },
 });
 
 const result = await client.recall("loci-prod", "How should red soil be weighted?", {
@@ -53,17 +52,16 @@ const result = await client.recall("loci-prod", "How should red soil be weighted
   server используют PostgreSQL с pgvector.
 - Memory bank изолирует область данных. Доступны self-hosted, managed Cloud и enterprise-вариант;
   при self-hosting остаётся операционная стоимость PostgreSQL, фоновых LLM-вызовов и миграций.
-- Loci может сопоставить `memory_snapshot_id` с bank, `document_id` — с `attempt_id`, а
-  `source_attempt_id` — с metadata. Для retrieval следует выбирать `world`/`experience` или
-  `observation` отдельно и возвращать raw facts с их IDs.
+- Loci может сопоставить `memory_snapshot_id` с bank, а `document_id` — с `attempt_id`. Для
+  retrieval следует выбирать `world`/`experience` или `observation` отдельно и возвращать raw
+  facts с их IDs.
 - Асинхронная консолидация observations означает, что только что добавленная заметка может быть
   видна раньше как raw fact, чем как observation. Training pipeline должен дождаться готовности
   ingestion; inference получает только read-only доступ.
 
 ## Открытые вопросы
 
-- Достаточно ли Hindsight `metadata` и document-level IDs для обязательного
-  `source_attempt_id` без внешнего ledger?
+- Достаточно ли Hindsight document-level IDs для внешнего аудита training operations?
 - Нужны ли Loci observations, или для воспроизводимости evaluation лучше хранить и читать только
   raw `world` facts?
 - Какова фактическая задержка между `retain` и доступностью raw fact/observation на выбранном

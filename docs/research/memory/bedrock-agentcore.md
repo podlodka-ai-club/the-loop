@@ -43,7 +43,6 @@ await client.send(new CreateEventCommand({
   sessionId: "train-2026-08-27:sample-0042",
   clientToken: "train-2026-08-27:sample-0042",
   eventTimestamp: Date.now(),
-  metadata: { source_attempt_id: { stringValue: "train-2026-08-27:sample-0042" } },
   payload: [{
     conversational: {
       role: "USER",
@@ -67,8 +66,8 @@ const result = await client.send(new RetrieveMemoryRecordsCommand({
 - Не требуется отдельная база или extraction worker: storage, strategy processing и retrieval
   managed AWS. Есть IAM, CloudWatch и integration с AgentCore/Strands.
 - `memoryId` естественно становится registry binding, `actorId` — scope dataset/project,
-  `sessionId` — attempt. Metadata/indexed keys могут хранить `source_attempt_id`, но выдачу raw
-  note и порядок processing нужно проверить на реальном response.
+  `sessionId` — attempt. Metadata/indexed keys могут хранить provider note IDs, но выдачу raw note
+  и порядок processing нужно проверить на реальном response.
 - AWS service поддерживает automatic expiration и namespace isolation; это полезно для cleanup,
   но provider retention не равен Loci snapshot/version semantics.
 - Главные риски — eventual consistency, стоимость event/record/retrieval, AWS lock-in и то, что
@@ -77,8 +76,8 @@ const result = await client.send(new RetrieveMemoryRecordsCommand({
 
 ## Открытые вопросы
 
-- Можно ли получить из `RetrieveMemoryRecords` стабильный raw record с `source_attempt_id` и
-  provider ID, достаточный для нашего DTO?
+- Можно ли получить из `RetrieveMemoryRecords` стабильный raw record с provider ID и content,
+  достаточный для нашего DTO?
 - Какая strategy/custom strategy лучше сохраняет короткие географические notes без обобщения?
 - Какой polling и retry policy нужен после `CreateEvent`, чтобы training sample не читала
   незавершённую ingestion?
