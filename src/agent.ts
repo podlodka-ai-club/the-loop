@@ -13,6 +13,7 @@ import {
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { CROP_BOTTOM_FRACTION, toDataUri } from "./image.ts";
+import type { Hint } from "./memory.ts";
 
 export { provider };
 
@@ -22,6 +23,8 @@ export type Guess = {
   place: string;
   confidence: number;
   reasoning: string;
+  /** Provider that actually served the response, as reported by OpenRouter. */
+  provider: string;
 };
 
 /** The model produced output that is not a usable Guess. Track separately from accuracy. */
@@ -40,6 +43,23 @@ const PROMPT =
   "it was taken. Use terrain, vegetation, architecture, sky and any visible text. " +
   "Always give your single best guess, even when you are unsure.";
 
+/**
+ * Lessons are appended to the prompt, never sent as tool calls the model may choose
+ * to make. Comparing memory-on with memory-off requires that both runs issue exactly
+ * one request per image; a model that decides for itself whether to search turns the
+ * comparison into a measurement of that decision.
+ */
+function withHints(hints: readonly Hint[]): string {
+  if (hints.length === 0) return PROMPT;
+  const lines = hints.map((hint) => `- ${hint.text}`).join("\n");
+  return (
+    `${PROMPT}\n\n` +
+    "Notes you wrote after earlier attempts. Each one may be wrong, and none of them " +
+    "describes this photo. Use a note only where it agrees with what you can see.\n" +
+    `${lines}`
+  );
+}
+
 const SCHEMA = {
   type: "object",
   properties: {
@@ -53,9 +73,43 @@ const SCHEMA = {
   additionalProperties: false,
 } as const;
 
-export const MODEL = process.env.GEOLOCATE_MODEL ?? "gemma-4-31b";
+export const MODEL = process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 
-const BASE_URL = process.env.CEREBRAS_BASE_URL ?? "https://api.cerebras.ai/v1";
+const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
+
+/**
+ * Decoding is pinned instead of sampled: temperature 0 plus a fixed seed, so two
+ * runs over the same frozen sample differ only where the provider itself is
+ * nondeterministic. The Cerebras baseline used temperature 1.0 with top_p 0.95 and
+ * three A/A runs to bound decode noise; that number is not comparable with this one.
+ */
+const TEMPERATURE = Number(process.env.GEOLOCATE_TEMPERATURE ?? 0);
+const SEED = Number(process.env.GEOLOCATE_SEED ?? 1);
+
+/**
+ * OpenRouter routes one model slug to many providers, and a single provider can
+ * serve several quantizations of it. Pinning `order` alone still lets the request
+ * land on an fp4 endpoint, so the quantization is pinned too.
+ *
+ * The list has two entries rather than one because a single provider's per-minute
+ * quota was the throughput ceiling: half of a sequential 200-image run came back
+ * 429. Both listed providers serve bf16, so moving between them does not change the
+ * weights - only the queue. `allow_fallbacks: false` still forbids everything
+ * outside the list, so an fp4 endpoint can never answer.
+ *
+ * Venice does not accept `seed`. At temperature 0 that costs little, but it is the
+ * reason the provider that served each response is recorded per item.
+ */
+const PROVIDERS = (process.env.OPENROUTER_PROVIDER ?? "Novita,Venice")
+  .split(",")
+  .map((name) => name.trim())
+  .filter((name) => name !== "");
+
+const PROVIDER = {
+  order: PROVIDERS,
+  allow_fallbacks: false,
+  quantizations: [process.env.OPENROUTER_QUANTIZATION ?? "bf16"],
+} as const;
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -69,7 +123,7 @@ let cachedClient: OpenAI | undefined;
 
 function client(): OpenAI {
   cachedClient ??= new OpenAI({
-    apiKey: requireEnv("CEREBRAS_API_KEY"),
+    apiKey: requireEnv("OPENROUTER_API_KEY"),
     baseURL: BASE_URL,
   });
   return cachedClient;
@@ -98,13 +152,19 @@ function parseGuess(raw: string): Guess {
     place: typeof place === "string" ? place : "",
     confidence: typeof confidence === "number" ? confidence : Number.NaN,
     reasoning: typeof reasoning === "string" ? reasoning : "",
+    provider: "",
   };
 }
 
 const tracer = trace.getTracer("geolocate");
 
-/** Guess the location of one photo. Emits one AGENT span with a nested LLM span. */
-export function geolocate(imagePath: string): Promise<Guess> {
+/**
+ * Guess the location of one photo. Emits one AGENT span with a nested LLM span.
+ *
+ * `hints` is the seam for memory. With none it behaves exactly as before, so a
+ * memory-off run is unchanged by this parameter existing.
+ */
+export function geolocate(imagePath: string, hints: readonly Hint[] = []): Promise<Guess> {
   return tracer.startActiveSpan("geolocate", async (span) => {
     span.setAttributes({
       [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind.AGENT,
@@ -113,17 +173,23 @@ export function geolocate(imagePath: string): Promise<Guess> {
       "geolocate.image.id": basename(imagePath, extname(imagePath)),
       "geolocate.model": MODEL,
       "geolocate.crop_bottom": CROP_BOTTOM_FRACTION,
+      "geolocate.temperature": TEMPERATURE,
+      "geolocate.seed": SEED,
+      "geolocate.hint_count": hints.length,
+      "geolocate.hint_ids": hints.map((hint) => hint.lessonId).join(","),
     });
     try {
       const response = await client().chat.completions.create({
         model: MODEL,
-        temperature: 1.0,
-        top_p: 0.95,
+        temperature: TEMPERATURE,
+        seed: SEED,
+        // `provider` is an OpenRouter extension, absent from the OpenAI schema.
+        provider: PROVIDER,
         messages: [
           {
             role: "user",
             content: [
-              { type: "text", text: PROMPT },
+              { type: "text", text: withHints(hints) },
               { type: "image_url", image_url: { url: await toDataUri(imagePath) } },
             ],
           },
@@ -132,13 +198,14 @@ export function geolocate(imagePath: string): Promise<Guess> {
           type: "json_schema",
           json_schema: { name: "location", strict: true, schema: SCHEMA },
         },
-      });
+      } as OpenAI.ChatCompletionCreateParamsNonStreaming);
 
       const raw = response.choices[0]?.message.content;
       if (!raw) {
         throw new UnparseableOutputError("model returned no content", "");
       }
       const guess = parseGuess(raw);
+      guess.provider = (response as { provider?: string }).provider ?? "unknown";
 
       span.setAttributes({
         [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(guess),
@@ -146,6 +213,7 @@ export function geolocate(imagePath: string): Promise<Guess> {
         "geolocate.latitude": guess.latitude,
         "geolocate.longitude": guess.longitude,
         "geolocate.confidence": guess.confidence,
+        "geolocate.provider": guess.provider,
       });
       span.setStatus({ code: SpanStatusCode.OK });
       return guess;

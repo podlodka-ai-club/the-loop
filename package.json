@@ -10,7 +10,8 @@
     "geolocate": "node --env-file-if-exists=.env src/cli.ts",
     "sample": "node --env-file-if-exists=.env src/sample.ts",
     "experiment": "node --env-file-if-exists=.env src/experiment.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "train": "node --env-file-if-exists=.env src/train.ts"
   },
   "dependencies": {
     "@arizeai/openinference-instrumentation-openai": "4.1.9",
