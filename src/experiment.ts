@@ -15,6 +15,8 @@ import { runExperiment } from "@arizeai/phoenix-client/experiments";
 import { MODEL } from "./agent.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
+import { FrozenMemory, NullMemory, RECALL_LIMIT, parseRecallMode } from "./memory.ts";
+import type { Memory } from "./memory.ts";
 import { loadRows } from "./osv5m.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
@@ -30,6 +32,13 @@ const manifestPath = flag("manifest", DEFAULT_MANIFEST);
 const concurrency = Number(flag("concurrency", "8"));
 const label = flag("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
 
+// Memory is read-only here on purpose. Evaluation that writes lessons is training
+// with extra steps, and the held-out numbers stop meaning anything.
+const snapshotId = flag("snapshot", "");
+const recallMode = parseRecallMode(flag("recall", "all"));
+const memory: Memory =
+  snapshotId === "" ? new NullMemory() : new FrozenMemory(snapshotId, recallMode);
+
 // The sample is read from a file in the repository, never drawn afresh. `loadRows`
 // sees only the image shards this machine holds, so a fresh draw would silently
 // score a different set of images here than it did on the machine that reported the
@@ -41,6 +50,9 @@ const seed = sample.seed;
 console.log(
   `pool ${pool.length}/${csvRowCount} on disk | sample n=${sample.rows.length} ` +
     `strata=${sample.strata} seed=${sample.seed} fp=${sample.fingerprint}`,
+);
+console.log(
+  `memory  ${snapshotId === "" ? "off (baseline)" : `snapshot ${snapshotId}, recall ${recallMode}`}`,
 );
 
 const datasetName = `osv5m-${seed}-n${sample.rows.length}-${sample.fingerprint}`;
@@ -91,8 +103,11 @@ const experiment = await runExperiment({
     seed,
     fingerprint: sample.fingerprint,
     sampleSize: sample.rows.length,
+    memorySnapshot: snapshotId === "" ? "none" : snapshotId,
+    recallMode: snapshotId === "" ? "off" : recallMode,
+    recallLimit: RECALL_LIMIT,
   },
-  task: (example) => runTask(example.input as ExampleInput),
+  task: (example) => runTask(example.input as ExampleInput, { memory }),
   evaluators: geoEvaluators,
   concurrency,
 });
@@ -120,6 +135,18 @@ const errored = Object.values(experiment.runs).filter((run) => run.error !== nul
 console.log(`\nexperiment ${experiment.id} | ${runCount} runs | ${errored} task errors`);
 console.log(`${PHOENIX_URL}/datasets/${datasetId}/experiments\n`);
 
+// Which provider actually served each item. With a fallback list this is no longer
+// a constant, and a run split across providers is a run split across queues.
+const providers = new Map<string, number>();
+for (const run of Object.values(experiment.runs)) {
+  const output = run.output as { ok?: boolean; guess?: { provider?: string } } | null;
+  const name = output?.ok === true ? (output.guess?.provider ?? "unknown") : "failed";
+  providers.set(name, (providers.get(name) ?? 0) + 1);
+}
+console.log(
+  `providers ${[...providers.entries()].map(([name, count]) => `${name}=${count}`).join(" ")}\n`,
+);
+
 const distances = (scoresByMetric.get("distance_km") ?? []).slice().sort((a, b) => a - b);
 const mean = (values: number[]) =>
   values.length === 0 ? Number.NaN : values.reduce((a, b) => a + b, 0) / values.length;
@@ -136,10 +163,13 @@ for (const name of [
   "degenerate_coords",
   "place_names_country",
   "suspected_leak",
+  "hints_in_prompt",
+  "hint_tokens",
 ]) {
   const values = scoresByMetric.get(name) ?? [];
   const value = mean(values);
-  const shown = name === "geoscore" ? value.toFixed(1) : `${(value * 100).toFixed(1)}%`;
+  const asCount = name === "geoscore" || name === "hints_in_prompt" || name === "hint_tokens";
+  const shown = asCount ? value.toFixed(1) : `${(value * 100).toFixed(1)}%`;
   console.log(`${name.padEnd(21)} ${String(values.length).padStart(4)}   ${shown}`);
 }
 console.log(`${"distance_km mean".padEnd(21)} ${String(distances.length).padStart(4)}   ${mean(distances).toFixed(1)} km`);

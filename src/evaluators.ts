@@ -160,6 +160,32 @@ export const placeNamesCountryEvaluator: Evaluator = {
   },
 };
 
+/**
+ * How much memory was actually in the prompt. Not a quality metric: it is the
+ * evidence that ties a change in the numbers to the lessons rather than to noise.
+ * A memory-on run that reports zero here did not test memory.
+ */
+export const hintCountEvaluator: Evaluator = {
+  name: "hints_in_prompt",
+  kind: "CODE",
+  evaluate: ({ output }) => {
+    const result = output as TaskResult | null;
+    const count = result?.hintCount ?? 0;
+    return {
+      score: count,
+      label: count > 0 ? "with_memory" : "no_memory",
+      explanation: count > 0 ? (result?.hintIds ?? []).join(",") : null,
+    };
+  },
+};
+
+/** Rough prompt cost of those lessons, so context growth is visible as it happens. */
+export const hintTokensEvaluator: Evaluator = {
+  name: "hint_tokens",
+  kind: "CODE",
+  evaluate: ({ output }) => ({ score: (output as TaskResult | null)?.hintTokens ?? 0 }),
+};
+
 export const geoEvaluators: Evaluator[] = [
   distanceKmEvaluator,
   geoScoreEvaluator,
@@ -168,4 +194,6 @@ export const geoEvaluators: Evaluator[] = [
   degenerateEvaluator,
   placeNamesCountryEvaluator,
   suspectedLeakEvaluator,
+  hintCountEvaluator,
+  hintTokensEvaluator,
 ];
