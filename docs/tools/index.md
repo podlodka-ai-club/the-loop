@@ -5,7 +5,7 @@
 
 | Инструмент | Назначение |
 |---|---|
-| [`memory_retrieve`](memory_retrieve.md) | Получить релевантные заметки из заданного snapshot памяти. |
-| [`memory_store`](memory_store.md) | Добавить обучающие заметки и получить новый snapshot памяти. |
+| [`memory_retrieve`](memory_retrieve.md) | Запросить provider-native контекст у выбранной системы памяти. |
+| [`memory_store`](memory_store.md) | Передать текст обучающего эпизода в выбранную систему памяти. |
 | [`geocode_search`](geocode_search.md) | Найти объекты по названию или адресу. |
 | [`geocode_reverse`](geocode_reverse.md) | Получить ближайший объект и address components по координатам. |

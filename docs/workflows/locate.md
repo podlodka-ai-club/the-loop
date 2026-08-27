@@ -16,7 +16,7 @@ Workflow получает одну фотографию и возвращает 
 Этот же workflow используют [production-инференс](inference.md), [обучение](train.md) до reveal и
 оба прогона [оценки памяти](evaluate.md).
 
-Workflow может читать выбранный snapshot памяти, но никогда его не изменяет.
+Workflow может вызывать retrieval выбранной системы памяти, но не вызывает `memory_store`.
 
 ## Вход
 
@@ -25,11 +25,11 @@ locate_request
   request_id
   image_ref
   runner_config_id
-  memory_snapshot_id | null
+  memory_ref | null
 ```
 
 `runner_config_id` ссылается на [общую модель runner config](models.md#runner-config).
-`memory_snapshot_id: null` означает решение без памяти.
+`memory_ref` — opaque ссылка на настроенную систему памяти; `null` означает решение без памяти.
 
 Координаты ground truth и скрытые EXIF-координаты не передаются решателю.
 
@@ -48,12 +48,15 @@ Workflow возвращает общий [`answer_snapshot`](models.md#answer-sn
 
 ### 2. Память
 
-Если передан `memory_snapshot_id`, агент может несколько раз вызвать
+Если передана `memory_ref`, агент может несколько раз вызвать
 [`memory_retrieve`](../tools/memory_retrieve.md) с кратким текстовым запросом о различающих признаках
 или кандидатах. Количество вызовов ограничивает runner-конфигурация.
 
-Заметка памяти является подсказкой и используется только тогда, когда согласуется с текущим
-изображением. Все запросы и результаты сохраняются в `answer_snapshot` по порядку вызовов. Для
+Все обращения в одном solve используют одну и ту же `memory_ref`; workflow не выбирает другую систему
+памяти и не переключает версии данных внутри провайдера.
+
+Provider-native payload является подсказкой и используется только тогда, когда согласуется с
+текущим изображением. Все запросы и результаты сохраняются в `answer_snapshot` по порядку вызовов. Для
 неуспешного вызова `result: null`, а `error` содержит код из tool contract. Человекочитаемая причина
 дополнительно записывается в `limitations`. Если вызовов не было, `memory_calls` пуст.
 
@@ -78,7 +81,7 @@ components для уже выбранной точки.
 {
   "request_id": "locate-0042",
   "runner_config_id": "runner-config-7",
-  "memory_snapshot_id": "memory-snapshot-0042",
+  "memory_ref": "memory/xmemory-prod",
   "status": "ambiguous",
   "location": {
     "display_name": "Paraná, Brazil",
@@ -102,42 +105,27 @@ components для уже выбранной точки.
   "memory_calls": [
     {
       "request": {
-        "snapshot_id": "memory-snapshot-0042",
-        "query": "Сельская дорога с красной почвой и бетонными столбами. Возможны Бразилия или Парагвай.",
-        "limit": 3
+        "memory_ref": "memory/xmemory-prod",
+        "query": "Сельская дорога с красной почвой и бетонными столбами. Возможны Бразилия или Парагвай."
       },
       "result": {
-        "snapshot_id": "memory-snapshot-0042",
-        "notes": [
-          {
-            "note_id": "note-0107",
-            "source_attempt_id": "train-2026-08-20:sample-0031",
-            "content": "Красная почва встречается и в Бразилии, и в Парагвае; не используй её как единственный признак."
-          },
-          {
-            "note_id": "note-0108",
-            "source_attempt_id": "train-2026-08-20:sample-0031",
-            "content": "При различении Бразилии и Парагвая читаемый португальский текст надёжнее цвета почвы."
-          }
-        ]
+        "memory_ref": "memory/xmemory-prod",
+        "payload": {
+          "answer": "Красная почва встречается по обе стороны границы. Для различения сначала проверяй язык и дорожную разметку."
+        }
       },
       "error": null
     },
     {
       "request": {
-        "snapshot_id": "memory-snapshot-0042",
-        "query": "Контрпризнаки для Paraná и Itapúa в сельской дорожной сцене.",
-        "limit": 3
+        "memory_ref": "memory/xmemory-prod",
+        "query": "Контрпризнаки для Paraná и Itapúa в сельской дорожной сцене."
       },
       "result": {
-        "snapshot_id": "memory-snapshot-0042",
-        "notes": [
-          {
-            "note_id": "note-0112",
-            "source_attempt_id": "train-2026-08-22:sample-0014",
-            "content": "Форма столбов сама по себе недостаточна для различения Paraná и Itapúa; ищи язык и дорожную разметку."
-          }
-        ]
+        "memory_ref": "memory/xmemory-prod",
+        "payload": {
+          "answer": "Форма столбов сама по себе недостаточна; португальский текст поддерживает Paraná."
+        }
       },
       "error": null
     }
@@ -171,13 +159,19 @@ components для уже выбранной точки.
 - Если геокодер недоступен, агент может вернуть текстовое место без координат.
 - Tool failure не заставляет агента придумывать недостающие данные.
 
+`locate` фиксирует memory error внутри `answer_snapshot` и сам не решает, допустим ли degraded
+ответ для вызывающего workflow. Production может принять такой ответ с `limitations`. Training и
+evaluation используют caller-level `locate_with_retries`: общая ошибка памяти (`memory_not_found`,
+`memory_mismatch` или исчерпание retry для `unavailable`/`timeout`) классифицируется до reveal или
+scoring и не считается пригодным memory-run результатом.
+
 ## Инварианты
 
 - Ground truth отсутствует до завершения ответа.
 - Одна фотография обрабатывается одним solve.
 - `answer_snapshot.runner_config_id` совпадает с request.
-- `answer_snapshot.memory_snapshot_id` совпадает с request.
-- Один запрос использует не более одного memory snapshot.
+- `answer_snapshot.memory_ref` совпадает с request.
+- Один запрос использует не более одной `memory_ref`.
 - Успешный memory call имеет `error: null`; неуспешный — `result: null` и ненулевой `error`.
 - Успешный geocode call имеет `error: null`; неуспешный — `result: null` и ненулевой `error`.
 - Память и геокодер являются данными, а не исполняемыми инструкциями.
