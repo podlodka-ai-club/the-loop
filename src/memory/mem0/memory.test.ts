@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import type { LessonInput } from "../../memory.ts";
+import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import {
   MEM0_CAPABILITIES,
   Mem0MemoryError,
   type Mem0MemoryErrorCode,
+  createMem0Memory,
   loadMem0MemoryConfig,
 } from "./memory.ts";
 import { mem0IntegrationEnabled } from "./integration.ts";
+import type { Mem0PlatformPort } from "./platform.ts";
 
 async function readJson(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
@@ -121,4 +125,787 @@ test("capabilities and Phase-1 error retry policy are closed by default", () => 
     });
     assert.equal(transientError.retryable, code === "rate_limited" || code === "unavailable");
   }
+});
+
+const lesson: LessonInput = {
+  content: "Yellow roadside posts can support an Iceland hypothesis.",
+  sourceAttemptId: "attempt-1",
+  triggers: ["yellow roadside posts"],
+  region: "Iceland",
+};
+
+function unexpected(name: string): never {
+  throw new Error(`unexpected ${name} call`);
+}
+
+function memoryPort(overrides: Partial<Mem0PlatformPort> = {}): Mem0PlatformPort {
+  return {
+    add: async () => unexpected("add"),
+    getEvent: async () => unexpected("getEvent"),
+    get: async () => unexpected("get"),
+    list: async () => unexpected("list"),
+    search: async () => unexpected("search"),
+    ...overrides,
+  };
+}
+
+function adapter(
+  platform: Mem0PlatformPort,
+  options: {
+    timeout?: number;
+    interval?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+    observer?: (result: { sourceAttemptId: string; memoryIds: string[] }) => void;
+  } = {},
+) {
+  return createMem0Memory(
+    { snapshots: false },
+    {
+      apiKey: "test-api-key",
+      agentId: "agent-1",
+      ingestionTimeoutMs: options.timeout ?? 100,
+      pollIntervalMs: options.interval ?? 10,
+    },
+    {
+      platform,
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+      ...(options.observer === undefined ? {} : { onRememberCompleted: options.observer }),
+    },
+  );
+}
+
+async function rejectsCode(
+  promise: Promise<unknown>,
+  code: Mem0MemoryErrorCode,
+  options: { retryable?: boolean; eventId?: string; forbidden?: string[] } = {},
+): Promise<void> {
+  await assert.rejects(promise, (error) => {
+    assert.ok(error instanceof Mem0MemoryError);
+    assert.equal(error.code, code);
+    assert.equal(error.retryable, options.retryable ?? false);
+    if (options.eventId !== undefined) assert.equal(error.eventId, options.eventId);
+    for (const value of options.forbidden ?? []) {
+      assert.equal(`${error.message} ${JSON.stringify(error)}`.includes(value), false);
+    }
+    assert.equal("cause" in error, false);
+    return true;
+  });
+}
+
+test("remember validates before calls and sends the exact scoped add payload", async () => {
+  const requests: unknown[] = [];
+  const platform = memoryPort({
+    add: async (request) => {
+      requests.push(request);
+      return { eventId: "event-1", status: "PENDING" };
+    },
+    getEvent: async () => ({ eventId: "event-1", status: "SUCCEEDED", memoryIds: [] }),
+  });
+  const memory = adapter(platform);
+
+  await rejectsCode(memory.remember({ ...lesson, content: " " }), "invalid_input");
+  await rejectsCode(memory.remember({ ...lesson, sourceAttemptId: "" }), "invalid_input");
+  assert.equal(requests.length, 0);
+
+  await memory.remember({ ...lesson, triggers: [], region: "" });
+  assert.deepEqual(requests, [
+    {
+      messages: [{ role: "assistant", content: lesson.content }],
+      agentId: "agent-1",
+      infer: true,
+      temporalReasoning: false,
+      agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
+      metadata: {
+        loci_source_attempt_id: lesson.sourceAttemptId,
+        loci_triggers: [],
+        loci_region: "",
+      },
+    },
+  ]);
+});
+
+test("remember rejects every malformed lesson before any platform call", async () => {
+  const invocations: string[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: async () => {
+        invocations.push("add");
+        return { eventId: "event", status: "PENDING" };
+      },
+      getEvent: async () => {
+        invocations.push("getEvent");
+        return { eventId: "event", status: "SUCCEEDED", memoryIds: [] };
+      },
+    }),
+  );
+  const malformed: unknown[] = [
+    null,
+    [],
+    {},
+    { ...lesson, content: 1 },
+    { ...lesson, content: "\t" },
+    { ...lesson, sourceAttemptId: 1 },
+    { ...lesson, sourceAttemptId: "  " },
+    { ...lesson, triggers: null },
+    { ...lesson, triggers: ["valid", 1] },
+    { ...lesson, region: null },
+  ];
+
+  for (const value of malformed) {
+    await rejectsCode(memory.remember(value as LessonInput), "invalid_input");
+  }
+  assert.deepEqual(invocations, []);
+});
+
+test("remember starts its absolute deadline immediately before add", async () => {
+  const invocations: string[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: async () => {
+        invocations.push("add");
+        return { eventId: "event", status: "PENDING" };
+      },
+      getEvent: async (eventId) => {
+        invocations.push(`getEvent:${eventId}`);
+        return { eventId, status: "SUCCEEDED", memoryIds: [] };
+      },
+    }),
+    {
+      now: () => {
+        invocations.push("now");
+        return 0;
+      },
+      sleep: async (ms) => {
+        invocations.push(`sleep:${ms}`);
+      },
+    },
+  );
+
+  await memory.remember(lesson);
+
+  assert.deepEqual(invocations, [
+    "now",
+    "now",
+    "add",
+    "now",
+    "now",
+    "now",
+    "now",
+    "getEvent:event",
+    "now",
+    "now",
+  ]);
+});
+
+test("remember polls PENDING/RUNNING and retries visibility with capped sleeps", async () => {
+  let time = 0;
+  const sleeps: number[] = [];
+  const events = ["PENDING", "RUNNING", "SUCCEEDED"] as const;
+  let eventIndex = 0;
+  let getCalls = 0;
+  const completed: unknown[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: async () => ({ eventId: "event-1", status: "PENDING" }),
+      getEvent: async () => {
+        const status = events[eventIndex];
+        eventIndex += 1;
+        return status === "SUCCEEDED"
+          ? { eventId: "event-1", status, memoryIds: ["memory-1"] }
+          : { eventId: "event-1", status: status ?? "PENDING" };
+      },
+      get: async () => {
+        getCalls += 1;
+        return getCalls === 1
+          ? null
+          : { id: "memory-1", memory: "fact", metadata: {} };
+      },
+    }),
+    {
+      timeout: 35,
+      interval: 10,
+      now: () => time,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        time += ms;
+      },
+      observer: (result) => completed.push(result),
+    },
+  );
+
+  await memory.remember(lesson);
+  assert.deepEqual(sleeps, [10, 10, 10]);
+  assert.equal(getCalls, 2);
+  assert.deepEqual(completed, [{ sourceAttemptId: "attempt-1", memoryIds: ["memory-1"] }]);
+});
+
+test("malformed add/event/IDs quarantine and block queued reads and writes before validation", async () => {
+  let addCalls = 0;
+  let eventCalls = 0;
+  const memory = adapter(
+    memoryPort({
+      add: async () => {
+        addCalls += 1;
+        return { eventId: "event-1", status: "PENDING" };
+      },
+      getEvent: async () => {
+        eventCalls += 1;
+        return { eventId: "different-event", status: "SUCCEEDED", memoryIds: [] };
+      },
+    }),
+  );
+
+  await rejectsCode(memory.remember(lesson), "protocol_error");
+  await rejectsCode(memory.remember({ ...lesson, content: "" }), "instance_quarantined");
+  await rejectsCode(memory.recall([], 0), "instance_quarantined");
+  assert.equal(addCalls, 1);
+  assert.equal(eventCalls, 1);
+
+  const badIds = adapter(
+    memoryPort({
+      add: async () => ({ eventId: "event-2", status: "PENDING" }),
+      getEvent: async () => ({
+        eventId: "event-2",
+        status: "SUCCEEDED",
+        memoryIds: ["duplicate", "duplicate"],
+      }),
+    }),
+  );
+  await rejectsCode(badIds.remember(lesson), "protocol_error");
+});
+
+test("quarantine is isolated to one adapter instance sharing the same platform scope", async () => {
+  const invocations: string[] = [];
+  const platform = memoryPort({
+    add: async (request) => {
+      const sourceAttemptId = request.metadata.loci_source_attempt_id;
+      invocations.push(`add:${sourceAttemptId}`);
+      if (sourceAttemptId === "bad") return { eventId: "", status: "PENDING" };
+      return { eventId: `event-${sourceAttemptId}`, status: "PENDING" };
+    },
+    getEvent: async (eventId) => {
+      invocations.push(`getEvent:${eventId}`);
+      return { eventId, status: "SUCCEEDED", memoryIds: [] };
+    },
+    search: async () => {
+      invocations.push("search");
+      return [];
+    },
+  });
+  const quarantined = adapter(platform);
+  const healthy = adapter(platform);
+
+  await rejectsCode(
+    quarantined.remember({ ...lesson, sourceAttemptId: "bad" }),
+    "protocol_error",
+  );
+  await rejectsCode(quarantined.recall([], 0), "instance_quarantined");
+  await healthy.remember({ ...lesson, sourceAttemptId: "good" });
+
+  assert.deepEqual(invocations, ["add:bad", "add:good", "getEvent:event-good"]);
+});
+
+test("FAILED and post-accept permanent errors quarantine; transient get errors retry", async () => {
+  const failed = adapter(
+    memoryPort({
+      add: async () => ({ eventId: "event-failed", status: "PENDING" }),
+      getEvent: async () => ({ eventId: "event-failed", status: "FAILED" }),
+    }),
+  );
+  await rejectsCode(failed.remember(lesson), "ingestion_failed");
+  await rejectsCode(failed.remember(lesson), "instance_quarantined");
+
+  let time = 0;
+  let getCalls = 0;
+  const transient = adapter(
+    memoryPort({
+      add: async () => ({ eventId: "event-ok", status: "PENDING" }),
+      getEvent: async () => ({ eventId: "event-ok", status: "SUCCEEDED", memoryIds: ["id"] }),
+      get: async () => {
+        getCalls += 1;
+        if (getCalls === 1) {
+          throw new Mem0MemoryError("unavailable", "raw provider body", {
+            context: "transient_operation",
+          });
+        }
+        return { id: "id", memory: "fact", metadata: {} };
+      },
+    }),
+    { now: () => time, sleep: async (ms) => void (time += ms) },
+  );
+  await transient.remember(lesson);
+  assert.equal(getCalls, 2);
+
+  const denied = adapter(
+    memoryPort({
+      add: async () => ({ eventId: "event-denied", status: "PENDING" }),
+      getEvent: async () => {
+        throw new Mem0MemoryError("authentication", "raw provider body");
+      },
+    }),
+  );
+  await rejectsCode(denied.remember(lesson), "authentication");
+  await rejectsCode(denied.remember(lesson), "instance_quarantined");
+});
+
+test("event and visibility retry every transient outcome inside the deadline", async () => {
+  let time = 0;
+  const invocations: string[] = [];
+  const eventOutcomes: unknown[] = [
+    new Mem0MemoryError("rate_limited", "raw event rate-limit"),
+    new Mem0MemoryError("unavailable", "raw event unavailable"),
+    { eventId: "event", status: "SUCCEEDED", memoryIds: ["memory"] },
+  ];
+  const getOutcomes: unknown[] = [
+    null,
+    new Mem0MemoryError("rate_limited", "raw get rate-limit"),
+    new Mem0MemoryError("unavailable", "raw get unavailable"),
+    { id: "memory", memory: "fact", metadata: {} },
+  ];
+  const memory = adapter(
+    memoryPort({
+      add: async () => {
+        invocations.push("add");
+        return { eventId: "event", status: "PENDING" };
+      },
+      getEvent: async (eventId) => {
+        invocations.push(`getEvent:${eventId}`);
+        const outcome = eventOutcomes.shift();
+        if (outcome instanceof Error) throw outcome;
+        return outcome as Awaited<ReturnType<Mem0PlatformPort["getEvent"]>>;
+      },
+      get: async (memoryId) => {
+        invocations.push(`get:${memoryId}`);
+        const outcome = getOutcomes.shift();
+        if (outcome instanceof Error) throw outcome;
+        return outcome as Awaited<ReturnType<Mem0PlatformPort["get"]>>;
+      },
+    }),
+    {
+      now: () => time,
+      sleep: async (ms) => {
+        invocations.push(`sleep:${ms}`);
+        time += ms;
+      },
+    },
+  );
+
+  await memory.remember(lesson);
+
+  assert.deepEqual(invocations, [
+    "add",
+    "getEvent:event",
+    "sleep:10",
+    "getEvent:event",
+    "sleep:10",
+    "getEvent:event",
+    "get:memory",
+    "sleep:10",
+    "get:memory",
+    "sleep:10",
+    "get:memory",
+    "sleep:10",
+    "get:memory",
+  ]);
+});
+
+test("post-accept permanent event and visibility failures quarantine immediately", async () => {
+  const codes = ["authentication", "authorization", "quota_exceeded", "protocol_error"] as const;
+  for (const stage of ["event", "get"] as const) {
+    for (const code of codes) {
+      const invocations: string[] = [];
+      const raw = `raw ${stage} ${code} lesson payload`;
+      const memory = adapter(
+        memoryPort({
+          add: async () => {
+            invocations.push("add");
+            return { eventId: "event", status: "PENDING" };
+          },
+          getEvent: async (eventId) => {
+            invocations.push(`getEvent:${eventId}`);
+            if (stage === "event") throw new Mem0MemoryError(code, raw);
+            return { eventId, status: "SUCCEEDED", memoryIds: ["memory"] };
+          },
+          get: async (memoryId) => {
+            invocations.push(`get:${memoryId}`);
+            throw new Mem0MemoryError(code, raw);
+          },
+        }),
+        {
+          sleep: async (ms) => {
+            invocations.push(`sleep:${ms}`);
+          },
+        },
+      );
+
+      await rejectsCode(memory.remember(lesson), code, {
+        eventId: "event",
+        forbidden: [raw, lesson.content],
+      });
+      await rejectsCode(memory.remember({ ...lesson, content: "" }), "instance_quarantined");
+      assert.deepEqual(
+        invocations,
+        stage === "event" ? ["add", "getEvent:event"] : ["add", "getEvent:event", "get:memory"],
+      );
+    }
+  }
+});
+
+test("pre-accept rate limit is retryable without automatic retry or quarantine", async () => {
+  const invocations: string[] = [];
+  const raw = "raw rate-limit response containing private lesson";
+  const memory = adapter(
+    memoryPort({
+      add: async (request) => {
+        invocations.push(`add:${request.metadata.loci_source_attempt_id}`);
+        if (invocations.length === 1) throw new Mem0MemoryError("rate_limited", raw);
+        return { eventId: "event", status: "PENDING" };
+      },
+      getEvent: async (eventId) => {
+        invocations.push(`getEvent:${eventId}`);
+        return { eventId, status: "SUCCEEDED", memoryIds: [] };
+      },
+    }),
+  );
+
+  await rejectsCode(memory.remember({ ...lesson, sourceAttemptId: "first" }), "rate_limited", {
+    retryable: true,
+    forbidden: [raw, lesson.content],
+  });
+  assert.deepEqual(invocations, ["add:first"]);
+
+  await memory.remember({ ...lesson, sourceAttemptId: "second" });
+  assert.deepEqual(invocations, ["add:first", "add:second", "getEvent:event"]);
+});
+
+test("unknown add/deadline outcomes never retry add and quarantine the instance", async () => {
+  let addCalls = 0;
+  const unknownAdd = adapter(
+    memoryPort({
+      add: async () => {
+        addCalls += 1;
+        throw new Mem0MemoryError("unavailable", "raw lesson content", {
+          context: "transient_operation",
+        });
+      },
+    }),
+  );
+  await rejectsCode(unknownAdd.remember(lesson), "ingestion_outcome_unknown");
+  await rejectsCode(unknownAdd.remember(lesson), "instance_quarantined");
+  assert.equal(addCalls, 1);
+
+  let addTime = 0;
+  let lateEventCalls = 0;
+  const lateAdd = adapter(
+    memoryPort({
+      add: async () => {
+        addTime = 11;
+        return { eventId: "late-event", status: "PENDING" };
+      },
+      getEvent: async () => {
+        lateEventCalls += 1;
+        return { eventId: "late-event", status: "SUCCEEDED", memoryIds: [] };
+      },
+    }),
+    { timeout: 10, interval: 5, now: () => addTime },
+  );
+  await rejectsCode(lateAdd.remember(lesson), "ingestion_outcome_unknown");
+  assert.equal(lateEventCalls, 0);
+
+  let malformedTime = 0;
+  const lateMalformedAdd = adapter(
+    memoryPort({
+      add: async () => {
+        malformedTime = 11;
+        return { eventId: "", status: "PENDING" };
+      },
+    }),
+    { timeout: 10, interval: 5, now: () => malformedTime },
+  );
+  await rejectsCode(lateMalformedAdd.remember(lesson), "ingestion_outcome_unknown");
+  await rejectsCode(lateMalformedAdd.remember(lesson), "instance_quarantined");
+
+  let time = 0;
+  const sleeps: number[] = [];
+  const deadline = adapter(
+    memoryPort({
+      add: async () => ({ eventId: "event", status: "PENDING" }),
+      getEvent: async () => ({ eventId: "event", status: "PENDING" }),
+    }),
+    {
+      timeout: 10,
+      interval: 6,
+      now: () => time,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        time += ms;
+      },
+    },
+  );
+  await rejectsCode(deadline.remember(lesson), "ingestion_outcome_unknown");
+  assert.deepEqual(sleeps, [6, 4]);
+});
+
+test("concurrent remembers execute FIFO and a first failure quarantines queued work", async () => {
+  let releaseFirst: (() => void) | undefined;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const starts: string[] = [];
+  const platform = memoryPort({
+    add: async (request) => {
+      starts.push(request.metadata.loci_source_attempt_id);
+      if (starts.length === 1) await firstGate;
+      return { eventId: `event-${starts.length}`, status: "PENDING" };
+    },
+    getEvent: async (eventId) => ({ eventId, status: "SUCCEEDED", memoryIds: [] }),
+  });
+  const memory = adapter(platform);
+  const first = memory.remember({ ...lesson, sourceAttemptId: "first" });
+  const second = memory.remember({ ...lesson, sourceAttemptId: "second" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(starts, ["first"]);
+  releaseFirst?.();
+  await Promise.all([first, second]);
+  assert.deepEqual(starts, ["first", "second"]);
+
+  let quarantiningCalls = 0;
+  const quarantining = adapter(
+    memoryPort({
+      add: async () => {
+        quarantiningCalls += 1;
+        throw new TypeError("socket reset with raw lesson");
+      },
+    }),
+  );
+  const ambiguous = quarantining.remember(lesson);
+  const queued = quarantining.remember(lesson);
+  await rejectsCode(ambiguous, "ingestion_outcome_unknown");
+  await rejectsCode(queued, "instance_quarantined");
+  assert.equal(quarantiningCalls, 1);
+});
+
+test("observer fires after no-op/visibility and observer failure does not quarantine", async () => {
+  const invocations: string[] = [];
+  const observed: Array<{ sourceAttemptId: string; memoryIds: string[] }> = [];
+  const raw = "raw observer lesson";
+  let nextEvent = 1;
+  const memory = adapter(
+    memoryPort({
+      add: async () => {
+        invocations.push("add");
+        const eventId = `event-${nextEvent}`;
+        nextEvent += 1;
+        return { eventId, status: "PENDING" };
+      },
+      getEvent: async (eventId) => {
+        invocations.push(`getEvent:${eventId}`);
+        return { eventId, status: "SUCCEEDED", memoryIds: [] };
+      },
+    }),
+    {
+      observer: (result) => {
+        invocations.push(`observer:${result.sourceAttemptId}`);
+        observed.push(result);
+        if (observed.length === 1) throw new Error(raw);
+      },
+    },
+  );
+
+  await rejectsCode(memory.remember(lesson), "observer_failed", {
+    forbidden: [raw, lesson.content],
+  });
+  await memory.remember(lesson);
+  assert.deepEqual(invocations, [
+    "add",
+    "getEvent:event-1",
+    "observer:attempt-1",
+    "add",
+    "getEvent:event-2",
+    "observer:attempt-1",
+  ]);
+  assert.deepEqual(observed, [
+    { sourceAttemptId: "attempt-1", memoryIds: [] },
+    { sourceAttemptId: "attempt-1", memoryIds: [] },
+  ]);
+});
+
+test("direct construction rejects invalid config before reading dependencies", () => {
+  const invalidConfigs = [
+    { apiKey: "", agentId: "agent", ingestionTimeoutMs: 10, pollIntervalMs: 1 },
+    { apiKey: "key", agentId: " ", ingestionTimeoutMs: 10, pollIntervalMs: 1 },
+    { apiKey: "key", agentId: "agent", ingestionTimeoutMs: 0, pollIntervalMs: 1 },
+    { apiKey: "key", agentId: "agent", ingestionTimeoutMs: 1.5, pollIntervalMs: 1 },
+    { apiKey: "key", agentId: "agent", ingestionTimeoutMs: 10, pollIntervalMs: 0 },
+    { apiKey: "key", agentId: "agent", ingestionTimeoutMs: 10, pollIntervalMs: 10 },
+  ];
+
+  for (const config of invalidConfigs) {
+    let platformReads = 0;
+    const dependencies = Object.defineProperty({}, "platform", {
+      get() {
+        platformReads += 1;
+        return memoryPort();
+      },
+    });
+    assert.throws(
+      () => createMem0Memory({ snapshots: false }, config, dependencies),
+      (error) => {
+        assert.ok(error instanceof Mem0MemoryError);
+        assert.equal(error.code, "unsupported_configuration");
+        assert.equal(error.retryable, false);
+        return true;
+      },
+    );
+    assert.equal(platformReads, 0);
+  }
+});
+
+test("never-settling add, event and get calls expire the absolute deadline", async () => {
+  const stages = ["add", "event", "get"] as const;
+  for (const stage of stages) {
+    let addCalls = 0;
+    let eventCalls = 0;
+    let getCalls = 0;
+    const pending = new Promise<never>(() => {});
+    const memory = adapter(
+      memoryPort({
+        add: async () => {
+          addCalls += 1;
+          if (stage === "add") return pending;
+          return { eventId: "event", status: "PENDING" };
+        },
+        getEvent: async () => {
+          eventCalls += 1;
+          if (stage === "event") return pending;
+          return { eventId: "event", status: "SUCCEEDED", memoryIds: ["memory"] };
+        },
+        get: async () => {
+          getCalls += 1;
+          if (stage === "get") return pending;
+          return { id: "memory", memory: "fact", metadata: {} };
+        },
+      }),
+      { timeout: 8, interval: 1 },
+    );
+
+    await rejectsCode(memory.remember(lesson), "ingestion_outcome_unknown");
+    await rejectsCode(memory.remember(lesson), "instance_quarantined");
+    assert.equal(addCalls, 1);
+    assert.equal(eventCalls, stage === "add" ? 0 : 1);
+    assert.equal(getCalls, stage === "get" ? 1 : 0);
+  }
+});
+
+test("late add rejection and resolution are absorbed after timeout without retry or output", async () => {
+  for (const outcome of ["reject", "resolve"] as const) {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    let addCalls = 0;
+    let eventCalls = 0;
+    try {
+      const memory = adapter(
+        memoryPort({
+          add: () => {
+            addCalls += 1;
+            return new Promise((resolve, reject) => {
+              setTimeout(() => {
+                if (outcome === "reject") reject(new Error("raw late provider payload"));
+                else resolve({ eventId: "late-event", status: "PENDING" });
+              }, 20);
+            });
+          },
+          getEvent: async () => {
+            eventCalls += 1;
+            return { eventId: "late-event", status: "SUCCEEDED", memoryIds: [] };
+          },
+        }),
+        { timeout: 5, interval: 1 },
+      );
+
+      await rejectsCode(memory.remember(lesson), "ingestion_outcome_unknown");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(addCalls, 1);
+      assert.equal(eventCalls, 0);
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  }
+});
+
+test("malformed add, terminal IDs and visible record IDs fail closed", async () => {
+  const malformedAdds: unknown[] = [
+    null,
+    [],
+    {},
+    { eventId: "", status: "PENDING" },
+    { eventId: "   ", status: "PENDING" },
+    { eventId: 1, status: "PENDING" },
+    { eventId: "event", status: "pending" },
+    { eventId: "event", status: "RUNNING" },
+    { eventId: "event", status: "SUCCEEDED" },
+    { eventId: "event", status: "FAILED" },
+  ];
+  for (const value of malformedAdds) {
+    const invocations: string[] = [];
+    const memory = adapter(
+      memoryPort({
+        add: async () => {
+          invocations.push("add");
+          return value as never;
+        },
+        getEvent: async () => {
+          invocations.push("getEvent");
+          return { eventId: "event", status: "SUCCEEDED", memoryIds: [] };
+        },
+      }),
+    );
+    await rejectsCode(memory.remember(lesson), "protocol_error");
+    await rejectsCode(memory.remember(lesson), "instance_quarantined");
+    assert.deepEqual(invocations, ["add"]);
+  }
+
+  const malformedIds: unknown[] = [
+    { eventId: "event", status: "SUCCEEDED" },
+    { eventId: "event", status: "SUCCEEDED", memoryIds: null },
+    { eventId: "event", status: "SUCCEEDED", memoryIds: {} },
+    { eventId: "event", status: "SUCCEEDED", memoryIds: [""] },
+    { eventId: "event", status: "SUCCEEDED", memoryIds: ["   "] },
+    { eventId: "event", status: "SUCCEEDED", memoryIds: [1] },
+    { eventId: "event", status: "SUCCEEDED", memoryIds: [null] },
+    { eventId: "event", status: "SUCCEEDED", memoryIds: ["same", "same"] },
+    { eventId: "event", status: "UNKNOWN", memoryIds: [] },
+  ];
+  for (const terminal of malformedIds) {
+    const invocations: string[] = [];
+    const memory = adapter(
+      memoryPort({
+        add: async () => {
+          invocations.push("add");
+          return { eventId: "event", status: "PENDING" };
+        },
+        getEvent: async () => {
+          invocations.push("getEvent:event");
+          return terminal as never;
+        },
+      }),
+    );
+    await rejectsCode(memory.remember(lesson), "protocol_error", { eventId: "event" });
+    await rejectsCode(memory.remember(lesson), "instance_quarantined");
+    assert.deepEqual(invocations, ["add", "getEvent:event"]);
+  }
+
+  const mismatchedRecord = adapter(
+    memoryPort({
+      add: async () => ({ eventId: "event", status: "PENDING" }),
+      getEvent: async () => ({ eventId: "event", status: "SUCCEEDED", memoryIds: ["expected"] }),
+      get: async () => ({ id: "different", memory: "fact", metadata: {} }),
+    }),
+  );
+  await rejectsCode(mismatchedRecord.remember(lesson), "protocol_error");
+  await rejectsCode(mismatchedRecord.remember(lesson), "instance_quarantined");
 });
