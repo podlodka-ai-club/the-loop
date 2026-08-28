@@ -20,6 +20,16 @@ function schemaError(message = "The xmemory schema is invalid"): XmemoryMemoryEr
   return new XmemoryMemoryError("protocol_error", "schema", message);
 }
 
+function withSchemaBoundary<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch {
+    // Reflection against an input Proxy can run hostile traps. Never trust or retain
+    // the thrown value, even when it already looks like an XmemoryMemoryError.
+    throw schemaError();
+  }
+}
+
 function isPlainMapping(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -64,11 +74,20 @@ function canonicalize(value: unknown, active: WeakSet<object>): JsonValue {
     }
 
     if (!isPlainMapping(value) || !ownKeysAreEnumerableStrings(value)) throw schemaError();
-    const result: { [key: string]: JsonValue } = {};
-    for (const key of Object.keys(value).sort()) {
-      result[key] = canonicalize(value[key], active);
+    const sortedKeys = Object.keys(value).sort();
+    const result: { [key: string]: JsonValue } = Object.create(null);
+    for (const key of sortedKeys) {
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: canonicalize(value[key], active),
+        writable: true,
+      });
     }
-    return result;
+    // Ordinary objects always enumerate integer-index keys numerically, even when they
+    // were inserted in lexicographic order. JSON.stringify observes a Proxy's ownKeys
+    // order, so the canonical mapping remains a mapping while "10" stays before "2".
+    return new Proxy(result, { ownKeys: () => [...sortedKeys] });
   } finally {
     active.delete(value);
   }
@@ -79,21 +98,23 @@ function canonicalJsonValue(value: unknown): JsonValue {
 }
 
 export function canonicalXmemorySchemaHash(value: unknown): string {
-  const canonical = canonicalJsonValue(value);
-  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
+  return withSchemaBoundary(() => {
+    const canonical = canonicalJsonValue(value);
+    return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
+  });
 }
 
 export function validateXmemorySchema(value: unknown): asserts value is Record<string, unknown> {
-  const canonical = canonicalJsonValue(value);
-  if (canonical === null || Array.isArray(canonical) || typeof canonical !== "object") {
-    throw schemaError("The xmemory schema must be a mapping");
-  }
-  const sha256 = createHash("sha256")
-    .update(JSON.stringify(canonical), "utf8")
-    .digest("hex");
-  if (sha256 !== XMEMORY_SCHEMA_V1_SHA256) {
-    throw schemaError("The xmemory schema does not match the v1 contract");
-  }
+  withSchemaBoundary(() => {
+    const canonical = canonicalJsonValue(value);
+    if (canonical === null || Array.isArray(canonical) || typeof canonical !== "object") {
+      throw schemaError();
+    }
+    const sha256 = createHash("sha256")
+      .update(JSON.stringify(canonical), "utf8")
+      .digest("hex");
+    if (sha256 !== XMEMORY_SCHEMA_V1_SHA256) throw schemaError();
+  });
 }
 
 export async function loadXmemorySchema(
@@ -117,18 +138,13 @@ export function assertXmemorySchemaCompatible(
 ): void {
   try {
     validateXmemorySchema(live);
+    if (canonicalXmemorySchemaHash(live) === expected.sha256) return;
   } catch {
-    throw new XmemoryMemoryError(
-      "schema_mismatch",
-      "schema",
-      "The live xmemory schema does not match the committed schema",
-    );
+    // All validation/hash failures collapse to the same exact-schema lock result.
   }
-  if (canonicalXmemorySchemaHash(live) !== expected.sha256) {
-    throw new XmemoryMemoryError(
-      "schema_mismatch",
-      "schema",
-      "The live xmemory schema does not match the committed schema",
-    );
-  }
+  throw new XmemoryMemoryError(
+    "schema_mismatch",
+    "schema",
+    "The live xmemory schema does not match the committed schema",
+  );
 }

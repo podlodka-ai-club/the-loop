@@ -4,7 +4,7 @@ import {
   decodeXmemoryChanges,
   type XmemoryAdminPort,
   type XmemoryPlatformPort,
-} from "./platform.ts";
+} from "./platform-contract.ts";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -80,10 +80,37 @@ function protocolFailure(
   );
 }
 
-function statusFromError(error: unknown): number | undefined {
-  if (!isRecord(error)) return undefined;
+function decodeResponse<T>(
+  operation: XmemoryOperation,
+  stateChanging: StateChangingOperation,
+  decode: () => T,
+): T {
+  try {
+    return decode();
+  } catch {
+    throw protocolFailure(operation, stateChanging);
+  }
+}
+
+type ProviderStatus =
+  | { kind: "absent" }
+  | { kind: "valid"; value: number }
+  | { kind: "malformed" };
+
+function statusFromError(error: unknown): ProviderStatus {
+  if (!isRecord(error) || !Object.hasOwn(error, "status") || error.status === undefined) {
+    return { kind: "absent" };
+  }
   const status = error.status;
-  return typeof status === "number" && Number.isInteger(status) ? status : undefined;
+  if (
+    typeof status !== "number" ||
+    !Number.isInteger(status) ||
+    status < 100 ||
+    status > 599
+  ) {
+    return { kind: "malformed" };
+  }
+  return { kind: "valid", value: status };
 }
 
 function codeFromError(error: unknown): string | undefined {
@@ -155,14 +182,14 @@ function knownHttpCode(status: number): keyof typeof PROVIDER_CODES | undefined 
   }
 }
 
-export function normalizeXmemoryProviderError(
+function normalizeXmemoryProviderErrorUnsafe(
   error: unknown,
   operation: XmemoryOperation,
-  stateChanging: StateChangingOperation = "none",
+  stateChanging: StateChangingOperation,
 ): XmemoryMemoryError {
-  if (error instanceof XmemoryMemoryError) return error;
-
-  const status = statusFromError(error);
+  const decodedStatus = statusFromError(error);
+  if (decodedStatus.kind === "malformed") return protocolFailure(operation, stateChanging);
+  const status = decodedStatus.kind === "valid" ? decodedStatus.value : undefined;
   const providerCode = codeFromError(error);
   const knownProvider =
     providerCode === undefined
@@ -193,7 +220,7 @@ export function normalizeXmemoryProviderError(
         normalizedMessage("invalid_input", operation),
       );
     }
-    if (status === 408 || status >= 500) {
+    if (status === 408 || (status >= 500 && status <= 599)) {
       if (stateChanging !== "none") return protocolFailure(operation, stateChanging);
       return new XmemoryMemoryError(
         "unavailable",
@@ -213,6 +240,20 @@ export function normalizeXmemoryProviderError(
     );
   }
   return protocolFailure(operation, stateChanging);
+}
+
+export function normalizeXmemoryProviderError(
+  error: unknown,
+  operation: XmemoryOperation,
+  stateChanging: StateChangingOperation = "none",
+): XmemoryMemoryError {
+  try {
+    return normalizeXmemoryProviderErrorUnsafe(error, operation, stateChanging);
+  } catch {
+    // Rejection reasons are untrusted. A hostile/revoked Proxy can throw from any
+    // reflection performed by the matrix, so discard it and preserve state semantics.
+    return protocolFailure(operation, stateChanging);
+  }
 }
 
 function requireConfig(value: string, name: string, operation: "schema" | "provision"): string {
@@ -276,19 +317,26 @@ export function createXmemoryPlatformPortInternal(
 
   return {
     async getSchema(timeoutMs) {
+      let value: unknown;
       try {
-        return decodeSchemaEnvelope(await instance.getSchema({ timeoutMs }), "schema");
+        value = await instance.getSchema({ timeoutMs });
       } catch (error) {
         throw normalizeXmemoryProviderError(error, "schema");
       }
+      return decodeResponse("schema", "none", () => decodeSchemaEnvelope(value, "schema"));
     },
     async write(request) {
+      let value: unknown;
       try {
-        const value = await instance.write(request.text, {
+        value = await instance.write(request.text, {
           extractionLogic: request.extractionLogic,
           diffEngine: request.diffEngine,
           timeoutMs: request.timeoutMs,
         });
+      } catch (error) {
+        throw normalizeXmemoryProviderError(error, "write", "write");
+      }
+      return decodeResponse("write", "write", () => {
         if (!isRecord(value) || !nonEmptyString(value.write_id)) {
           throw protocolFailure("write", "write");
         }
@@ -297,17 +345,20 @@ export function createXmemoryPlatformPortInternal(
           traceId: decodeNullableTrace(value.trace_id, "write"),
           changes: decodeXmemoryChanges(value.changes),
         };
-      } catch (error) {
-        throw normalizeXmemoryProviderError(error, "write", "write");
-      }
+      });
     },
     async read(request) {
+      let value: unknown;
       try {
-        const value = await instance.read(request.query, {
+        value = await instance.read(request.query, {
           readMode: request.readMode,
           traceId: request.traceId,
           timeoutMs: request.timeoutMs,
         });
+      } catch (error) {
+        throw normalizeXmemoryProviderError(error, "read");
+      }
+      return decodeResponse("read", "none", () => {
         if (!isRecord(value) || !Object.hasOwn(value, "reader_result")) {
           throw protocolFailure("read");
         }
@@ -315,9 +366,7 @@ export function createXmemoryPlatformPortInternal(
           traceId: decodeNullableTrace(value.trace_id, "read"),
           readerResult: value.reader_result,
         };
-      } catch (error) {
-        throw normalizeXmemoryProviderError(error, "read");
-      }
+      });
     },
   };
 }
@@ -355,15 +404,22 @@ export function createXmemoryAdminPortInternal(
 
   return {
     async getCluster(clusterId, timeoutMs) {
+      let value: unknown;
       try {
-        return decodeId(await admin.getCluster(clusterId, { timeoutMs }));
+        value = await admin.getCluster(clusterId, { timeoutMs });
       } catch (error) {
         throw normalizeXmemoryProviderError(error, "provision");
       }
+      return decodeResponse("provision", "none", () => decodeId(value));
     },
     async listInstances(timeoutMs) {
+      let value: unknown;
       try {
-        const value = await admin.listInstances({ timeoutMs });
+        value = await admin.listInstances({ timeoutMs });
+      } catch (error) {
+        throw normalizeXmemoryProviderError(error, "provision");
+      }
+      return decodeResponse("provision", "none", () => {
         if (!Array.isArray(value)) throw protocolFailure("provision");
         return value.map((item) => {
           const { id } = decodeId(item);
@@ -372,35 +428,33 @@ export function createXmemoryAdminPortInternal(
           }
           return { id, name: item.name };
         });
-      } catch (error) {
-        throw normalizeXmemoryProviderError(error, "provision");
-      }
+      });
     },
     async createInstance(request) {
+      let value: unknown;
       try {
-        return decodeId(
-          await admin.createInstance(
-            request.clusterId,
-            request.name,
-            request.schemaYml,
-            SchemaType.YML,
-            { description: request.description, timeoutMs: request.timeoutMs },
-          ),
-          "create",
+        value = await admin.createInstance(
+          request.clusterId,
+          request.name,
+          request.schemaYml,
+          SchemaType.YML,
+          { description: request.description, timeoutMs: request.timeoutMs },
         );
       } catch (error) {
         throw normalizeXmemoryProviderError(error, "provision", "create");
       }
+      return decodeResponse("provision", "create", () => decodeId(value, "create"));
     },
     async getSchema(instanceId, timeoutMs) {
+      let value: unknown;
       try {
-        return decodeSchemaEnvelope(
-          await admin.getInstanceSchema(instanceId, { timeoutMs }),
-          "provision",
-        );
+        value = await admin.getInstanceSchema(instanceId, { timeoutMs });
       } catch (error) {
         throw normalizeXmemoryProviderError(error, "provision");
       }
+      return decodeResponse("provision", "none", () =>
+        decodeSchemaEnvelope(value, "provision"),
+      );
     },
   };
 }

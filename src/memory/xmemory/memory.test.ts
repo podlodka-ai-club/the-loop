@@ -12,6 +12,19 @@ async function readJson(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
 }
 
+function assertSecretAbsent(error: XmemoryMemoryError, secret: string): void {
+  for (const representation of [
+    error.message,
+    String(error),
+    error.stack ?? "",
+    JSON.stringify(error),
+    JSON.stringify(Object.fromEntries(Object.entries(error))),
+  ]) {
+    assert.equal(representation.includes(secret), false);
+  }
+  assert.equal("cause" in error, false);
+}
+
 test("xmemory dependencies, lockfile and scripts are pinned to the Phase 1 contract", async () => {
   const manifest = await readJson("package.json");
   const lock = await readJson("package-lock.json");
@@ -59,6 +72,28 @@ test("runtime config uses exact variables and safe timeout defaults", () => {
   assert.equal(XMEMORY_API_BASE_URL, "https://api.xmemory.ai");
 });
 
+test("xmemory environment example pins the exact runtime, integration and provisioning variables", async () => {
+  const source = await readFile(".env.example", "utf8");
+  assert.deepEqual(
+    source
+      .split("\n")
+      .filter((line) => line.startsWith("XMEM_")),
+    [
+      "XMEM_API_KEY=",
+      "XMEM_INSTANCE_ID=",
+      "XMEM_WRITE_TIMEOUT_MS=180000",
+      "XMEM_READ_TIMEOUT_MS=60000",
+      "XMEM_INTEGRATION=0",
+      "XMEM_INTEGRATION_INSTANCE_ID=",
+      "XMEM_ADMIN_API_KEY=",
+      "XMEM_CLUSTER_ID=",
+      "XMEM_INSTANCE_NAME=",
+    ],
+  );
+  assert.equal(source.includes("XMEM_API_URL="), false);
+  assert.equal(source.includes("XMEM_AUTH_TOKEN="), false);
+});
+
 test("runtime config rejects missing credentials and unsafe timeout values without secrets", () => {
   const invalid: NodeJS.ProcessEnv[] = [
     {},
@@ -78,8 +113,7 @@ test("runtime config rejects missing credentials and unsafe timeout values witho
       assert.ok(error instanceof XmemoryMemoryError);
       assert.equal(error.code, "unsupported_configuration");
       assert.equal(error.retryable, false);
-      assert.equal(JSON.stringify(error).includes("secret"), false);
-      assert.equal("cause" in error, false);
+      assertSecretAbsent(error, "secret");
       return true;
     });
   }
@@ -106,8 +140,35 @@ test("integration requires exact opt-in and an instance distinct from runtime", 
         XMEM_INSTANCE_ID: "same",
         XMEM_INTEGRATION_INSTANCE_ID: "same",
       }),
-    (error) => error instanceof XmemoryMemoryError && error.code === "unsupported_configuration",
+    (error) => {
+      assert.ok(error instanceof XmemoryMemoryError);
+      assert.equal(error.code, "unsupported_configuration");
+      assertSecretAbsent(error, "secret");
+      return true;
+    },
   );
+
+  for (const env of [
+    {
+      XMEM_INSTANCE_ID: "runtime",
+      XMEM_INTEGRATION_INSTANCE_ID: "integration",
+    },
+    {
+      XMEM_API_KEY: "secret",
+      XMEM_INTEGRATION_INSTANCE_ID: "integration",
+    },
+    {
+      XMEM_API_KEY: "secret",
+      XMEM_INSTANCE_ID: "runtime",
+    },
+  ]) {
+    assert.throws(() => loadXmemoryIntegrationConfig(env), (error) => {
+      assert.ok(error instanceof XmemoryMemoryError);
+      assert.equal(error.code, "unsupported_configuration");
+      assertSecretAbsent(error, "secret");
+      return true;
+    });
+  }
 });
 
 test("capabilities are closed and public port config rejects before SDK use", () => {
@@ -120,7 +181,7 @@ test("capabilities are closed and public port config rejects before SDK use", ()
     assert.throws(call, (error) => {
       assert.ok(error instanceof XmemoryMemoryError);
       assert.equal(error.code, "unsupported_configuration");
-      assert.equal(JSON.stringify(error).includes("secret"), false);
+      assertSecretAbsent(error, "secret");
       return true;
     });
   }

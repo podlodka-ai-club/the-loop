@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { XmemoryMemoryError, type XmemoryMemoryErrorCode } from "./error.ts";
+import {
+  XmemoryMemoryError,
+  type XmemoryMemoryErrorCode,
+  type XmemoryOperation,
+} from "./error.ts";
 import {
   createXmemoryAdminPortInternal,
   createXmemoryPlatformPortInternal,
@@ -11,13 +16,13 @@ import {
   type XmemorySdkInstance,
 } from "./platform-internal.ts";
 import {
-  XMEMORY_API_BASE_URL,
   decodePilotExperienceRows,
   decodePilotInsightRows,
   decodeXmemoryChanges,
   decodeXmemoryRawTables,
+  XMEMORY_API_BASE_URL,
   type XmemoryChangeSet,
-} from "./platform.ts";
+} from "./platform-contract.ts";
 
 const changes: XmemoryChangeSet = {
   created: { objects: [{ type: "TrainingExperience" }], relations: [] },
@@ -71,6 +76,14 @@ function platform(sdkInstance: XmemorySdkInstance) {
   );
 }
 
+function adminPlatform(sdkAdmin: XmemorySdkAdmin) {
+  return createXmemoryAdminPortInternal(
+    { adminApiKey: "test-admin-key" },
+    dependencies(instance(), sdkAdmin),
+    XMEMORY_API_BASE_URL,
+  );
+}
+
 async function rejectsCode(
   promise: Promise<unknown>,
   code: XmemoryMemoryErrorCode,
@@ -80,8 +93,58 @@ async function rejectsCode(
     assert.ok(error instanceof XmemoryMemoryError);
     assert.equal(error.code, code);
     assert.equal(error.retryable, retryable);
-    assert.equal("cause" in error, false);
-    assert.equal(JSON.stringify(error).includes("provider-secret"), false);
+    assertSanitized(error);
+    return true;
+  });
+}
+
+test("platform contract stays dependency-free and the SDK adapter has no facade cycle", async () => {
+  const [contractSource, adapterSource] = await Promise.all([
+    readFile("src/memory/xmemory/platform-contract.ts", "utf8"),
+    readFile("src/memory/xmemory/platform-internal.ts", "utf8"),
+  ]);
+  assert.equal(/^import\s/m.test(contractSource), false);
+  assert.equal(adapterSource.includes('from "./platform-contract.ts"'), true);
+  assert.equal(adapterSource.includes('from "./platform.ts"'), false);
+});
+
+function assertSanitized(error: XmemoryMemoryError): void {
+  const visible = [
+    error.message,
+    String(error),
+    error.stack ?? "",
+    JSON.stringify(error),
+    JSON.stringify(Object.fromEntries(Object.entries(error))),
+  ];
+  for (const representation of visible) {
+    assert.equal(representation.includes("provider-secret"), false);
+    assert.equal(representation.includes("provider-body"), false);
+    assert.equal(representation.includes("console.invalid"), false);
+  }
+  assert.equal("cause" in error, false);
+}
+
+async function rejectsHostileReason(
+  promise: Promise<unknown>,
+  expected: {
+    code: XmemoryMemoryErrorCode;
+    operation: XmemoryOperation;
+    message: string;
+  },
+  original: unknown,
+): Promise<void> {
+  await assert.rejects(promise, (error) => {
+    assert.ok(error instanceof XmemoryMemoryError);
+    assert.notEqual(error, original);
+    assert.equal(error.code, expected.code);
+    assert.equal(error.operation, expected.operation);
+    assert.equal(error.retryable, false);
+    assert.equal(error.message, expected.message);
+    assertSanitized(error);
+    for (const visible of [error.message, String(error), error.stack ?? "", JSON.stringify(error)]) {
+      assert.equal(visible.includes("hostile-descriptor"), false);
+      assert.equal(visible.includes("revoked"), false);
+    }
     return true;
   });
 }
@@ -197,6 +260,8 @@ test("change decoder requires the exact three-by-two containers", () => {
 
 test("raw table and provenance decoders enforce exact columns, rows and kinds", () => {
   assert.equal(decodeXmemoryRawTables(null), null);
+  assert.deepEqual(decodePilotExperienceRows(null), []);
+  assert.deepEqual(decodePilotInsightRows(null), []);
   assert.deepEqual(
     decodePilotExperienceRows({
       columns: [{ name: "source_attempt_id", type: "str" }],
@@ -204,6 +269,18 @@ test("raw table and provenance decoders enforce exact columns, rows and kinds", 
     }),
     [{ sourceAttemptId: "attempt-1" }, { sourceAttemptId: "attempt-2" }],
   );
+  const insightKinds = [
+    "positive_evidence",
+    "negative_evidence",
+    "comparison",
+    "caveat",
+    "procedure",
+  ] as const;
+  const insightRows = insightKinds.map((kind, index) => [
+    `attempt-${index}`,
+    `Grounded statement ${index}`,
+    kind,
+  ]);
   assert.deepEqual(
     decodePilotInsightRows({
       columns: [
@@ -211,15 +288,13 @@ test("raw table and provenance decoders enforce exact columns, rows and kinds", 
         { name: "insight_statement", type: "str" },
         { name: "insight_kind", type: "str" },
       ],
-      rows: [["attempt-1", "Yellow posts can support Iceland.", "positive_evidence"]],
+      rows: insightRows,
     }),
-    [
-      {
-        sourceAttemptId: "attempt-1",
-        statement: "Yellow posts can support Iceland.",
-        kind: "positive_evidence",
-      },
-    ],
+    insightKinds.map((kind, index) => ({
+      sourceAttemptId: `attempt-${index}`,
+      statement: `Grounded statement ${index}`,
+      kind,
+    })),
   );
 
   const malformed: unknown[] = [
@@ -230,6 +305,18 @@ test("raw table and provenance decoders enforce exact columns, rows and kinds", 
     { columns: [{ name: "source_attempt_id", type: "str" }], rows: [[]] },
   ];
   for (const value of malformed) assert.throws(() => decodeXmemoryRawTables(value), TypeError);
+  for (const value of [
+    {
+      columns: [{ name: "wrong", type: "str" }],
+      rows: [["attempt-1"]],
+    },
+    {
+      columns: [{ name: "source_attempt_id", type: "str" }],
+      rows: [[""]],
+    },
+  ]) {
+    assert.throws(() => decodePilotExperienceRows(value), TypeError);
+  }
   assert.throws(
     () =>
       decodePilotInsightRows({
@@ -244,60 +331,397 @@ test("raw table and provenance decoders enforce exact columns, rows and kinds", 
   );
 });
 
-test("provider code/status matrix is normalized without retaining raw failures", () => {
-  const cases: Array<{
-    error: unknown;
-    code: XmemoryMemoryErrorCode;
-    retryable?: boolean;
-  }> = [
-    { error: { code: "UNAUTHORIZED", status: 401, message: "provider-secret" }, code: "authentication" },
-    { error: { code: "FORBIDDEN", status: 403 }, code: "authorization" },
-    { error: { code: "QUOTA_EXCEEDED", status: 402 }, code: "quota_exceeded" },
-    { error: { code: "RATE_LIMITED", status: 429 }, code: "rate_limited", retryable: true },
-    { error: { code: "NOT_FOUND", status: 404 }, code: "instance_not_found" },
-    { error: { status: 400 }, code: "invalid_input" },
-    { error: { status: 409 }, code: "invalid_input" },
-    { error: { status: 422 }, code: "invalid_input" },
-    { error: { status: 500 }, code: "unavailable", retryable: true },
-    { error: { code: "UNKNOWN", status: 429 }, code: "rate_limited", retryable: true },
-    { error: { code: "UNAUTHORIZED", status: 403 }, code: "protocol_error" },
-    { error: { status: 418 }, code: "protocol_error" },
-    { error: new Error("provider-secret"), code: "protocol_error" },
-    { error: new TypeError("provider-secret"), code: "unavailable", retryable: true },
-    { error: { name: "AbortError" }, code: "unavailable", retryable: true },
+type ErrorContext = {
+  operation: XmemoryOperation;
+  stateChanging: "none" | "write" | "create";
+  protocolCode: XmemoryMemoryErrorCode;
+  unavailableCode: XmemoryMemoryErrorCode;
+};
+
+const errorContexts: readonly ErrorContext[] = [
+  {
+    operation: "read",
+    stateChanging: "none",
+    protocolCode: "protocol_error",
+    unavailableCode: "unavailable",
+  },
+  {
+    operation: "schema",
+    stateChanging: "none",
+    protocolCode: "protocol_error",
+    unavailableCode: "unavailable",
+  },
+  {
+    operation: "provision",
+    stateChanging: "none",
+    protocolCode: "protocol_error",
+    unavailableCode: "unavailable",
+  },
+  {
+    operation: "write",
+    stateChanging: "write",
+    protocolCode: "write_outcome_unknown",
+    unavailableCode: "write_outcome_unknown",
+  },
+  {
+    operation: "provision",
+    stateChanging: "create",
+    protocolCode: "provision_outcome_unknown",
+    unavailableCode: "provision_outcome_unknown",
+  },
+];
+
+function assertNormalized(
+  input: unknown,
+  context: ErrorContext,
+  expectedCode: XmemoryMemoryErrorCode,
+): void {
+  const normalized = normalizeXmemoryProviderError(
+    input,
+    context.operation,
+    context.stateChanging,
+  );
+  assert.equal(normalized.code, expectedCode);
+  assert.equal(normalized.operation, context.operation);
+  assert.equal(
+    normalized.retryable,
+    context.operation === "read" &&
+      (expectedCode === "rate_limited" || expectedCode === "unavailable"),
+  );
+  assertSanitized(normalized);
+}
+
+test("every recognized provider code accepts absent or compatible status in every operation", () => {
+  const recognized = [
+    { providerCode: "UNAUTHORIZED", status: 401, expectedCode: "authentication" },
+    { providerCode: "FORBIDDEN", status: 403, expectedCode: "authorization" },
+    { providerCode: "QUOTA_EXCEEDED", status: 402, expectedCode: "quota_exceeded" },
+    { providerCode: "RATE_LIMITED", status: 429, expectedCode: "rate_limited" },
+    { providerCode: "NOT_FOUND", status: 404, expectedCode: "instance_not_found" },
+  ] as const;
+
+  for (const item of recognized) {
+    for (const status of [undefined, item.status]) {
+      for (const context of errorContexts) {
+        assertNormalized(
+          {
+            code: item.providerCode,
+            ...(status === undefined ? {} : { status }),
+            message: "provider-secret provider-body https://console.invalid",
+          },
+          context,
+          item.expectedCode,
+        );
+      }
+    }
+  }
+});
+
+test("every conflicting recognized code/status pair fails closed by operation", () => {
+  const recognized = [
+    { providerCode: "UNAUTHORIZED", status: 401 },
+    { providerCode: "FORBIDDEN", status: 403 },
+    { providerCode: "QUOTA_EXCEEDED", status: 402 },
+    { providerCode: "RATE_LIMITED", status: 429 },
+    { providerCode: "NOT_FOUND", status: 404 },
+  ] as const;
+
+  for (const item of recognized) {
+    for (const conflictingStatus of [200, 400, 408, 500, ...recognized.map((entry) => entry.status)]) {
+      if (conflictingStatus === item.status) continue;
+      for (const context of errorContexts) {
+        assertNormalized(
+          {
+            code: item.providerCode,
+            status: conflictingStatus,
+            message: "provider-secret provider-body https://console.invalid",
+          },
+          context,
+          context.protocolCode,
+        );
+      }
+    }
+  }
+});
+
+test("present malformed status never behaves like an absent status", () => {
+  const malformedStatuses: unknown[] = ["403", 403.5, Number.NaN, null, true, {}, [], 0, 600];
+  const providerCodes: ReadonlyArray<string | undefined> = [
+    undefined,
+    "UNKNOWN_PROVIDER_CODE",
+    "UNAUTHORIZED",
+    "FORBIDDEN",
+    "QUOTA_EXCEEDED",
+    "RATE_LIMITED",
+    "NOT_FOUND",
   ];
 
-  for (const item of cases) {
-    const normalized = normalizeXmemoryProviderError(item.error, "read");
-    assert.equal(normalized.code, item.code);
-    assert.equal(normalized.retryable, item.retryable ?? false);
-    assert.equal(normalized.operation, "read");
-    assert.equal(normalized.message.includes("provider-secret"), false);
-    assert.equal("cause" in normalized, false);
+  for (const providerCode of providerCodes) {
+    for (const status of malformedStatuses) {
+      for (const context of errorContexts) {
+        assertNormalized(
+          {
+            ...(providerCode === undefined ? {} : { code: providerCode }),
+            status,
+            message: "provider-secret provider-body https://console.invalid",
+          },
+          context,
+          context.protocolCode,
+        );
+      }
+    }
   }
 });
 
-test("state-changing ambiguity differs from read/schema/provision preflight", () => {
-  for (const error of [new TypeError("network"), { status: 408 }, { status: 503 }]) {
-    assert.equal(normalizeXmemoryProviderError(error, "write", "write").code, "write_outcome_unknown");
-    assert.equal(
-      normalizeXmemoryProviderError(error, "provision", "create").code,
-      "provision_outcome_unknown",
+test("absent and unknown codes fall back through the complete HTTP status matrix", () => {
+  const statuses = [
+    { status: 400, expectedCode: "invalid_input" },
+    { status: 409, expectedCode: "invalid_input" },
+    { status: 422, expectedCode: "invalid_input" },
+    { status: 401, expectedCode: "authentication" },
+    { status: 402, expectedCode: "quota_exceeded" },
+    { status: 403, expectedCode: "authorization" },
+    { status: 404, expectedCode: "instance_not_found" },
+    { status: 429, expectedCode: "rate_limited" },
+  ] as const;
+
+  for (const item of statuses) {
+    for (const providerCode of [undefined, "UNKNOWN_PROVIDER_CODE"]) {
+      for (const context of errorContexts) {
+        assertNormalized(
+          {
+            ...(providerCode === undefined ? {} : { code: providerCode }),
+            status: item.status,
+            message: "provider-secret provider-body https://console.invalid",
+          },
+          context,
+          item.expectedCode,
+        );
+      }
+    }
+  }
+});
+
+test("unknown 4xx, transport, timeout, 5xx and unknown errors preserve state semantics", () => {
+  const unavailableErrors: unknown[] = [
+    new TypeError("provider-secret provider-body https://console.invalid"),
+    { name: "AbortError", message: "provider-secret" },
+    { name: "TimeoutError", message: "provider-secret" },
+    { code: "ECONNRESET", message: "provider-secret" },
+    { code: "ECONNREFUSED", message: "provider-secret" },
+    { code: "ENOTFOUND", message: "provider-secret" },
+    { code: "EAI_AGAIN", message: "provider-secret" },
+    { code: "ETIMEDOUT", message: "provider-secret" },
+    { status: 408, message: "provider-secret" },
+    { status: 500, message: "provider-secret" },
+    { status: 503, message: "provider-secret" },
+    { status: 599, message: "provider-secret" },
+  ];
+  const unknownErrors: unknown[] = [
+    new Error("provider-secret provider-body https://console.invalid"),
+    "provider-secret provider-body https://console.invalid",
+    null,
+    {},
+    { code: "UNKNOWN_PROVIDER_CODE", message: "provider-secret" },
+    { status: 200, message: "provider-secret" },
+    { status: 600, message: "provider-secret" },
+    new XmemoryMemoryError("rate_limited", "read", "provider-secret provider-body"),
+  ];
+
+  for (const context of errorContexts) {
+    for (const error of unavailableErrors) {
+      assertNormalized(error, context, context.unavailableCode);
+    }
+    for (const error of unknownErrors) {
+      assertNormalized(error, context, context.protocolCode);
+    }
+    for (const providerCode of [undefined, "UNKNOWN_PROVIDER_CODE"]) {
+      assertNormalized(
+        {
+          ...(providerCode === undefined ? {} : { code: providerCode }),
+          status: 418,
+          message: "provider-secret provider-body https://console.invalid",
+        },
+        context,
+        context.protocolCode,
+      );
+    }
+  }
+});
+
+test("public data and admin ports sanitize revoked and hostile Proxy rejection reasons", async () => {
+  const revoked = Proxy.revocable<Record<string, unknown>>({ status: 401 }, {});
+  revoked.revoke();
+  const descriptorError = new Error(
+    "provider-secret provider-body hostile-descriptor https://console.invalid",
+  );
+  const hostileDescriptor = new Proxy(
+    { status: 401 },
+    { getOwnPropertyDescriptor: () => { throw descriptorError; } },
+  );
+
+  for (const reason of [revoked.proxy, hostileDescriptor]) {
+    const data = platform(
+      instance({
+        getSchema: async () => Promise.reject(reason),
+        read: async () => Promise.reject(reason),
+        write: async () => Promise.reject(reason),
+      }),
     );
-    assert.equal(normalizeXmemoryProviderError(error, "schema").code, "unavailable");
-    assert.equal(normalizeXmemoryProviderError(error, "provision").code, "unavailable");
+    await rejectsHostileReason(
+      data.getSchema(1),
+      {
+        code: "protocol_error",
+        operation: "schema",
+        message: "xmemory returned an invalid schema response",
+      },
+      reason,
+    );
+    await rejectsHostileReason(
+      data.read({ query: "query", readMode: "single-answer", traceId: "trace", timeoutMs: 1 }),
+      {
+        code: "protocol_error",
+        operation: "read",
+        message: "xmemory returned an invalid read response",
+      },
+      reason,
+    );
+    await rejectsHostileReason(
+      data.write({ text: "lesson", extractionLogic: "deep", diffEngine: true, timeoutMs: 1 }),
+      {
+        code: "write_outcome_unknown",
+        operation: "write",
+        message: "The xmemory write outcome is unknown",
+      },
+      reason,
+    );
+
+    const control = adminPlatform(
+      admin({
+        getCluster: async () => Promise.reject(reason),
+        listInstances: async () => Promise.reject(reason),
+        getInstanceSchema: async () => Promise.reject(reason),
+        createInstance: async () => Promise.reject(reason),
+      }),
+    );
+    for (const call of [
+      () => control.getCluster("cluster", 1),
+      () => control.listInstances(1),
+      () => control.getSchema("instance", 1),
+    ]) {
+      await rejectsHostileReason(
+        call(),
+        {
+          code: "protocol_error",
+          operation: "provision",
+          message: "xmemory returned an invalid provision response",
+        },
+        reason,
+      );
+    }
+    await rejectsHostileReason(
+      control.createInstance({
+        clusterId: "cluster",
+        name: "pilot",
+        description: "Disposable Loci xmemory pilot",
+        schemaYml: "xmd_version: v1\n",
+        timeoutMs: 1,
+      }),
+      {
+        code: "provision_outcome_unknown",
+        operation: "provision",
+        message: "The xmemory instance creation outcome is unknown",
+      },
+      reason,
+    );
   }
-  assert.equal(
-    normalizeXmemoryProviderError({ status: 400 }, "write", "write").code,
-    "invalid_input",
+});
+
+test("public data and admin ports sanitize hostile fulfilled SDK envelopes", async () => {
+  const descriptorError = new Error(
+    "provider-secret provider-body hostile-descriptor https://console.invalid",
   );
-  assert.equal(
-    normalizeXmemoryProviderError({ code: "RATE_LIMITED", status: 429 }, "write", "write").code,
-    "rate_limited",
+  const hostileEnvelope = new Proxy(
+    { data_schema: {} },
+    { getOwnPropertyDescriptor: () => { throw descriptorError; } },
+  );
+  const data = platform(
+    instance({
+      getSchema: async () => hostileEnvelope,
+      read: async () => hostileEnvelope,
+      write: async () => hostileEnvelope,
+    }),
+  );
+
+  await rejectsHostileReason(
+    data.getSchema(1),
+    {
+      code: "protocol_error",
+      operation: "schema",
+      message: "xmemory returned an invalid schema response",
+    },
+    descriptorError,
+  );
+  await rejectsHostileReason(
+    data.read({ query: "query", readMode: "single-answer", traceId: "trace", timeoutMs: 1 }),
+    {
+      code: "protocol_error",
+      operation: "read",
+      message: "xmemory returned an invalid read response",
+    },
+    descriptorError,
+  );
+  await rejectsHostileReason(
+    data.write({ text: "lesson", extractionLogic: "deep", diffEngine: true, timeoutMs: 1 }),
+    {
+      code: "write_outcome_unknown",
+      operation: "write",
+      message: "The xmemory write outcome is unknown",
+    },
+    descriptorError,
+  );
+
+  const control = adminPlatform(
+    admin({
+      getCluster: async () => hostileEnvelope,
+      listInstances: async () => hostileEnvelope,
+      getInstanceSchema: async () => hostileEnvelope,
+      createInstance: async () => hostileEnvelope,
+    }),
+  );
+  for (const call of [
+    () => control.getCluster("cluster", 1),
+    () => control.listInstances(1),
+    () => control.getSchema("instance", 1),
+  ]) {
+    await rejectsHostileReason(
+      call(),
+      {
+        code: "protocol_error",
+        operation: "provision",
+        message: "xmemory returned an invalid provision response",
+      },
+      descriptorError,
+    );
+  }
+  await rejectsHostileReason(
+    control.createInstance({
+      clusterId: "cluster",
+      name: "pilot",
+      description: "Disposable Loci xmemory pilot",
+      schemaYml: "xmd_version: v1\n",
+      timeoutMs: 1,
+    }),
+    {
+      code: "provision_outcome_unknown",
+      operation: "provision",
+      message: "The xmemory instance creation outcome is unknown",
+    },
+    descriptorError,
   );
 });
 
-test("malformed SDK success envelopes are normalized by operation", async () => {
+test("malformed SDK success and injected errors are normalized by operation", async () => {
   await rejectsCode(
     platform(instance({ getSchema: async () => ({ schema: {} }) })).getSchema(1),
     "protocol_error",
@@ -319,5 +743,29 @@ test("malformed SDK success envelopes are normalized by operation", async () => 
       timeoutMs: 1,
     }),
     "protocol_error",
+  );
+
+  const injectedBoundaryError = new XmemoryMemoryError(
+    "rate_limited",
+    "write",
+    "provider-secret provider-body https://console.invalid",
+  );
+  await rejectsCode(
+    platform(instance({ read: async () => Promise.reject(injectedBoundaryError) })).read({
+      query: "query",
+      readMode: "single-answer",
+      traceId: "trace",
+      timeoutMs: 1,
+    }),
+    "protocol_error",
+  );
+  await rejectsCode(
+    platform(instance({ write: async () => Promise.reject(injectedBoundaryError) })).write({
+      text: "lesson",
+      extractionLogic: "deep",
+      diffEngine: true,
+      timeoutMs: 1,
+    }),
+    "write_outcome_unknown",
   );
 });

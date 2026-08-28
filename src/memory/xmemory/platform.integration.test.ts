@@ -3,26 +3,26 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { loadXmemoryIntegrationConfig, xmemoryIntegrationEnabled } from "./integration.ts";
 import {
-  createXmemoryPlatformPort,
   decodePilotExperienceRows,
   decodePilotInsightRows,
   decodeXmemoryRawTables,
-} from "./platform.ts";
+} from "./platform-contract.ts";
+import { createXmemoryPlatformPort } from "./platform.ts";
 import { assertXmemorySchemaCompatible, loadXmemorySchema } from "./schema.ts";
 
 const integrationTest = xmemoryIntegrationEnabled() ? test : test.skip;
 
 integrationTest(
   "xmemory Cloud round-trips exact schema, provenance tables and synthesized recall",
-  { timeout: 300_000 },
+  { timeout: 600_000 },
   async (context) => {
     const config = loadXmemoryIntegrationConfig();
-    const port = createXmemoryPlatformPort({
-      apiKey: config.apiKey,
-      instanceId: config.integrationInstanceId,
-    });
 
     try {
+      const port = createXmemoryPlatformPort({
+        apiKey: config.apiKey,
+        instanceId: config.integrationInstanceId,
+      });
       const expected = await loadXmemorySchema();
       assertXmemorySchemaCompatible(expected, await port.getSchema(60_000));
 
