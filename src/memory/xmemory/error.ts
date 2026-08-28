@@ -53,3 +53,29 @@ export class XmemoryMemoryError extends Error {
     if (options.traceId !== undefined) this.traceId = options.traceId;
   }
 }
+
+/** Conservative transport detection for injected ports outside the SDK adapter boundary. */
+export function isXmemoryUnavailableCause(error: unknown): boolean {
+  try {
+    if (error instanceof TypeError) return true;
+    if (typeof error !== "object" || error === null || Array.isArray(error)) return false;
+    const value = error as Record<string, unknown>;
+    if (value.name === "AbortError" || value.name === "TimeoutError") return true;
+    if (
+      value.code === "ECONNRESET" ||
+      value.code === "ECONNREFUSED" ||
+      value.code === "ENOTFOUND" ||
+      value.code === "EAI_AGAIN" ||
+      value.code === "ETIMEDOUT"
+    ) {
+      return true;
+    }
+    return (
+      typeof value.status === "number" &&
+      Number.isInteger(value.status) &&
+      (value.status === 408 || (value.status >= 500 && value.status <= 599))
+    );
+  } catch {
+    return false;
+  }
+}
