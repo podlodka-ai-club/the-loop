@@ -10,6 +10,8 @@
     "geolocate": "node --env-file-if-exists=.env src/cli.ts",
     "sample": "node --env-file-if-exists=.env src/sample.ts",
     "experiment": "node --env-file-if-exists=.env src/experiment.ts",
+    "test:mem0": "node --test src/memory/mem0/*.test.ts",
+    "mem0:pilot": "node --env-file-if-exists=.env src/memory/mem0/pilot.ts",
     "typecheck": "tsc --noEmit",
     "train": "node --env-file-if-exists=.env src/train.ts"
   },
@@ -19,6 +21,7 @@
     "@arizeai/phoenix-client": "^7.5.0",
     "@arizeai/phoenix-otel": "2.2.0",
     "csv-parse": "^6.1.0",
+    "mem0ai": "3.1.7",
     "openai": "^6.49.0",
     "sharp": "^0.35.3"
   },
