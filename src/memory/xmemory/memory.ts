@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Hint, LessonInput, Memory } from "../../memory.ts";
 import {
   XmemoryMemoryError,
@@ -5,7 +6,11 @@ import {
   type XmemoryMemoryErrorCode,
 } from "./error.ts";
 import { createXmemoryPlatformPort } from "./platform.ts";
-import type { XmemoryChangeSet, XmemoryPlatformPort } from "./platform-contract.ts";
+import {
+  decodeXmemoryChanges,
+  type XmemoryChangeSet,
+  type XmemoryPlatformPort,
+} from "./platform-contract.ts";
 import {
   assertXmemorySchemaCompatible,
   loadXmemorySchema,
@@ -188,39 +193,420 @@ function sanitizeSchemaError(error: unknown): XmemoryMemoryError {
   return new XmemoryMemoryError(code, "schema", safeSchemaMessage(code));
 }
 
+type NormalizedLesson = {
+  content: string;
+  sourceAttemptId: string;
+  triggers: string[];
+  region: string;
+};
+
+type XmemoryBehaviorDependencies = {
+  createTraceId: () => string;
+  onRememberCompleted?: (result: XmemoryRememberResult) => void;
+  onInstanceQuarantined?: (result: XmemoryQuarantineResult) => void;
+};
+
+const SENTINEL = /<\/?loci_/i;
+const SOURCE_ATTEMPT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const LOWERCASE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const DEFINITE_WRITE_CODES: ReadonlySet<XmemoryMemoryErrorCode> = new Set([
+  "invalid_input",
+  "authentication",
+  "authorization",
+  "instance_not_found",
+  "rate_limited",
+  "quota_exceeded",
+  "write_failed",
+]);
+
+const READ_ERROR_CODES: ReadonlySet<XmemoryMemoryErrorCode> = new Set([
+  "invalid_input",
+  "authentication",
+  "authorization",
+  "instance_not_found",
+  "rate_limited",
+  "quota_exceeded",
+  "unavailable",
+  "protocol_error",
+]);
+
+function invalidInput(operation: "write" | "read"): XmemoryMemoryError {
+  return new XmemoryMemoryError(
+    "invalid_input",
+    operation,
+    `The xmemory ${operation} input is invalid`,
+  );
+}
+
+function protocolError(operation: "write" | "read"): XmemoryMemoryError {
+  return new XmemoryMemoryError(
+    operation === "write" ? "write_outcome_unknown" : "protocol_error",
+    operation,
+    operation === "write"
+      ? "The xmemory write outcome is unknown"
+      : "xmemory returned an invalid read response",
+  );
+}
+
+function quarantinedError(operation: "write" | "read"): XmemoryMemoryError {
+  return new XmemoryMemoryError(
+    "instance_quarantined",
+    operation,
+    "The xmemory instance is quarantined after an ambiguous write",
+  );
+}
+
+function normalizeLesson(value: LessonInput): NormalizedLesson {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalidInput("write");
+    const content = value.content;
+    const rawSourceAttemptId = value.sourceAttemptId;
+    const rawRegion = value.region;
+    const rawTriggers = value.triggers;
+    if (
+      typeof content !== "string" ||
+      typeof rawSourceAttemptId !== "string" ||
+      typeof rawRegion !== "string" ||
+      content.trim() === "" ||
+      content.length > 50_000 ||
+      SENTINEL.test(content) ||
+      !Array.isArray(rawTriggers) ||
+      rawTriggers.length > 64
+    ) {
+      throw invalidInput("write");
+    }
+    const sourceAttemptId = rawSourceAttemptId.trim();
+    const region = rawRegion.trim();
+    if (
+      !SOURCE_ATTEMPT_ID.test(sourceAttemptId) ||
+      region.length > 256 ||
+      SENTINEL.test(region)
+    ) {
+      throw invalidInput("write");
+    }
+
+    const triggers: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of rawTriggers) {
+      if (typeof raw !== "string") throw invalidInput("write");
+      const trigger = raw.trim();
+      if (trigger === "" || trigger.length > 256 || SENTINEL.test(trigger)) {
+        throw invalidInput("write");
+      }
+      if (!seen.has(trigger)) {
+        seen.add(trigger);
+        triggers.push(trigger);
+      }
+    }
+    return { content, sourceAttemptId, triggers, region };
+  } catch {
+    throw invalidInput("write");
+  }
+}
+
+function buildLessonEnvelope(lesson: NormalizedLesson): string {
+  return (
+    "<loci_training_experience_v1>\n" +
+    "<loci_provenance_v1>\n" +
+    `source_attempt_id: ${lesson.sourceAttemptId}\n` +
+    `region_json: ${JSON.stringify(lesson.region)}\n` +
+    `observed_triggers_json: ${JSON.stringify(lesson.triggers)}\n` +
+    "</loci_provenance_v1>\n" +
+    "<loci_lesson_v1>\n" +
+    `${lesson.content}\n` +
+    "</loci_lesson_v1>\n" +
+    "</loci_training_experience_v1>"
+  );
+}
+
+function normalizeFeatures(value: string[]): string[] {
+  try {
+    if (!Array.isArray(value) || value.length > 64) throw invalidInput("read");
+    const features: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of value) {
+      if (typeof raw !== "string") throw invalidInput("read");
+      const feature = raw.trim().replace(/\s+/g, " ");
+      if (feature.length > 256 || SENTINEL.test(feature)) throw invalidInput("read");
+      if (feature !== "" && !seen.has(feature)) {
+        seen.add(feature);
+        features.push(feature);
+      }
+    }
+    return features;
+  } catch {
+    throw invalidInput("read");
+  }
+}
+
+function featureQuery(features: readonly string[], limit: number): string {
+  return (
+    "Use only stored Loci Insights to help interpret a new photograph.\n" +
+    "Visible features:\n" +
+    `${features.map((feature) => `- ${feature}`).join("\n")}\n` +
+    `Return at most ${limit} distinct grounded insights. Preserve conditions, counter-signals,\n` +
+    "comparisons and caveats. Do not invent observations or claim a final location."
+  );
+}
+
+function priorQuery(limit: number): string {
+  return (
+    `Return at most ${limit} high-value stored Loci Insights that are broadly useful before any visual\n` +
+    "features are available. Preserve conditions, counter-signals, comparisons and caveats. Do not\n" +
+    "invent observations or claim a final location."
+  );
+}
+
+function safeProviderMessage(code: XmemoryMemoryErrorCode, operation: "write" | "read"): string {
+  switch (code) {
+    case "authentication":
+      return "xmemory authentication failed";
+    case "authorization":
+      return "xmemory authorization failed";
+    case "instance_not_found":
+      return "The xmemory instance was not found";
+    case "rate_limited":
+      return "The xmemory rate limit was exceeded";
+    case "quota_exceeded":
+      return "The xmemory quota was exceeded";
+    case "unavailable":
+      return `xmemory ${operation} is unavailable`;
+    case "invalid_input":
+      return `xmemory rejected the ${operation} request`;
+    case "write_failed":
+      return "The xmemory write failed";
+    default:
+      return `xmemory ${operation} failed`;
+  }
+}
+
+function sanitizeDefiniteWriteError(error: unknown): XmemoryMemoryError | null {
+  try {
+    if (
+      error instanceof XmemoryMemoryError &&
+      error.operation === "write" &&
+      DEFINITE_WRITE_CODES.has(error.code)
+    ) {
+      return new XmemoryMemoryError(error.code, "write", safeProviderMessage(error.code, "write"));
+    }
+  } catch {
+    // Any hostile or foreign error leaves the write outcome unknown.
+  }
+  return null;
+}
+
+function sanitizeReadError(error: unknown): XmemoryMemoryError {
+  let code: XmemoryMemoryErrorCode = "protocol_error";
+  try {
+    if (
+      error instanceof XmemoryMemoryError &&
+      error.operation === "read" &&
+      READ_ERROR_CODES.has(error.code)
+    ) {
+      code = error.code;
+    } else if (isXmemoryUnavailableCause(error)) {
+      code = "unavailable";
+    }
+  } catch {
+    code = "protocol_error";
+  }
+  return new XmemoryMemoryError(code, "read", safeProviderMessage(code, "read"));
+}
+
+function normalizeBehaviorDependencies(
+  dependencies: XmemoryMemoryDependencies,
+): XmemoryBehaviorDependencies {
+  try {
+    const createTraceId = dependencies.createTraceId ?? randomUUID;
+    const onRememberCompleted = dependencies.onRememberCompleted;
+    const onInstanceQuarantined = dependencies.onInstanceQuarantined;
+    if (
+      typeof createTraceId !== "function" ||
+      (onRememberCompleted !== undefined && typeof onRememberCompleted !== "function") ||
+      (onInstanceQuarantined !== undefined && typeof onInstanceQuarantined !== "function")
+    ) {
+      throw new Error("invalid behavior dependency");
+    }
+    return {
+      createTraceId,
+      ...(onRememberCompleted === undefined ? {} : { onRememberCompleted }),
+      ...(onInstanceQuarantined === undefined ? {} : { onInstanceQuarantined }),
+    };
+  } catch {
+    throw new XmemoryMemoryError(
+      "unsupported_configuration",
+      "schema",
+      "The xmemory runtime dependencies are invalid",
+    );
+  }
+}
+
 class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
   private readonly config: XmemoryMemoryConfig;
   private readonly platform: XmemoryPlatformPort;
+  private readonly behavior: XmemoryBehaviorDependencies;
+  private writeTail: Promise<void> = Promise.resolve();
+  private quarantined = false;
 
-  constructor(config: XmemoryMemoryConfig, platform: XmemoryPlatformPort) {
+  constructor(
+    config: XmemoryMemoryConfig,
+    platform: XmemoryPlatformPort,
+    behavior: XmemoryBehaviorDependencies,
+  ) {
     this.config = config;
     this.platform = platform;
+    this.behavior = behavior;
   }
 
-  private unavailable(operation: "read" | "write" | "snapshot" | "restore"): never {
-    void this.config;
-    void this.platform;
-    throw new XmemoryMemoryError(
-      "unsupported_operation",
-      operation,
-      "XmemoryMemory behavior is not available during construction",
+  private assertUsable(operation: "write" | "read"): void {
+    if (this.quarantined) throw quarantinedError(operation);
+  }
+
+  private quarantine(): XmemoryMemoryError {
+    const error = protocolError("write");
+    if (!this.quarantined) {
+      this.quarantined = true;
+      try {
+        const notification = this.behavior.onInstanceQuarantined?.({
+          instanceId: this.config.instanceId,
+          code: "write_outcome_unknown",
+        });
+        void Promise.resolve(notification).catch(() => undefined);
+      } catch {
+        // Notification is best-effort and never replaces the ambiguous write error.
+      }
+    }
+    return error;
+  }
+
+  private async performRemember(input: LessonInput): Promise<void> {
+    this.assertUsable("write");
+    const lesson = normalizeLesson(input);
+
+    let rawResult: unknown;
+    try {
+      rawResult = await this.platform.write({
+        text: buildLessonEnvelope(lesson),
+        extractionLogic: "deep",
+        diffEngine: true,
+        timeoutMs: this.config.writeTimeoutMs,
+      });
+    } catch (error) {
+      const definite = sanitizeDefiniteWriteError(error);
+      if (definite !== null) throw definite;
+      throw this.quarantine();
+    }
+
+    let result: XmemoryRememberResult;
+    try {
+      if (typeof rawResult !== "object" || rawResult === null || Array.isArray(rawResult)) {
+        throw new Error("invalid write response");
+      }
+      const value = rawResult as Record<string, unknown>;
+      const writeId = value.writeId;
+      const traceId = value.traceId;
+      const changes = value.changes;
+      if (typeof writeId !== "string" || writeId.trim() === "") {
+        throw new Error("invalid write id");
+      }
+      if (traceId !== null && typeof traceId !== "string") {
+        throw new Error("invalid trace id");
+      }
+      result = {
+        sourceAttemptId: lesson.sourceAttemptId,
+        writeId,
+        traceId,
+        changes: decodeXmemoryChanges(changes),
+      };
+    } catch {
+      throw this.quarantine();
+    }
+
+    try {
+      if (this.behavior.onRememberCompleted !== undefined) {
+        await Promise.resolve(this.behavior.onRememberCompleted(result));
+      }
+    } catch {
+      throw new XmemoryMemoryError(
+        "observer_failed",
+        "write",
+        "The xmemory remember observer failed",
+      );
+    }
+  }
+
+  async recall(features: string[], limit: number): Promise<Hint[]> {
+    this.assertUsable("read");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) throw invalidInput("read");
+    const normalized = normalizeFeatures(features);
+
+    let traceId: string;
+    try {
+      traceId = this.behavior.createTraceId();
+      if (typeof traceId !== "string" || !LOWERCASE_UUID.test(traceId)) {
+        throw new Error("invalid trace id");
+      }
+    } catch {
+      throw protocolError("read");
+    }
+
+    let rawResult: unknown;
+    try {
+      rawResult = await this.platform.read({
+        query: normalized.length === 0 ? priorQuery(limit) : featureQuery(normalized, limit),
+        readMode: "single-answer",
+        traceId,
+        timeoutMs: this.config.readTimeoutMs,
+      });
+    } catch (error) {
+      throw sanitizeReadError(error);
+    }
+
+    try {
+      if (typeof rawResult !== "object" || rawResult === null || Array.isArray(rawResult)) {
+        throw new Error("invalid read response");
+      }
+      const result = rawResult as Record<string, unknown>;
+      const echoedTraceId = result.traceId;
+      if (echoedTraceId !== null && echoedTraceId !== traceId) throw new Error("trace mismatch");
+      const readerResult = result.readerResult;
+      if (typeof readerResult !== "object" || readerResult === null || Array.isArray(readerResult)) {
+        throw new Error("invalid reader result");
+      }
+      if (!Object.hasOwn(readerResult, "answer")) throw new Error("missing answer");
+      const answer = (readerResult as Record<string, unknown>).answer;
+      if (typeof answer !== "string") throw new Error("invalid answer");
+      const text = answer.trim();
+      return text === "" ? [] : [{ lessonId: `xmemory-read:${traceId}`, text }];
+    } catch {
+      throw protocolError("read");
+    }
+  }
+
+  remember(lesson: LessonInput): Promise<void> {
+    const operation = this.writeTail.then(() => this.performRemember(lesson));
+    this.writeTail = operation.then(
+      () => undefined,
+      () => undefined,
     );
-  }
-
-  async recall(_features: string[], _limit: number): Promise<Hint[]> {
-    return this.unavailable("read");
-  }
-
-  async remember(_lesson: LessonInput): Promise<void> {
-    return this.unavailable("write");
+    return operation;
   }
 
   async snapshot(): Promise<string> {
-    return this.unavailable("snapshot");
+    throw new XmemoryMemoryError(
+      "unsupported_operation",
+      "snapshot",
+      "XmemoryMemory does not support snapshot",
+    );
   }
 
   async restore(_id: string): Promise<void> {
-    return this.unavailable("restore");
+    throw new XmemoryMemoryError(
+      "unsupported_operation",
+      "restore",
+      "XmemoryMemory does not support restore",
+    );
   }
 }
 
@@ -250,6 +636,7 @@ export async function createXmemoryMemory(
 ): Promise<XmemoryMemory> {
   assertRequirements(requirements);
   const normalized = normalizeMemoryConfig(config);
+  const behavior = normalizeBehaviorDependencies(dependencies);
 
   let expected: LoadedXmemorySchema;
   let platform: XmemoryPlatformPort;
@@ -267,5 +654,5 @@ export async function createXmemoryMemory(
     throw sanitizeSchemaError(error);
   }
   assertXmemorySchemaCompatible(expected, live);
-  return new SchemaVerifiedXmemoryMemory(normalized, platform);
+  return new SchemaVerifiedXmemoryMemory(normalized, platform, behavior);
 }
