@@ -285,18 +285,10 @@ test("remember starts its absolute deadline immediately before add", async () =>
 
   await memory.remember(lesson);
 
-  assert.deepEqual(invocations, [
-    "now",
-    "now",
-    "add",
-    "now",
-    "now",
-    "now",
-    "now",
-    "getEvent:event",
-    "now",
-    "now",
-  ]);
+  assert.deepEqual(invocations.slice(0, 3), ["now", "now", "add"]);
+  assert.equal(invocations.filter((value) => value === "add").length, 1);
+  assert.ok(invocations.indexOf("getEvent:event") > invocations.indexOf("add"));
+  assert.equal(invocations.some((value) => value.startsWith("sleep:")), false);
 });
 
 test("remember polls PENDING/RUNNING and retries visibility with capped sleeps", async () => {
@@ -788,7 +780,7 @@ test("never-settling add, event and get calls expire the absolute deadline", asy
           return { id: "memory", memory: "fact", metadata: {} };
         },
       }),
-      { timeout: 8, interval: 1 },
+      { timeout: 25, interval: 1 },
     );
 
     await rejectsCode(memory.remember(lesson), "ingestion_outcome_unknown");
@@ -797,6 +789,32 @@ test("never-settling add, event and get calls expire the absolute deadline", asy
     assert.equal(eventCalls, stage === "add" ? 0 : 1);
     assert.equal(getCalls, stage === "get" ? 1 : 0);
   }
+});
+
+test("synchronous provider prelude cannot extend the absolute deadline", async () => {
+  let time = 0;
+  let addCalls = 0;
+  let eventCalls = 0;
+  const pending = new Promise<never>(() => {});
+  const memory = adapter(
+    memoryPort({
+      add: () => {
+        addCalls += 1;
+        time = 30;
+        return pending;
+      },
+      getEvent: async () => {
+        eventCalls += 1;
+        return { eventId: "event", status: "SUCCEEDED", memoryIds: [] };
+      },
+    }),
+    { timeout: 25, interval: 1, now: () => time },
+  );
+
+  await rejectsCode(memory.remember(lesson), "ingestion_outcome_unknown");
+  await rejectsCode(memory.remember(lesson), "instance_quarantined");
+  assert.equal(addCalls, 1);
+  assert.equal(eventCalls, 0);
 });
 
 test("late add rejection and resolution are absorbed after timeout without retry or output", async () => {

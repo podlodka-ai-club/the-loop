@@ -429,13 +429,31 @@ export class Mem0Memory implements Memory {
     const remaining = deadline - this.dependencies.now();
     if (remaining <= 0) this.failUnknownOutcome(eventId);
 
-    const provider = Promise.resolve().then(call);
     let timer: ReturnType<typeof scheduleTimeout> | undefined;
+    let rejectTimeout: ((reason: typeof DEADLINE_EXPIRED) => void) | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
-      timer = scheduleTimeout(() => reject(DEADLINE_EXPIRED), remaining);
+      rejectTimeout = reject;
     });
+    const armTimer = (duration: number): void => {
+      timer = scheduleTimeout(() => rejectTimeout?.(DEADLINE_EXPIRED), duration);
+    };
+    armTimer(remaining);
+
+    let provider: Promise<T>;
+    try {
+      provider = Promise.resolve(call());
+    } catch (error) {
+      provider = Promise.reject(error);
+    }
+    void provider.catch(() => undefined);
 
     try {
+      const remainingAfterCall = deadline - this.dependencies.now();
+      if (remainingAfterCall <= 0) this.failUnknownOutcome(eventId);
+      if (remainingAfterCall < remaining) {
+        if (timer !== undefined) clearTimeout(timer);
+        armTimer(remainingAfterCall);
+      }
       const result = await Promise.race([provider, timeout]);
       if (this.dependencies.now() >= deadline) this.failUnknownOutcome(eventId);
       return result;
