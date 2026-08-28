@@ -1,7 +1,7 @@
 export { Mem0MemoryError, type Mem0MemoryErrorCode } from "./error.ts";
 import { setTimeout as scheduleTimeout } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Hint, LessonInput } from "../../memory.ts";
+import type { Hint, LessonInput, Memory } from "../../memory.ts";
 import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import { Mem0MemoryError } from "./error.ts";
 import { createMem0PlatformPort } from "./platform.ts";
@@ -150,14 +150,16 @@ export function createMem0Memory(
   config: Mem0MemoryConfig,
   dependencies: Mem0MemoryDependencies = {},
 ): Mem0Memory {
-  // Snapshot requirement rejection belongs to Phase 3. Keeping the parameter now
-  // preserves the factory contract without implementing snapshot behavior early.
-  void requirements;
+  if (!isRecord(requirements) || requirements.snapshots !== false) {
+    throw new Mem0MemoryError(
+      "unsupported_configuration",
+      "Mem0Memory cannot satisfy snapshot requirements",
+    );
+  }
   return new Mem0Memory(config, dependencies);
 }
 
-/** Phase 2 implementation of the Mem0 adapter's serialized ingestion lifecycle. */
-export class Mem0Memory {
+export class Mem0Memory implements Memory {
   private readonly config: Mem0MemoryConfig;
   private readonly dependencies: ResolvedDependencies;
   private quarantined = false;
@@ -184,13 +186,63 @@ export class Mem0Memory {
     return operation;
   }
 
-  /**
-   * Ranked recall is implemented in Phase 3. The quarantine guard is present now so
-   * a tainted instance cannot perform a read while that surface is completed.
-   */
-  async recall(_features: string[], _limit: number): Promise<Hint[]> {
+  async recall(features: string[], limit: number): Promise<Hint[]> {
     this.assertUsable();
-    throw sanitizedError("unsupported_configuration");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+      throw sanitizedError("invalid_input");
+    }
+    if (!Array.isArray(features) || features.some((value) => typeof value !== "string")) {
+      throw sanitizedError("invalid_input");
+    }
+
+    const query = features
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join("\n");
+    if (query === "") return [];
+
+    let records: unknown;
+    try {
+      records = await this.dependencies.platform.search({
+        query,
+        filters: { agent_id: this.config.agentId },
+        topK: limit,
+        threshold: 0.1,
+        rerank: false,
+        keywordSearch: true,
+      });
+    } catch (error) {
+      throw sanitizeExistingError(error, "protocol_error", undefined, isTransient(error));
+    }
+    if (!Array.isArray(records)) throw sanitizedError("protocol_error");
+
+    const hints: Hint[] = records.map((record) => {
+      if (
+        !isRecord(record) ||
+        typeof record.id !== "string" ||
+        record.id.trim() === "" ||
+        typeof record.memory !== "string" ||
+        record.memory.trim() === ""
+      ) {
+        throw sanitizedError("protocol_error");
+      }
+      return { lessonId: record.id, text: record.memory };
+    });
+    return hints.slice(0, limit);
+  }
+
+  async snapshot(): Promise<string> {
+    throw new Mem0MemoryError(
+      "unsupported_operation",
+      "Mem0Memory does not support snapshot",
+    );
+  }
+
+  async restore(_id: string): Promise<void> {
+    throw new Mem0MemoryError(
+      "unsupported_operation",
+      "Mem0Memory does not support restore",
+    );
   }
 
   private async rememberOne(lesson: LessonInput): Promise<void> {

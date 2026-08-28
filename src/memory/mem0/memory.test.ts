@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import type { LessonInput } from "../../memory.ts";
+import type { LessonInput, Memory } from "../../memory.ts";
 import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import {
   MEM0_CAPABILITIES,
@@ -908,4 +908,366 @@ test("malformed add, terminal IDs and visible record IDs fail closed", async () 
   );
   await rejectsCode(mismatchedRecord.remember(lesson), "protocol_error");
   await rejectsCode(mismatchedRecord.remember(lesson), "instance_quarantined");
+});
+
+test("snapshot requirement fails before config validation or dependency access", () => {
+  let platformReads = 0;
+  const dependencies = Object.defineProperty({}, "platform", {
+    get() {
+      platformReads += 1;
+      return memoryPort();
+    },
+  });
+
+  assert.throws(
+    () =>
+      createMem0Memory(
+        { snapshots: true },
+        { apiKey: "", agentId: "", ingestionTimeoutMs: 0, pollIntervalMs: 0 },
+        dependencies,
+      ),
+    (error) => {
+      assert.ok(error instanceof Mem0MemoryError);
+      assert.equal(error.code, "unsupported_configuration");
+      assert.equal(error.retryable, false);
+      assert.equal("cause" in error, false);
+      return true;
+    },
+  );
+  assert.equal(platformReads, 0);
+  assert.deepEqual(MEM0_CAPABILITIES, { snapshot: false, restore: false });
+});
+
+test("recall validates quarantine and limit before feature normalization", async () => {
+  let searchCalls = 0;
+  const platform = memoryPort({
+    search: async () => {
+      searchCalls += 1;
+      return [];
+    },
+  });
+  const memory = adapter(platform);
+  const explodingFeatures = new Proxy(["feature"], {
+    get() {
+      throw new Error("feature normalization must not run");
+    },
+  });
+
+  const invalidLimits: unknown[] = [
+    undefined,
+    null,
+    "1",
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.NEGATIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    1_001,
+  ];
+  for (const limit of invalidLimits) {
+    await rejectsCode(memory.recall(explodingFeatures, limit as number), "invalid_input");
+  }
+  assert.equal(searchCalls, 0);
+
+  const quarantined = adapter(
+    memoryPort({
+      add: async () => {
+        throw new TypeError("ambiguous add");
+      },
+      search: async () => {
+        searchCalls += 1;
+        return [];
+      },
+    }),
+  );
+  await rejectsCode(quarantined.remember(lesson), "ingestion_outcome_unknown");
+  await rejectsCode(quarantined.recall(explodingFeatures, 0), "instance_quarantined");
+  assert.equal(searchCalls, 0);
+});
+
+test("recall rejects malformed feature containers after valid limit without search", async () => {
+  const invocations: string[] = [];
+  const memory = adapter(
+    memoryPort({
+      search: async () => {
+        invocations.push("search");
+        return [];
+      },
+    }),
+  );
+  const malformedFeatures: unknown[] = [
+    null,
+    {},
+    "feature",
+    [null],
+    ["valid", 1],
+    ["valid", {}],
+  ];
+
+  for (const features of malformedFeatures) {
+    await rejectsCode(memory.recall(features as string[], 1), "invalid_input");
+  }
+
+  assert.deepEqual(invocations, []);
+});
+
+test("recall accepts inclusive limit boundaries and valid empty provider results", async () => {
+  const requests: unknown[] = [];
+  const memory = adapter(
+    memoryPort({
+      search: async (request) => {
+        requests.push(request);
+        return [];
+      },
+    }),
+  );
+
+  assert.deepEqual(await memory.recall(["feature"], 1), []);
+  assert.deepEqual(await memory.recall(["feature"], 1_000), []);
+  assert.deepEqual(requests, [
+    {
+      query: "feature",
+      filters: { agent_id: "agent-1" },
+      topK: 1,
+      threshold: 0.1,
+      rerank: false,
+      keywordSearch: true,
+    },
+    {
+      query: "feature",
+      filters: { agent_id: "agent-1" },
+      topK: 1_000,
+      threshold: 0.1,
+      rerank: false,
+      keywordSearch: true,
+    },
+  ]);
+});
+
+test("recall normalizes query, sends exact search policy, preserves order and slices", async () => {
+  const requests: unknown[] = [];
+  const memory = adapter(
+    memoryPort({
+      search: async (request) => {
+        requests.push(request);
+        return [
+          { id: "memory-2", memory: "second", metadata: {} },
+          { id: "memory-1", memory: "first", metadata: {} },
+          { id: "memory-extra", memory: "extra", metadata: {} },
+        ];
+      },
+    }),
+  );
+  const asMemory: Memory = memory;
+
+  assert.deepEqual(await asMemory.recall(["  yellow posts ", "", " lava terrain  "], 2), [
+    { lessonId: "memory-2", text: "second" },
+    { lessonId: "memory-1", text: "first" },
+  ]);
+  assert.deepEqual(requests, [
+    {
+      query: "yellow posts\nlava terrain",
+      filters: { agent_id: "agent-1" },
+      topK: 2,
+      threshold: 0.1,
+      rerank: false,
+      keywordSearch: true,
+    },
+  ]);
+
+  assert.deepEqual(await asMemory.recall(["", "   "], 5), []);
+  assert.equal(requests.length, 1);
+});
+
+test("recall rejects malformed results and sanitizes provider failures", async () => {
+  const malformed: unknown[] = [
+    null,
+    {},
+    [null],
+    [[]],
+    [{}],
+    [{ memory: "fact", metadata: {} }],
+    [{ id: "memory", metadata: {} }],
+    [{ id: "", memory: "fact", metadata: {} }],
+    [{ id: "   ", memory: "fact", metadata: {} }],
+    [{ id: "memory", memory: "", metadata: {} }],
+    [{ id: "memory", memory: 42, metadata: {} }],
+    [{ id: 42, memory: "fact", metadata: {} }],
+    [
+      { id: "memory", memory: "fact", metadata: {} },
+      { id: "bad", memory: " ", metadata: {} },
+    ],
+  ];
+  for (const result of malformed) {
+    const memory = adapter(memoryPort({ search: async () => result as never }));
+    await rejectsCode(memory.recall(["feature"], 1), "protocol_error");
+  }
+
+  const failures: Array<[unknown, Mem0MemoryErrorCode, boolean]> = [
+    [new Mem0MemoryError("rate_limited", "raw query"), "rate_limited", true],
+    [new Mem0MemoryError("unavailable", "raw query"), "unavailable", true],
+    [new Mem0MemoryError("invalid_input", "raw query"), "invalid_input", false],
+    [new Mem0MemoryError("authentication", "raw query"), "authentication", false],
+    [new Mem0MemoryError("authorization", "raw query"), "authorization", false],
+    [new Mem0MemoryError("quota_exceeded", "raw query"), "quota_exceeded", false],
+    [new Mem0MemoryError("protocol_error", "raw query"), "protocol_error", false],
+    [new Error("raw query"), "protocol_error", false],
+  ];
+  for (const [failure, code, retryable] of failures) {
+    const memory = adapter(
+      memoryPort({
+        search: async () => Promise.reject(failure),
+      }),
+    );
+    await assert.rejects(memory.recall(["private query"], 1), (error) => {
+      assert.ok(error instanceof Mem0MemoryError);
+      assert.equal(error.code, code);
+      assert.equal(error.retryable, retryable);
+      assert.equal(error.message.includes("raw query"), false);
+      assert.equal(error.message.includes("private query"), false);
+      assert.equal("cause" in error, false);
+      return true;
+    });
+  }
+});
+
+test("recall runs during ingestion and returns only provider-visible records", async () => {
+  let releaseAdd: ((value: { eventId: string; status: "PENDING" }) => void) | undefined;
+  const accepted = new Promise<{ eventId: string; status: "PENDING" }>((resolve) => {
+    releaseAdd = resolve;
+  });
+  const invocations: unknown[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: (request) => {
+        invocations.push({ type: "add", sourceAttemptId: request.metadata.loci_source_attempt_id });
+        return accepted;
+      },
+      getEvent: async (eventId) => {
+        invocations.push({ type: "getEvent", eventId });
+        return { eventId, status: "SUCCEEDED", memoryIds: [] };
+      },
+      search: async (request) => {
+        invocations.push({ type: "search", request });
+        return [{ id: "visible", memory: "visible fact", metadata: {} }];
+      },
+    }),
+  );
+
+  const remembering = memory.remember(lesson);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(invocations, [{ type: "add", sourceAttemptId: "attempt-1" }]);
+  assert.deepEqual(await memory.recall(["visible cue"], 5), [
+    { lessonId: "visible", text: "visible fact" },
+  ]);
+  assert.deepEqual(invocations, [
+    { type: "add", sourceAttemptId: "attempt-1" },
+    {
+      type: "search",
+      request: {
+        query: "visible cue",
+        filters: { agent_id: "agent-1" },
+        topK: 5,
+        threshold: 0.1,
+        rerank: false,
+        keywordSearch: true,
+      },
+    },
+  ]);
+  releaseAdd?.({ eventId: "event", status: "PENDING" });
+  await remembering;
+  assert.deepEqual(invocations, [
+    { type: "add", sourceAttemptId: "attempt-1" },
+    {
+      type: "search",
+      request: {
+        query: "visible cue",
+        filters: { agent_id: "agent-1" },
+        topK: 5,
+        threshold: 0.1,
+        rerank: false,
+        keywordSearch: true,
+      },
+    },
+    { type: "getEvent", eventId: "event" },
+  ]);
+});
+
+test("snapshot and restore reject exact promises without calls or state changes", async () => {
+  const invocations: string[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: async () => {
+        invocations.push("add");
+        return { eventId: "event", status: "PENDING" };
+      },
+      getEvent: async (eventId) => {
+        invocations.push(`getEvent:${eventId}`);
+        return { eventId, status: "SUCCEEDED", memoryIds: [] };
+      },
+      search: async () => {
+        invocations.push("search");
+        return [];
+      },
+    }),
+  );
+
+  const snapshot = memory.snapshot();
+  assert.ok(snapshot instanceof Promise);
+  await assert.rejects(snapshot, (error) => {
+    assert.ok(error instanceof Mem0MemoryError);
+    assert.equal(error.code, "unsupported_operation");
+    assert.equal(error.message, "Mem0Memory does not support snapshot");
+    assert.equal(error.retryable, false);
+    assert.equal("cause" in error, false);
+    return true;
+  });
+  const unreadId = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("restore id must not be read");
+      },
+    },
+  ) as string;
+  const restore = memory.restore(unreadId);
+  assert.ok(restore instanceof Promise);
+  await assert.rejects(restore, (error) => {
+    assert.ok(error instanceof Mem0MemoryError);
+    assert.equal(error.code, "unsupported_operation");
+    assert.equal(error.message, "Mem0Memory does not support restore");
+    assert.equal(error.retryable, false);
+    assert.equal("cause" in error, false);
+    return true;
+  });
+  assert.deepEqual(invocations, []);
+
+  assert.deepEqual(await memory.recall([""], 1), []);
+  await memory.remember(lesson);
+  assert.deepEqual(invocations, ["add", "getEvent:event"]);
+});
+
+test("snapshot and restore preserve quarantine state without platform calls", async () => {
+  const invocations: string[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: async () => {
+        invocations.push("add");
+        return { eventId: "", status: "PENDING" };
+      },
+      search: async () => {
+        invocations.push("search");
+        return [];
+      },
+    }),
+  );
+  await rejectsCode(memory.remember(lesson), "protocol_error");
+
+  await rejectsCode(memory.snapshot(), "unsupported_operation");
+  await rejectsCode(memory.restore("ignored"), "unsupported_operation");
+  await rejectsCode(memory.recall(["feature"], 1), "instance_quarantined");
+  await rejectsCode(memory.remember({ ...lesson, content: "" }), "instance_quarantined");
+
+  assert.deepEqual(invocations, ["add"]);
 });
