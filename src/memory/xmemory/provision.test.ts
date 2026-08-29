@@ -16,6 +16,7 @@ function unexpected(name: string): never {
 
 function admin(overrides: Partial<XmemoryAdminPort> = {}): XmemoryAdminPort {
   return {
+    listClusters: async () => unexpected("listClusters"),
     getCluster: async () => unexpected("getCluster"),
     listInstances: async () => unexpected("listInstances"),
     createInstance: async () => unexpected("createInstance"),
@@ -26,6 +27,7 @@ function admin(overrides: Partial<XmemoryAdminPort> = {}): XmemoryAdminPort {
 
 function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
+    XMEM_API_KEY: "runtime-key",
     XMEM_ADMIN_API_KEY: "admin-key",
     XMEM_CLUSTER_ID: "cluster-1",
     XMEM_INSTANCE_NAME: "loci-pilot-1",
@@ -499,7 +501,9 @@ test("CLI prints exactly one sanitized summary and returns a matching exit code"
     env: env(),
     dependencies: {
       loadSchema: async () => expected,
+      createInstanceName: () => "loci-pilot-1",
       admin: admin({
+        listClusters: async () => [{ id: "cluster-1" }],
         getCluster: async (id) => ({ id }),
         listInstances: async () => [],
         createInstance: async () => ({ id: "created-visible" }),
@@ -526,7 +530,9 @@ test("CLI prints exactly one sanitized summary and returns a matching exit code"
     env: env(),
     dependencies: {
       loadSchema: async () => expected,
+      createInstanceName: () => "loci-pilot-1",
       admin: admin({
+        listClusters: async () => [{ id: "cluster-1" }],
         getCluster: async (id) => ({ id }),
         listInstances: async () => [],
         createInstance: async () => ({ id: "created-success" }),
@@ -552,7 +558,9 @@ test("CLI prints exactly one sanitized summary and returns a matching exit code"
     env: env(),
     dependencies: {
       loadSchema: async () => expected,
+      createInstanceName: () => "loci-pilot-1",
       admin: admin({
+        listClusters: async () => [{ id: "cluster-1" }],
         getCluster: async (id) => ({ id }),
         listInstances: async () => [],
         createInstance: async () => Promise.reject(

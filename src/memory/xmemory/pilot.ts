@@ -15,6 +15,7 @@ import {
   type XmemoryRememberResult,
 } from "./memory.ts";
 import { createXmemoryPlatformPort } from "./platform.ts";
+import { provisionDisposableXmemoryInstance } from "./provision.ts";
 import {
   XMEMORY_INSIGHT_KINDS,
   decodePilotExperienceRows,
@@ -763,9 +764,29 @@ const isMain =
   process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   try {
-    process.exitCode = await executeXmemoryPilot();
+    const provisioned = await provisionDisposableXmemoryInstance("pilot");
+    if (!provisioned.created || !provisioned.schemaVerified || provisioned.instanceId === null) {
+      process.stdout.write(
+        `${JSON.stringify({
+          instanceRetired: provisioned.instanceRetired,
+          errorCode: provisioned.errorCode ?? "protocol_error",
+        })}\n`,
+      );
+      process.exitCode = 1;
+    } else {
+      process.exitCode = await executeXmemoryPilot({
+        env: {
+          ...process.env,
+          XMEM_INSTANCE_ID: provisioned.instanceId,
+          XMEM_INTEGRATION: "1",
+          XMEM_INTEGRATION_INSTANCE_ID: `internal-${randomUUID()}`,
+        },
+      });
+    }
   } catch {
-    process.stdout.write(`${JSON.stringify({ instanceRetired: false, errorCode: "protocol_error" })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ instanceRetired: false, errorCode: "unsupported_configuration" })}\n`,
+    );
     process.exitCode = 1;
   }
 }

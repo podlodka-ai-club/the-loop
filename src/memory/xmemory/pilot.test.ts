@@ -859,7 +859,7 @@ test("pilot executable prints one sanitized failure line with empty stderr", asy
   assert.equal(lines.length, 1);
   assert.deepEqual(JSON.parse(lines[0] ?? ""), {
     instanceRetired: false,
-    errorCode: "invalid_input",
+    errorCode: "unsupported_configuration",
   });
 });
 

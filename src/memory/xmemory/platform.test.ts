@@ -51,6 +51,7 @@ function instance(overrides: Partial<XmemorySdkInstance> = {}): XmemorySdkInstan
 
 function admin(overrides: Partial<XmemorySdkAdmin> = {}): XmemorySdkAdmin {
   return {
+    listClusters: async () => unexpected("listClusters"),
     getCluster: async () => unexpected("getCluster"),
     listInstances: async () => unexpected("listInstances"),
     createInstance: async () => unexpected("createInstance"),
@@ -214,6 +215,10 @@ test("data port pins the hosted URL and forwards exact SDK envelopes", async () 
 test("admin port forwards exact SDK calls and returns normalized identifiers", async () => {
   const calls: unknown[] = [];
   const sdkAdmin = admin({
+    listClusters: async (options) => {
+      calls.push(["clusters", options]);
+      return [{ id: "cluster" }];
+    },
     getCluster: async (clusterId, options) => {
       calls.push(["cluster", clusterId, options]);
       return { id: clusterId, ignored: "provider" };
@@ -237,6 +242,7 @@ test("admin port forwards exact SDK calls and returns normalized identifiers", a
     XMEMORY_API_BASE_URL,
   );
 
+  assert.deepEqual(await port.listClusters(60_000), [{ id: "cluster" }]);
   assert.deepEqual(await port.getCluster("cluster", 60_000), { id: "cluster" });
   assert.deepEqual(await port.listInstances(60_000), [{ id: "one", name: "first" }]);
   assert.deepEqual(
@@ -251,6 +257,7 @@ test("admin port forwards exact SDK calls and returns normalized identifiers", a
   );
   assert.deepEqual(await port.getSchema("created", 60_000), { title: "schema" });
   assert.deepEqual(calls, [
+    ["clusters", { timeoutMs: 60_000 }],
     ["cluster", "cluster", { timeoutMs: 60_000 }],
     ["list", { timeoutMs: 60_000 }],
     [

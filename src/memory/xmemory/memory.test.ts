@@ -81,7 +81,7 @@ test("runtime config uses exact variables and safe timeout defaults", () => {
   assert.equal(XMEMORY_API_BASE_URL, "https://api.xmemory.ai");
 });
 
-test("xmemory environment example pins the exact runtime, integration and provisioning variables", async () => {
+test("xmemory environment example exposes only the minimal runtime variables", async () => {
   const source = await readFile(".env.example", "utf8");
   assert.deepEqual(
     source
@@ -90,13 +90,6 @@ test("xmemory environment example pins the exact runtime, integration and provis
     [
       "XMEM_API_KEY=",
       "XMEM_INSTANCE_ID=",
-      "XMEM_WRITE_TIMEOUT_MS=180000",
-      "XMEM_READ_TIMEOUT_MS=60000",
-      "XMEM_INTEGRATION=0",
-      "XMEM_INTEGRATION_INSTANCE_ID=",
-      "XMEM_ADMIN_API_KEY=",
-      "XMEM_CLUSTER_ID=",
-      "XMEM_INSTANCE_NAME=",
     ],
   );
   assert.equal(source.includes("XMEM_API_URL="), false);

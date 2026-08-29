@@ -185,6 +185,7 @@ export interface XmemoryPlatformPort {
 }
 
 export interface XmemoryAdminPort {
+  listClusters(timeoutMs: number): Promise<Array<{ id: string }>>;
   getCluster(clusterId: string, timeoutMs: number): Promise<{ id: string }>;
   listInstances(timeoutMs: number): Promise<Array<{ id: string; name: string }>>;
   createInstance(request: {

@@ -79,10 +79,15 @@ Adapter валидирует provider trace как metadata, но использ
 `lessonId`, чтобы публичная корреляция не зависела от поведения Cloud.
 
 Instance создаётся явным provisioning-шагом, а runtime проверяет совместимость live schema и не
-создаёт миграции. Provisioning и runtime получают раздельные конфигурации credentials; если Cloud
-не позволяет реально ограничить полномочия keys, это принимается только в disposable pilot.
+создаёт миграции. Provisioning и runtime используют один account key, но остаются разделены
+внутренними admin/data портами; широкие полномочия ключа принимаются только в disposable pilot.
 Disposable означает отдельный instance для одного frozen pilot corpus: он не переиспользуется как
 официальный evaluation baseline и не считается восстанавливаемым активом.
+
+Cloud предоставляет один account API key, поэтому пользовательский env surface минимален:
+`XMEM_API_KEY` и, только для открытия существующего runtime, `XMEM_INSTANCE_ID`. Явные test,
+provision и pilot entrypoints сами выбирают единственный cluster, генерируют уникальное имя и
+создают disposable instance; разделение admin/data plane остаётся внутренней границей портов.
 
 `snapshot` и `restore` возвращают различимые ошибки неподдерживаемой операции, не вызывают xmemory
 и не меняют instance. Snapshot-зависимая конфигурация отклоняется до начала дорогой или изменяющей

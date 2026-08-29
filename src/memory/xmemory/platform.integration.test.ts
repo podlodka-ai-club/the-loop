@@ -1,27 +1,32 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { loadXmemoryIntegrationConfig, xmemoryIntegrationEnabled } from "./integration.ts";
 import {
   decodePilotExperienceRows,
   decodePilotInsightRows,
   decodeXmemoryRawTables,
 } from "./platform-contract.ts";
 import { createXmemoryPlatformPort } from "./platform.ts";
+import { provisionDisposableXmemoryInstance } from "./provision.ts";
 import { assertXmemorySchemaCompatible, loadXmemorySchema } from "./schema.ts";
 
-const integrationTest = xmemoryIntegrationEnabled() ? test : test.skip;
+const integrationTest = process.env.XMEM_API_KEY?.trim() ? test : test.skip;
 
 integrationTest(
   "xmemory Cloud round-trips exact schema, provenance tables and synthesized recall",
   { timeout: 600_000 },
   async (context) => {
-    const config = loadXmemoryIntegrationConfig();
+    const apiKey = process.env.XMEM_API_KEY?.trim() ?? "";
+    const provisioned = await provisionDisposableXmemoryInstance("integration");
+    assert.equal(provisioned.created, true);
+    assert.equal(provisioned.schemaVerified, true);
+    assert.ok(provisioned.instanceId !== null);
+    const instanceId = provisioned.instanceId;
 
     try {
       const port = createXmemoryPlatformPort({
-        apiKey: config.apiKey,
-        instanceId: config.integrationInstanceId,
+        apiKey,
+        instanceId,
       });
       const expected = await loadXmemorySchema();
       assertXmemorySchemaCompatible(expected, await port.getSchema(60_000));
@@ -91,7 +96,7 @@ integrationTest(
       );
     } finally {
       context.diagnostic(
-        `xmemory integration instance ${config.integrationInstanceId} is retired and must not be reused`,
+        `xmemory integration instance ${instanceId} is retired and must not be reused`,
       );
     }
   },

@@ -49,18 +49,10 @@ the adapter on approved 30-case lesson/query manifests.
 ```
 
 ```dotenv
-# xmemory Cloud runtime. Use a fresh disposable instance for each pilot.
+# xmemory Cloud. Test and pilot commands provision their own disposable instances.
 XMEM_API_KEY=
+# Required only when the application opens an existing runtime instance.
 XMEM_INSTANCE_ID=
-XMEM_WRITE_TIMEOUT_MS=180000
-XMEM_READ_TIMEOUT_MS=60000
-XMEM_INTEGRATION=0
-XMEM_INTEGRATION_INSTANCE_ID=
-
-# Provisioning only. Use a unique name; the command never reuses or deletes an instance.
-XMEM_ADMIN_API_KEY=
-XMEM_CLUSTER_ID=
-XMEM_INSTANCE_NAME=
 ```
 
 ### 2. XMD schema — `src/memory/xmemory/schema.xmd.yml`
@@ -195,11 +187,19 @@ export type XmemoryProvisionSummary = {
 export type XmemoryProvisionDependencies = {
   admin?: XmemoryAdminPort;
   loadSchema?: () => Promise<LoadedXmemorySchema>;
+  createInstanceName?: (purpose: XmemoryDisposablePurpose) => string;
 };
+
+export type XmemoryDisposablePurpose = "runtime" | "integration" | "pilot";
 
 export function loadXmemoryProvisionConfig(env?: NodeJS.ProcessEnv): XmemoryProvisionConfig;
 export function provisionXmemoryInstance(
   config: XmemoryProvisionConfig,
+  dependencies?: XmemoryProvisionDependencies,
+): Promise<XmemoryProvisionSummary>;
+export function provisionDisposableXmemoryInstance(
+  purpose: XmemoryDisposablePurpose,
+  env?: NodeJS.ProcessEnv,
   dependencies?: XmemoryProvisionDependencies,
 ): Promise<XmemoryProvisionSummary>;
 ```
@@ -262,6 +262,7 @@ export interface XmemoryPlatformPort {
 }
 
 export interface XmemoryAdminPort {
+  listClusters(timeoutMs: number): Promise<Array<{ id: string }>>;
   getCluster(clusterId: string, timeoutMs: number): Promise<{ id: string }>;
   listInstances(timeoutMs: number): Promise<Array<{ id: string; name: string }>>;
   createInstance(request: {
@@ -489,11 +490,11 @@ source_attempt_id, insight_statement, insight_kind.
 | # | Rule |
 |---|---|
 | C.1 | `xmemory`, `yaml`, scripts and lockfile versions equal Contract §1 exactly. Schema validation reads no credential and makes no network call. |
-| C.2 | Runtime key/instance are required; timeouts are positive safe integers with defaults from Contract §1. Provisioning requires its three named values and uses fixed 60,000 ms per admin call. Gated test additionally requires a non-empty integration instance ID distinct from runtime instance ID. |
+| C.2 | `XMEM_API_KEY` is the only variable required by explicit Cloud test/provision/pilot commands. `XMEM_INSTANCE_ID` is additionally required only when the application opens an existing runtime instance. Read/write timeouts use fixed defaults from Contract §5. Disposable commands reuse the account key for admin calls, require exactly one available cluster and generate a unique valid instance name. |
 | C.3 | Hosted v1 always passes `XMEMORY_API_BASE_URL`; `XMEM_API_URL`, legacy token env and arbitrary base URLs are ignored. Secrets and raw provider messages are never logged or retained as causes. |
 | C.4 | Any requirement other than `{ snapshots: false }` rejects before config validation, schema load or port construction. `XMEMORY_CAPABILITIES` equals Contract §5 exactly. |
 | C.5 | `createXmemoryMemory` validates config, loads expected schema, constructs/injects the port, gets live schema once and rejects mismatch before returning an adapter. |
-| C.6 | Cloud tests and pilot execute only when `XMEM_INTEGRATION=1`; unit tests use injected ports and never read real env. Integration test uses only its distinct instance, aborts unless its raw-table preflight is empty and reports that instance retired on every exit. |
+| C.6 | Cloud integration executes only when the explicitly launched test process receives `XMEM_API_KEY`; ordinary `npm run test:xmemory` does not load `.env` and remains offline. Integration test and pilot each provision their own distinct disposable instance, abort unless its raw-table preflight is empty and report it retired on every exit. Unit tests use injected ports and never read real env. |
 
 ### S — Schema
 
@@ -510,11 +511,11 @@ source_attempt_id, insight_statement, insight_kind.
 
 | # | Rule |
 |---|---|
-| P.1 | Instance name is trimmed, 1–100 characters and matches `^[A-Za-z0-9][A-Za-z0-9._-]*$`; config errors occur before admin-port construction. |
-| P.2 | Provisioning verifies the cluster ID and lists instances. An exact existing name returns `provisioning_conflict` before create; IDs/names outside the target are not changed. |
+| P.1 | Generated instance name is trimmed, 1–100 characters and matches `^[A-Za-z0-9][A-Za-z0-9._-]*$`; config errors occur before create. The lower-level explicit-config function retains the same validation for injected/operator config. |
+| P.2 | Disposable provisioning lists clusters and requires exactly one, verifies its ID and lists instances. An exact existing generated name returns `provisioning_conflict` before create; IDs/names outside the target are not changed. |
 | P.3 | Create is called once with exact YAML, description `Disposable Loci xmemory pilot`, cluster/name and fixed 60,000 ms timeout. The command never updates, deletes or reuses an instance. |
 | P.4 | Function returns a summary instead of printing. Success has created/verified true and null error. Known post-create failure carries the created ID; ambiguous create has null ID and `provision_outcome_unknown`; both set retired/error and return. CLI prints exactly that summary to stdout once and exits 1. Preflight errors reject before create and CLI prints one sanitized failure summary to stdout. Stderr is empty. |
-| P.5 | Provisioning reads only `XMEM_ADMIN_API_KEY`; runtime reads only `XMEM_API_KEY`. Output contains no key, schema body, raw response or console URL. |
+| P.5 | Provisioning and runtime both read only `XMEM_API_KEY`; admin and data usage remain separate in code but share the account key because Cloud exposes only that credential. Output contains no key, schema body, raw response or console URL. |
 
 ### W — Remember
 

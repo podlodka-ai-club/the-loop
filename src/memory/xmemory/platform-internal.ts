@@ -24,6 +24,7 @@ export type XmemorySdkInstance = {
 };
 
 export type XmemorySdkAdmin = {
+  listClusters(options: { timeoutMs: number }): Promise<unknown>;
   getCluster(clusterId: string, options: { timeoutMs: number }): Promise<unknown>;
   listInstances(options: { timeoutMs: number }): Promise<unknown>;
   createInstance(
@@ -403,6 +404,18 @@ export function createXmemoryAdminPortInternal(
   }
 
   return {
+    async listClusters(timeoutMs) {
+      let value: unknown;
+      try {
+        value = await admin.listClusters({ timeoutMs });
+      } catch (error) {
+        throw normalizeXmemoryProviderError(error, "provision");
+      }
+      return decodeResponse("provision", "none", () => {
+        if (!Array.isArray(value)) throw protocolFailure("provision");
+        return value.map((item) => decodeId(item));
+      });
+    },
     async getCluster(clusterId, timeoutMs) {
       let value: unknown;
       try {

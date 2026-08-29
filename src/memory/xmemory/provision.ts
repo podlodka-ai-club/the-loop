@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import {
   XmemoryMemoryError,
@@ -34,7 +35,10 @@ export type XmemoryProvisionSummary = {
 export type XmemoryProvisionDependencies = {
   admin?: XmemoryAdminPort;
   loadSchema?: () => Promise<LoadedXmemorySchema>;
+  createInstanceName?: (purpose: XmemoryDisposablePurpose) => string;
 };
+
+export type XmemoryDisposablePurpose = "runtime" | "integration" | "pilot";
 
 function configurationError(message: string): XmemoryMemoryError {
   return new XmemoryMemoryError("unsupported_configuration", "provision", message);
@@ -280,6 +284,37 @@ export async function provisionXmemoryInstance(
   });
 }
 
+export async function provisionDisposableXmemoryInstance(
+  purpose: XmemoryDisposablePurpose,
+  env: NodeJS.ProcessEnv = process.env,
+  dependencies: XmemoryProvisionDependencies = {},
+): Promise<XmemoryProvisionSummary> {
+  let apiKey: string;
+  let admin: XmemoryAdminPort;
+  let clusterId: string;
+  let instanceName: string;
+  try {
+    apiKey = requiredEnvironmentValue(env, "XMEM_API_KEY");
+    admin = dependencies.admin ?? createXmemoryAdminPort({ adminApiKey: apiKey });
+    const clusters = await admin.listClusters(ADMIN_TIMEOUT_MS);
+    if (clusters.length !== 1) throw configurationError("Expected exactly one xmemory cluster");
+    const cluster = clusters[0];
+    if (cluster === undefined) throw configurationError("Expected one xmemory cluster");
+    clusterId = cluster.id;
+    instanceName = validateInstanceName(
+      dependencies.createInstanceName?.(purpose) ??
+        `loci-${purpose}-${randomUUID().slice(0, 8)}`,
+    );
+  } catch (error) {
+    throw sanitizeProvisionError(error, "preflight");
+  }
+
+  return provisionXmemoryInstance(
+    { adminApiKey: apiKey, clusterId, instanceName },
+    { ...dependencies, admin },
+  );
+}
+
 export type XmemoryProvisionCliOptions = {
   env?: NodeJS.ProcessEnv;
   dependencies?: XmemoryProvisionDependencies;
@@ -291,8 +326,9 @@ export async function runXmemoryProvisionCli(
 ): Promise<number> {
   let result: XmemoryProvisionSummary;
   try {
-    result = await provisionXmemoryInstance(
-      loadXmemoryProvisionConfig(options.env ?? process.env),
+    result = await provisionDisposableXmemoryInstance(
+      "runtime",
+      options.env ?? process.env,
       options.dependencies,
     );
   } catch (error) {
