@@ -3,7 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Hint, LessonInput } from "../../memory.ts";
+import type { Hint, LessonInput } from "../memory.ts";
 import { xmemoryIntegrationEnabled, loadXmemoryIntegrationConfig } from "./integration.ts";
 import {
   XmemoryMemoryError,

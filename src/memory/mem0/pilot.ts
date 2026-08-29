@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import type { Hint, LessonInput } from "../../memory.ts";
+import type { Hint, LessonInput } from "../memory.ts";
 import { mem0IntegrationEnabled } from "./integration.ts";
 import {
   Mem0MemoryError,

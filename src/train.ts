@@ -12,7 +12,8 @@
  */
 import { readManifest, DEFAULT_MANIFEST } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
-import { FileMemory, RECALL_LIMIT, parseRecallMode } from "./memory.ts";
+import { RECALL_LIMIT } from "./memory/memory.ts";
+import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
 import { drawSample, fingerprintOf, loadRows } from "./osv5m.ts";
 import type { Row } from "./osv5m.ts";
 import { reflect } from "./reflect.ts";

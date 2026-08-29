@@ -1,7 +1,7 @@
 export { Mem0MemoryError, type Mem0MemoryErrorCode } from "./error.ts";
 import { setTimeout as scheduleTimeout } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Hint, LessonInput, Memory } from "../../memory.ts";
+import type { Hint, LessonInput, Memory } from "../memory.ts";
 import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import { Mem0MemoryError } from "./error.ts";
 import { createMem0PlatformPort } from "./platform.ts";

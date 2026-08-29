@@ -24,7 +24,7 @@ tags: [loci, memory, hindsight, temporal, typescript, adapter, research]
 
 ## Контекст и заданные границы
 
-- Текущий TypeScript-интерфейс [`Memory`](../../../src/memory.ts) содержит `remember(lesson)`,
+- Текущий TypeScript-интерфейс [`Memory`](../../../src/memory/memory.ts) содержит `remember(lesson)`,
   `recall(features, limit)`, `snapshot()` и `restore(id)`.
 - `memory_ref` остаётся opaque-ссылкой на provider и bank; Hindsight не обязан знать значение
   `memory_ref`. Registry Loci должен разрешать ссылку в `bank_id`, credentials и policy.

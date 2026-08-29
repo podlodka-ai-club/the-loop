@@ -13,7 +13,7 @@ import {
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { CROP_BOTTOM_FRACTION, toDataUri } from "./image.ts";
-import type { Hint } from "./memory.ts";
+import type { Hint } from "./memory/memory.ts";
 
 export { provider };
 

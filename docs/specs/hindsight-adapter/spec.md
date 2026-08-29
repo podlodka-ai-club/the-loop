@@ -194,7 +194,7 @@ failures are normalized without retaining their raw objects.
 ### 4. Adapter surface — `src/memory/hindsight/memory.ts`
 
 ```ts
-import type { Hint, LessonInput, Memory } from "../../memory.ts";
+import type { Hint, LessonInput, Memory } from "../memory.ts";
 import type { HindsightPlatformPort } from "./platform-contract.ts";
 
 export const HINDSIGHT_CAPABILITIES = { snapshot: false, restore: false } as const;
@@ -451,7 +451,7 @@ export type HindsightPilotSummary = {
 - Hindsight bank provisioning, bank deletion, production promotion and automated cleanup.
 - `reflect`, mental models, directives, file upload, image/OCR ingestion and multimodal memory.
 - Cross-episode fact aggregation, local deduplication by `document_id` and changes to `Hint`.
-- Changes to `src/memory.ts`, `memory_store`, `memory_retrieve`, train/evaluate workflows or other adapters.
+- Changes to `src/memory/memory.ts`, `memory_store`, `memory_retrieve`, train/evaluate workflows or other adapters.
 - Production rollout, shared banks, multi-process writers and automatic Cloud data retention policy.
 
 ## Tests
