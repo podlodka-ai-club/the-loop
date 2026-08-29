@@ -1079,7 +1079,7 @@ test("recall accepts 64 distinct features at the exact 256-code-unit boundary", 
   assert.equal(request.query.includes(`- ${features[63]}`), true);
 });
 
-test("recall validates trace echo and maps blank or non-empty answer to at most one Hint", async () => {
+test("recall accepts provider trace metadata and maps blank or non-empty answer to at most one Hint", async () => {
   for (const scenario of [
     {
       response: { traceId: null, readerResult: { answer: "  grounded insight  " } },
@@ -1089,6 +1089,10 @@ test("recall validates trace echo and maps blank or non-empty answer to at most 
       response: { traceId, readerResult: { answer: "\n\t" } },
       expected: [],
     },
+    {
+      response: { traceId: "provider-generated-trace", readerResult: { answer: "fact" } },
+      expected: [{ lessonId: `xmemory-read:${traceId}`, text: "fact" }],
+    },
   ]) {
     const memory = await behaviorMemory({ read: async () => scenario.response });
     assert.deepEqual(await memory.recall(["cue"], 1_000), scenario.expected);
@@ -1097,7 +1101,6 @@ test("recall validates trace echo and maps blank or non-empty answer to at most 
   const malformed: unknown[] = [
     null,
     {},
-    { traceId: "different", readerResult: { answer: "fact" } },
     { traceId: 1, readerResult: { answer: "fact" } },
     { traceId: null, readerResult: null },
     { traceId: null, readerResult: {} },

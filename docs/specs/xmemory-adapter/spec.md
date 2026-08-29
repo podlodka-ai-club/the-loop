@@ -2,10 +2,10 @@
 type: Specification
 title: "xmemory Cloud adapter v1"
 description: Контракт xmemory Cloud-адаптера, XMD-схемы, provisioning и disposable pilot без поддержки snapshot и restore.
-timestamp: 2026-08-28T00:00:00+03:00
-date: 2026-08-28
+timestamp: 2026-08-29T00:00:00+03:00
+date: 2026-08-29
 model: gpt-5
-version: 1
+version: 2
 tags: [loci, memory, xmemory, cloud, xmd, typescript, adapter, specification]
 ---
 
@@ -85,23 +85,31 @@ objects:
       source_attempt_id:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Literal source_attempt_id from the provenance block. Preserve case and punctuation;
           never infer, translate, normalize or generate this value.
       lesson_content:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Full UTF-8 text between the lesson tags, preserved as data. It describes observations,
           blind hypotheses, revealed place, analysis and transferable geolocation experience.
       region:
         type: str
         required: false
+        enum: null
+        default: null
         description: >-
           Region decoded from region_json. Preserve the source spelling; use null when empty.
       observed_triggers_json:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Canonical JSON array string copied from observed_triggers_json; do not add or remove cues.
     primary_key: [source_attempt_id]
@@ -117,12 +125,15 @@ objects:
       statement:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Self-contained geolocation guidance preserving conditions, counter-signals and limits.
       kind:
         type: str
         required: true
         enum: [positive_evidence, negative_evidence, comparison, caveat, procedure]
+        default: null
         description: >-
           Classify support for a place as positive_evidence, evidence against it as
           negative_evidence, an explicit distinction between places as comparison, a limitation
@@ -493,7 +504,7 @@ source_attempt_id, insight_statement, insight_kind.
 | S.3 | Static schema gives `Insight` a non-empty-required statement, allowed kind and no primary key. Zero or malformed extracted insights are pilot misses after a committed remember. |
 | S.4 | Static relation permits exactly one source per insight. Missing/cross-attempt relations are pilot misses; runtime validates only the structural write envelope. |
 | S.5 | V1 schema contains no `VisualCue`, `Place`, user/person object, schema suggestion or runtime migration surface. |
-| S.6 | Canonicalization accepts only null/boolean/string/finite-number, dense arrays and plain mappings; normalizes `-0` to `0`, sorts keys by JS default lexicographic order, preserves arrays/scalars and rejects undefined, non-plain, sparse or cyclic values. Hash is SHA-256 of UTF-8 `JSON.stringify(canonical)`. Port returns inner `data_schema`; no wrapper/default stripping is allowed. Expected/live hashes must match exactly. |
+| S.6 | Canonicalization accepts only null/boolean/string/finite-number, dense arrays and plain mappings; normalizes `-0` to `0`, sorts keys by JS default lexicographic order, preserves arrays/scalars and rejects undefined, non-plain, sparse or cyclic values. Hash is SHA-256 of UTF-8 `JSON.stringify(canonical)`. The committed XMD explicitly includes the `enum: null` and `default: null` values materialized by xmemory Cloud v1 normalization. Port returns inner `data_schema`; no wrapper/default stripping is allowed. Expected/live hashes must match exactly. |
 
 ### P — Provisioning
 
@@ -512,7 +523,7 @@ source_attempt_id, insight_statement, insight_kind.
 | W.1 | Lesson content is trimmed-non-empty and ≤50,000 UTF-16 code units; source ID matches `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`; region is ≤256; triggers are an array of ≤64 strings, each non-empty after trim and ≤256. |
 | W.2 | Content, region and triggers containing `<loci_` or `</loci_` case-insensitively are invalid. Triggers are trimmed and stable-deduplicated; content bytes inside lesson tags are otherwise unchanged. |
 | W.3 | Remember enqueues without provider work. On reaching queue head it checks quarantine, then validates. If usable/valid it makes exactly one synchronous deep write with `diffEngine: true`, configured timeout and Contract §6 envelope. |
-| W.4 | Success requires non-empty `writeId`, `traceId` string/null and `decodeXmemoryChanges` success. Change containers have exactly created/updated/deleted and objects/relations keys; item values remain unknown. Observer runs once after validation. |
+| W.4 | Success requires non-empty `writeId`, `traceId` string/null and `decodeXmemoryChanges` success. Provider changes have exactly created/updated/deleted and objects/relations keys plus the optional exact `created_keyless_objects` array materialized by xmemory Cloud for objects without a primary key. The decoder appends those items to normalized `created.objects` and exposes no provider-specific field; item values remain unknown. Observer runs once after validation. |
 | W.5 | Known 400/401/402/403/404/409/422 and explicit RATE_LIMITED failures do not quarantine and are not retried automatically. |
 | W.6 | Write timeout, abort, transport failure, HTTP 408/5xx, malformed success, conflicting code/status or unknown error becomes `write_outcome_unknown`, quarantines once, invokes quarantine observer once and never retries. Observer failure does not replace the original error. |
 | W.7 | Calls already queued behind the ambiguous write and calls made afterward reject `instance_quarantined` when they reach the head/before validation, with no provider call. Quarantine is process-local; the pilot observer provides retirement evidence. Snapshot/restore remain unsupported-operation errors. |
@@ -525,9 +536,9 @@ source_attempt_id, insight_statement, insight_kind.
 | R.1 | Order is quarantine check, limit validation, feature validation/normalization, trace creation, query build and one provider read. |
 | R.2 | Limit is an integer 1–1,000 and controls only the requested count inside the synthesized answer; adapter enforces only the one-Hint outer cap. Features are an array of ≤64 strings; each normalizes by trim plus internal whitespace collapse, must be ≤256 and contain no sentinel. Stable duplicates are removed. |
 | R.3 | Non-empty normalized features use the feature template; empty normalized features use the prior template. Templates and punctuation equal Contract §6 exactly. |
-| R.4 | Read uses `single-answer`, configured timeout and a lowercase UUID trace ID. A non-null echoed trace differing from the requested trace is `protocol_error`. |
+| R.4 | Read uses `single-answer`, configured timeout and a lowercase UUID client trace ID. Cloud may return its own non-null provider trace instead of echoing the client value; the port validates it as string/null, while the adapter keeps the client trace for stable `lessonId` correlation. |
 | R.5 | `readerResult` must be a mapping with string `answer`. A blank trimmed answer returns `[]`; missing/non-string answer is `protocol_error`. |
-| R.6 | A non-empty answer returns exactly `[{ lessonId: "xmemory-read:<traceId>", text: answer.trim() }]`; result length never exceeds one regardless of limit. |
+| R.6 | A non-empty answer returns exactly `[{ lessonId: "xmemory-read:<clientTraceId>", text: answer.trim() }]`; result length never exceeds one regardless of limit. |
 | R.7 | Provider errors never become `[]`. Read makes no automatic retry; normalized rate-limit/unavailable errors expose `retryable: true`. |
 
 ### E — Errors and unsupported operations
@@ -582,7 +593,7 @@ source_attempt_id, insight_statement, insight_kind.
 | 14 | same | Trace echo, blank/invalid/non-empty answer mapping and one-Hint cap | R.4, R.5, R.6 |
 | 15 | same | Read errors are not empty results; retryable flags are read-only | R.7, E.1, E.2, E.3 |
 | 16 | same | Snapshot/restore exact rejected Promises, messages and no calls/state change | E.5, W.7 |
-| 17 | `src/memory/xmemory/platform.test.ts` | Typed decoders plus full compatible/conflicting provider/transport error matrix | W.4, W.5, W.6, R.4, E.1, E.2, E.3, E.4 |
+| 17 | `src/memory/xmemory/platform.test.ts` | Typed decoders, keyless-create normalization and full compatible/conflicting provider/transport error matrix | W.4, W.5, W.6, R.4, E.1, E.2, E.3, E.4 |
 | 18 | `src/memory/xmemory/platform.integration.test.ts` | Gated distinct empty instance, schema→write→two typed provenance tables→single-answer and retirement report | C.2, C.6, S.2, S.3, S.4 |
 | 19 | `src/memory/xmemory/pilot.test.ts` | Tracked/clean manifest hashes, uniqueness, separate instance and typed empty preflight | T.1, T.2 |
 | 20 | same | Exact table decoders, source cardinality, joined insight scoring, cross merges/forbidden terms and query rubric | S.2, S.3, S.4, T.3, T.4 |

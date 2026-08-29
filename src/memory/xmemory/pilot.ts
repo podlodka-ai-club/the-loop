@@ -424,7 +424,6 @@ async function rawRead(
 ): Promise<unknown> {
   const traceId = createTraceId();
   const result = await platform.read({ query, readMode: "raw-tables", traceId, timeoutMs });
-  if (result.traceId !== null && result.traceId !== traceId) throw new XmemoryPilotHarnessError();
   return result.readerResult;
 }
 

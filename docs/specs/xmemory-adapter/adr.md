@@ -2,7 +2,7 @@
 type: Decision
 title: "xmemory-адаптер v1 с синтезированным recall и управляемой XMD-схемой"
 description: "Первая версия проецирует single-answer xmemory в один Hint, хранит XMD-схему в репозитории и работает только с disposable pilot instance без snapshot и restore."
-timestamp: 2026-08-28T00:00:00+03:00
+timestamp: 2026-08-29T00:00:00+03:00
 date: 2026-08-28
 model: gpt-5
 tags: [loci, memory, xmemory, cloud, xmd, typescript, adapter, decision]
@@ -68,6 +68,15 @@ query. Эта проекция считается явной несовмест�
 XMD v1 хранится и рецензируется в репозитории. Первая схема содержит `TrainingExperience` со
 стабильным source attempt ID и source-specific `Insight`, связанный с породившим его опытом.
 Нормализованные `VisualCue` и `Place` не входят в v1: их identity и merge требуют отдельного пилота.
+Поля XMD явно фиксируют `enum: null` и `default: null`, которые Cloud v1 материализует при
+round-trip схемы. Эти значения входят в repo-owned canonical hash; runtime не удаляет provider
+defaults и не ослабляет exact comparison.
+Синхронный write также материализует `created_keyless_objects` для schema objects без primary key;
+adapter валидирует этот provider field и объединяет его элементы с публичным `created.objects`, не
+расширяя общий `Memory`-контракт provider-specific структурой.
+Cloud read возвращает provider-generated `trace_id`, а не гарантированный echo клиентского UUID.
+Adapter валидирует provider trace как metadata, но использует собственный UUID в synthetic
+`lessonId`, чтобы публичная корреляция не зависела от поведения Cloud.
 
 Instance создаётся явным provisioning-шагом, а runtime проверяет совместимость live schema и не
 создаёт миграции. Provisioning и runtime получают раздельные конфигурации credentials; если Cloud

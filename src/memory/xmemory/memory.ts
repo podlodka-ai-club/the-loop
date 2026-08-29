@@ -568,8 +568,10 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
         throw new Error("invalid read response");
       }
       const result = rawResult as Record<string, unknown>;
-      const echoedTraceId = result.traceId;
-      if (echoedTraceId !== null && echoedTraceId !== traceId) throw new Error("trace mismatch");
+      const providerTraceId = result.traceId;
+      if (providerTraceId !== null && typeof providerTraceId !== "string") {
+        throw new Error("invalid provider trace id");
+      }
       const readerResult = result.readerResult;
       if (typeof readerResult !== "object" || readerResult === null || Array.isArray(readerResult)) {
         throw new Error("invalid reader result");

@@ -30,6 +30,11 @@ const changes: XmemoryChangeSet = {
   deleted: { objects: [], relations: [] },
 };
 
+const providerChangesWithKeyless = {
+  ...changes,
+  created_keyless_objects: [{ type: "Insight" }],
+};
+
 function unexpected(name: string): never {
   throw new Error(`unexpected ${name} call`);
 }
@@ -159,7 +164,12 @@ test("data port pins the hosted URL and forwards exact SDK envelopes", async () 
     },
     write: async (text, options) => {
       calls.push(["write", text, options]);
-      return { write_id: "write-1", trace_id: "trace-1", changes, console_url: "sensitive" };
+      return {
+        write_id: "write-1",
+        trace_id: "trace-1",
+        changes: providerChangesWithKeyless,
+        console_url: "sensitive",
+      };
     },
     read: async (query, options) => {
       calls.push(["read", query, options]);
@@ -178,7 +188,17 @@ test("data port pins the hosted URL and forwards exact SDK envelopes", async () 
   assert.deepEqual(await port.getSchema(10), { xmd_version: "v1" });
   assert.deepEqual(
     await port.write({ text: "lesson", extractionLogic: "deep", diffEngine: true, timeoutMs: 20 }),
-    { writeId: "write-1", traceId: "trace-1", changes },
+    {
+      writeId: "write-1",
+      traceId: "trace-1",
+      changes: {
+        ...changes,
+        created: {
+          objects: [...changes.created.objects, { type: "Insight" }],
+          relations: [],
+        },
+      },
+    },
   );
   assert.deepEqual(
     await port.read({ query: "query", readMode: "single-answer", traceId: "trace-2", timeoutMs: 30 }),
@@ -245,8 +265,15 @@ test("admin port forwards exact SDK calls and returns normalized identifiers", a
   ]);
 });
 
-test("change decoder requires the exact three-by-two containers", () => {
+test("change decoder normalizes keyless creates and requires exact provider containers", () => {
   assert.deepEqual(decodeXmemoryChanges(changes), changes);
+  assert.deepEqual(decodeXmemoryChanges(providerChangesWithKeyless), {
+    ...changes,
+    created: {
+      objects: [...changes.created.objects, { type: "Insight" }],
+      relations: [],
+    },
+  });
   const malformed: unknown[] = [
     null,
     {},
@@ -254,6 +281,8 @@ test("change decoder requires the exact three-by-two containers", () => {
     { created: {}, updated: changes.updated, deleted: changes.deleted },
     { ...changes, created: { objects: [], relations: [], extra: [] } },
     { ...changes, created: { objects: null, relations: [] } },
+    { ...changes, created_keyless_objects: null },
+    { ...providerChangesWithKeyless, extra: [] },
   ];
   for (const value of malformed) assert.throws(() => decodeXmemoryChanges(value), TypeError);
 });

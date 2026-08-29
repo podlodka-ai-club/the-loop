@@ -54,11 +54,24 @@ function decodeChangeGroup(value: unknown): { objects: unknown[]; relations: unk
 }
 
 export function decodeXmemoryChanges(value: unknown): XmemoryChangeSet {
-  if (!isRecord(value) || !hasExactKeys(value, ["created", "updated", "deleted"])) {
+  if (!isRecord(value)) {
     throw new TypeError("invalid xmemory changes");
   }
+  const hasKeylessObjects = Object.hasOwn(value, "created_keyless_objects");
+  const expectedKeys = hasKeylessObjects
+    ? ["created", "updated", "deleted", "created_keyless_objects"]
+    : ["created", "updated", "deleted"];
+  if (!hasExactKeys(value, expectedKeys)) throw new TypeError("invalid xmemory changes");
+
+  const created = decodeChangeGroup(value.created);
+  if (hasKeylessObjects) {
+    if (!Array.isArray(value.created_keyless_objects)) {
+      throw new TypeError("invalid xmemory changes");
+    }
+    created.objects.push(...value.created_keyless_objects);
+  }
   return {
-    created: decodeChangeGroup(value.created),
+    created,
     updated: decodeChangeGroup(value.updated),
     deleted: decodeChangeGroup(value.deleted),
   };

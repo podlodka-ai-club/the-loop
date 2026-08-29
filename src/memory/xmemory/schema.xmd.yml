@@ -17,23 +17,31 @@ objects:
       source_attempt_id:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Literal source_attempt_id from the provenance block. Preserve case and punctuation;
           never infer, translate, normalize or generate this value.
       lesson_content:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Full UTF-8 text between the lesson tags, preserved as data. It describes observations,
           blind hypotheses, revealed place, analysis and transferable geolocation experience.
       region:
         type: str
         required: false
+        enum: null
+        default: null
         description: >-
           Region decoded from region_json. Preserve the source spelling; use null when empty.
       observed_triggers_json:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Canonical JSON array string copied from observed_triggers_json; do not add or remove cues.
     primary_key: [source_attempt_id]
@@ -49,12 +57,15 @@ objects:
       statement:
         type: str
         required: true
+        enum: null
+        default: null
         description: >-
           Self-contained geolocation guidance preserving conditions, counter-signals and limits.
       kind:
         type: str
         required: true
         enum: [positive_evidence, negative_evidence, comparison, caveat, procedure]
+        default: null
         description: >-
           Classify support for a place as positive_evidence, evidence against it as
           negative_evidence, an explicit distinction between places as comparison, a limitation
