@@ -10,6 +10,16 @@
     "geolocate": "node --env-file-if-exists=.env src/cli.ts",
     "sample": "node --env-file-if-exists=.env src/sample.ts",
     "experiment": "node --env-file-if-exists=.env src/experiment.ts",
+    "test:mem0": "node --test src/memory/mem0/*.test.ts",
+    "test:xmemory": "node --test src/memory/xmemory/*.test.ts",
+    "test:hindsight": "node --test src/memory/hindsight/*.test.ts",
+    "test:hindsight:integration": "node --env-file-if-exists=.env --test src/memory/hindsight/platform.integration.test.ts",
+    "hindsight:pilot": "node --env-file-if-exists=.env src/memory/hindsight/pilot.ts",
+    "mem0:pilot": "node --env-file-if-exists=.env src/memory/mem0/pilot.ts",
+    "xmemory:schema:validate": "node src/memory/xmemory/schema-validate.ts",
+    "xmemory:provision": "node --env-file-if-exists=.env src/memory/xmemory/provision.ts",
+    "xmemory:pilot": "node --env-file-if-exists=.env src/memory/xmemory/pilot.ts",
+    "xmemory:pilot:finalize": "node src/memory/xmemory/pilot-finalize.ts",
     "typecheck": "tsc --noEmit",
     "train": "node --env-file-if-exists=.env src/train.ts"
   },
@@ -19,8 +29,12 @@
     "@arizeai/phoenix-client": "^7.5.0",
     "@arizeai/phoenix-otel": "2.2.0",
     "csv-parse": "^6.1.0",
+    "@vectorize-io/hindsight-client": "0.9.2",
+    "mem0ai": "3.1.7",
     "openai": "^6.49.0",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "xmemory": "3.8.1",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@types/node": "26.2.0",

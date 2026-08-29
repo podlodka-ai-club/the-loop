@@ -34,3 +34,10 @@ venv/
 
 .idea/
 .vscode/
+
+# Local agent skills, installer state and xmemory credentials.
+.agents/
+.claude/
+agent/
+skills-lock.json
+.xmemrc.json
