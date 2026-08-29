@@ -408,10 +408,10 @@ test("each SDK operation receives a fresh composed timeout signal", async () => 
   });
   const adapter = port(client);
 
-  await adapter.retain({ ...retainRequest, signal: callerSignals[0] });
-  await adapter.recall({ ...recallRequest, signal: callerSignals[1] });
-  await adapter.getVersion({ timeoutMs: 1_000, signal: callerSignals[2] });
-  await adapter.listDocuments({ bankId: "bank-test", timeoutMs: 1_000, signal: callerSignals[3] });
+  await adapter.retain({ ...retainRequest, signal: callerSignals[0]! });
+  await adapter.recall({ ...recallRequest, signal: callerSignals[1]! });
+  await adapter.getVersion({ timeoutMs: 1_000, signal: callerSignals[2]! });
+  await adapter.listDocuments({ bankId: "bank-test", timeoutMs: 1_000, signal: callerSignals[3]! });
 
   assert.equal(sdkSignals.length, 4);
   assert.equal(new Set(sdkSignals).size, 4);
