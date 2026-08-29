@@ -245,7 +245,9 @@ test("successful pilot is FIFO, performs immediate/raw plus 60/300 checkpoints, 
       trainingDone = milliseconds === 240_000;
     },
     createRunId: () => "run-test",
-    onBankRetirementRequired: (reason) => retirements.push(reason),
+    onBankRetirementRequired: (reason) => {
+      retirements.push(reason);
+    },
   });
 
   assert.equal(retainBanks.length, 30);
@@ -280,7 +282,9 @@ test("non-empty preflight retires the bank and constructs no memory", async () =
     }),
     createMemory: () => { memoryCreations += 1; throw new Error("must not construct"); },
     sleep: async () => undefined,
-    onBankRetirementRequired: (reason) => retirements.push(reason),
+    onBankRetirementRequired: (reason) => {
+      retirements.push(reason);
+    },
   });
   assert.equal(platformCalls, 2);
   assert.equal(memoryCreations, 0);
@@ -318,7 +322,9 @@ test("aborted version preflight marks a harness failure and retires without cons
         memoryCreations += 1;
         throw new Error("must not construct after abort");
       },
-      onBankRetirementRequired: (reason) => retirements.push(reason),
+      onBankRetirementRequired: (reason) => {
+        retirements.push(reason);
+      },
     });
   } finally {
     clearTimeout(keepAlive);
@@ -352,7 +358,9 @@ test("unknown write outcome quarantines, retires and stops before raw reads", as
       recall: async () => { recallCalls += 1; return { results: [] }; },
     }),
     sleep: async () => undefined,
-    onBankRetirementRequired: (reason) => retirements.push(reason),
+    onBankRetirementRequired: (reason) => {
+      retirements.push(reason);
+    },
   });
   assert.equal(retainCalls, 1);
   assert.equal(recallCalls, 0);
@@ -376,7 +384,9 @@ test("execute gate refuses missing API key before constructing Cloud platform", 
       platformCreations += 1;
       throw new Error("Cloud must not start");
     },
-    writeSummary: async (_path, summary) => summaries.push(summary),
+    writeSummary: async (_path, summary) => {
+      summaries.push(summary);
+    },
     printSummary: (line) => printed.push(line),
   });
   assert.equal(exitCode, 1);

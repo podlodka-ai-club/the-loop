@@ -17,6 +17,7 @@ import {
   HINDSIGHT_CLOUD_BASE_URL,
   HINDSIGHT_RETAIN_CONTEXT,
   HINDSIGHT_RETAIN_MISSION,
+  createHindsightPlatformPort,
   resolveHindsightMemorySource,
   type HindsightMemoryResult,
   type HindsightMemorySource,

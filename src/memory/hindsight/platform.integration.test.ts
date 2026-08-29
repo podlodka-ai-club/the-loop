@@ -85,7 +85,7 @@ test(
       sourceAttemptId: "hindsight-integration-smoke-001",
       triggers: ["painted roadside marker"],
       region: "synthetic-test-region",
-    } as const;
+    };
     const retain = await platform.retain(
       buildHindsightRetainRequest(
         integrationSource.bankId,
