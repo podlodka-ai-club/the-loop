@@ -279,7 +279,7 @@ export interface XmemoryAdminPort {
 ### 5. Adapter surface — `src/memory/xmemory/memory.ts`
 
 ```ts
-import type { Hint, LessonInput, Memory } from "../../memory.ts";
+import type { Hint, LessonInput, Memory } from "../memory.ts";
 
 export const XMEMORY_CAPABILITIES = { snapshot: false, restore: false } as const;
 

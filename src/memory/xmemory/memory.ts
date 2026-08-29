@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Hint, LessonInput, Memory } from "../../memory.ts";
+import type { Hint, LessonInput, Memory } from "../memory.ts";
 import {
   XmemoryMemoryError,
   isXmemoryUnavailableCause,

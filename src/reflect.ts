@@ -9,7 +9,7 @@
 import { trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
-import type { LessonInput } from "./memory.ts";
+import type { LessonInput } from "./memory/memory.ts";
 
 const MODEL = process.env.REFLECT_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";

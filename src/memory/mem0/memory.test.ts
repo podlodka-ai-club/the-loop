@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import type { LessonInput, Memory } from "../../memory.ts";
+import type { LessonInput, Memory } from "../memory.ts";
 import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import {
   MEM0_CAPABILITIES,

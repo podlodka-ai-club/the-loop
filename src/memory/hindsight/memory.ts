@@ -1,4 +1,4 @@
-import type { Hint, LessonInput, Memory } from "../../memory.ts";
+import type { Hint, LessonInput, Memory } from "../memory.ts";
 import {
   HINDSIGHT_CLOUD_BASE_URL,
   HINDSIGHT_RETAIN_CONTEXT,

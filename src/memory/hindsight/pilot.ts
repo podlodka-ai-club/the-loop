@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath, dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { Hint, LessonInput } from "../../memory.ts";
+import type { Hint, LessonInput } from "../memory.ts";
 import {
   buildHindsightRecallQuery,
   createHindsightMemory,

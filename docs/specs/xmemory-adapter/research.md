@@ -20,7 +20,7 @@ API key, поддерживать `remember` и `recall`, а `snapshot` и `rest
 
 Продуктовые контракты [memory_store](/tools/memory_store.md) и
 [memory_retrieve](/tools/memory_retrieve.md) этим исследованием не меняются. Исследуется
-совместимость с текущим TypeScript-интерфейсом `Memory` из `src/memory.ts`.
+совместимость с текущим TypeScript-интерфейсом `Memory` из `src/memory/memory.ts`.
 
 ## Заданные границы
 

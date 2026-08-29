@@ -6,8 +6,9 @@
  */
 import { UnparseableOutputError, geolocate } from "./agent.ts";
 import type { Guess } from "./agent.ts";
-import { NullMemory, RECALL_LIMIT } from "./memory.ts";
-import type { Hint, Memory } from "./memory.ts";
+import { NullMemory } from "./memory/null/memory.ts";
+import { RECALL_LIMIT } from "./memory/memory.ts";
+import type { Hint, Memory } from "./memory/memory.ts";
 
 export type FailureKind = "unparseable" | "api_error" | "missing_image";
 
