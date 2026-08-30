@@ -137,6 +137,11 @@ export interface MemoryReader {
    * not on a concrete adapter class.
    */
   asFeatureScopedReader?(): MemoryReader;
+  /**
+   * Optional projection for adapters whose read operation can otherwise mutate
+   * counters or provider state. Evaluation and production use it before recall.
+   */
+  asReadOnlyReader?(): MemoryReader;
   /** Feature-scoped dispatcher path: one query for one active feature. */
   recall(query: string, limit: number): Promise<Hint[]>;
 }
@@ -153,6 +158,9 @@ function readerOnly(memory: MemoryReader): MemoryReader {
       : { featureScope: memory.featureScope, recall: (query, limit) => memory.recall(query, limit) };
   if (memory.asFeatureScopedReader !== undefined) {
     reader.asFeatureScopedReader = () => readerOnly(memory.asFeatureScopedReader?.() ?? memory);
+  }
+  if (memory.asReadOnlyReader !== undefined) {
+    reader.asReadOnlyReader = () => readerOnly(memory.asReadOnlyReader?.() ?? memory);
   }
   return reader;
 }

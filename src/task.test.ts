@@ -638,6 +638,7 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
       lessonId: null,
     },
   ]);
+  assert.deepEqual(result.trace?.episodes, result.episodes);
   assert.deepEqual(
     result.trace?.events.map((event) => [event.phase, event.operation, event.featureKey, event.memoryHitId, event.status]),
     [
@@ -771,7 +772,7 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
       truth: { latitude: 1, longitude: 2, country: "BR" },
     };
     const result = await runTaskWithRuntime(input, {
-      memory: writer,
+      memory: new MemoryReaderSpy(),
       writer,
       run: { ...scenario, recallLimit: 5 },
       locate: locateSpy,
@@ -835,6 +836,58 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
   ]);
   assert.equal(await readFile(frozenSnapshotPath, "utf8"), `${JSON.stringify(frozenLesson)}\n`);
   await rm(memoryDir, { recursive: true, force: true });
+});
+
+test("runTask evaluation wraps direct writable FileMemory before feature-scoped retrieval", async () => {
+  const { FileMemory } = await import("./memory/file/memory.ts");
+  const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-direct-file-memory-"));
+  const memoryPath = join(memoryDir, "live.jsonl");
+  const storedLesson: LessonInput & { id: string; hits: number; wins: number } = {
+    id: "lesson-0001",
+    content: "Wooden poles line up with the revealed country.",
+    sourceAttemptId: "attempt-file-memory",
+    featureKey: "poles",
+    memoryHitId: "attempt-file-memory/poles/hit",
+    effect: "helped",
+    triggers: ["wooden poles"],
+    region: "BR",
+    idempotencyKey: "attempt-file-memory:poles:hit",
+    hits: 0,
+    wins: 0,
+  };
+  await writeFile(memoryPath, `${JSON.stringify(storedLesson)}\n`, "utf8");
+  const client = new LocateClientSpy();
+
+  try {
+    const result = await runTaskWithRuntime(
+      {
+        imageId: "image-direct-file-memory",
+        imagePath: "direct-file-memory.jpg",
+        attemptId: "attempt-direct-file-memory",
+      },
+      {
+        memory: new FileMemory(memoryPath, "all", false),
+        run: { mode: "evaluation", snapshotId: "snapshot-direct", readOnly: true, recallLimit: 5 },
+        locate: locateWithHooks({
+          client,
+          imageDataUri: async () => "data:image/jpeg;base64,AA==",
+          observe: async () =>
+            observed({
+              poles: { state: "visible", text: "wooden poles" },
+            }),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      result.memoryGroups.map((group) => [group.feature.key, group.status, group.hits.length]),
+      [["poles", "hits", 1]],
+    );
+    assert.equal(await readFile(memoryPath, "utf8"), `${JSON.stringify(storedLesson)}\n`);
+  } finally {
+    await rm(memoryDir, { recursive: true, force: true });
+  }
 });
 
 test("runTask legacy path rejects a feature-scoped MemoryReader when deps.run is absent", async () => {

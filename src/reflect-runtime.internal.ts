@@ -39,6 +39,18 @@ export type ReflectRuntimeDeps = {
   run: MemoryRunConfig;
 } & ReflectRuntimeHooks;
 
+export type ReflectRuntimeErrorCode = "image_data_uri_failed" | "model_failed";
+
+export class ReflectRuntimeError extends Error {
+  readonly code: ReflectRuntimeErrorCode;
+
+  constructor(code: ReflectRuntimeErrorCode, cause: unknown) {
+    super(code, cause instanceof Error ? { cause } : undefined);
+    this.name = "ReflectRuntimeError";
+    this.code = code;
+  }
+}
+
 const MODEL = process.env.REFLECT_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 const TEMPERATURE = Number(process.env.REFLECT_TEMPERATURE ?? 0);
@@ -231,27 +243,39 @@ export async function reflectEpisodeWithRuntime(
       if (truthCountry === null) return failureResult("invalid_tool_arguments");
       if (!isActiveEpisode(input)) return failureResult("foreign_hit");
 
-      const response = await (deps.client ?? defaultClient()).chat.completions.create({
-        model: MODEL,
-        temperature: TEMPERATURE,
-        seed: SEED,
-        provider: PROVIDER,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: reflectionPrompt(input) },
-              {
-                type: "image_url",
-                image_url: { url: await (deps.imageDataUri ?? toDataUri)(input.imagePath) },
-              },
-            ],
-          },
-        ],
-        tools: [storeToolForFeature(input.feature.key)],
-        tool_choice: { type: "function", function: { name: "memory_store" } },
-        parallel_tool_calls: false,
-      } as OpenAI.ChatCompletionCreateParamsNonStreaming);
+      let imageUrl: string;
+      try {
+        imageUrl = await (deps.imageDataUri ?? toDataUri)(input.imagePath);
+      } catch (error) {
+        throw new ReflectRuntimeError("image_data_uri_failed", error);
+      }
+
+      let response: ReflectRuntimeChatCompletion;
+      try {
+        response = await (deps.client ?? defaultClient()).chat.completions.create({
+          model: MODEL,
+          temperature: TEMPERATURE,
+          seed: SEED,
+          provider: PROVIDER,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: reflectionPrompt(input) },
+                {
+                  type: "image_url",
+                  image_url: { url: imageUrl },
+                },
+              ],
+            },
+          ],
+          tools: [storeToolForFeature(input.feature.key)],
+          tool_choice: { type: "function", function: { name: "memory_store" } },
+          parallel_tool_calls: false,
+        } as OpenAI.ChatCompletionCreateParamsNonStreaming);
+      } catch (error) {
+        throw new ReflectRuntimeError("model_failed", error);
+      }
 
       const toolCalls = response.choices[0]?.message.tool_calls ?? [];
       const effect = effectFromToolCalls(toolCalls);
@@ -289,7 +313,7 @@ export async function reflectEpisodeWithRuntime(
       if (error instanceof MemoryToolValidationError) {
         return failureResult(error.failure);
       }
-      return failureResult("invalid_tool_arguments");
+      throw error;
     } finally {
       span.end();
     }

@@ -100,6 +100,10 @@ export class FileMemory implements Memory, LegacyMemory {
     return this;
   }
 
+  asReadOnlyReader(): MemoryReader {
+    return new FileMemory(this.path, this.mode, true);
+  }
+
   private async load(): Promise<StoredLesson[]> {
     try {
       return parseLessons(await readFile(this.path, "utf8"));

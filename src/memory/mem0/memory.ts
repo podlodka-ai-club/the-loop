@@ -87,6 +87,10 @@ function readEffect(value: unknown): ReflectionEffect | undefined {
     : undefined;
 }
 
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function sanitizedError(
   code: keyof typeof ERROR_MESSAGES,
   eventId?: string,
@@ -378,6 +382,32 @@ export class Mem0Memory implements Memory, LegacyMemory {
       lesson.triggers.some((trigger) => typeof trigger !== "string") ||
       typeof lesson.region !== "string" ||
       Object.prototype.hasOwnProperty.call(lesson, "memory_ref")
+    ) {
+      throw sanitizedError("invalid_input");
+    }
+
+    const hasEpisodeMetadata =
+      hasOwn(lesson, "featureKey") ||
+      hasOwn(lesson, "memoryHitId") ||
+      hasOwn(lesson, "effect") ||
+      hasOwn(lesson, "idempotencyKey");
+    if (!hasEpisodeMetadata) return;
+
+    if (
+      lesson.content.trim().replace(/\s+/g, " ").length > 2_000 ||
+      readFeatureKey(lesson.featureKey) === undefined ||
+      typeof lesson.memoryHitId !== "string" ||
+      lesson.memoryHitId.trim() === "" ||
+      readEffect(lesson.effect) === undefined ||
+      typeof lesson.idempotencyKey !== "string" ||
+      lesson.idempotencyKey.trim() === "" ||
+      lesson.triggers.length < 1 ||
+      lesson.triggers.length > 8 ||
+      lesson.triggers.some((trigger) => {
+        const normalized = trigger.trim().replace(/\s+/g, " ");
+        return normalized === "" || normalized.length > 128;
+      }) ||
+      !/^[A-Z]{2}$/.test(lesson.region)
     ) {
       throw sanitizedError("invalid_input");
     }

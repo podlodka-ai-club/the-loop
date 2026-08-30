@@ -5,7 +5,7 @@ import { locate } from "./locate.ts";
 import type { LocateDeps } from "./locate.ts";
 import { readLocatePartialResult } from "./locate-partial.internal.ts";
 import { NullMemory } from "./memory/null/memory.ts";
-import type { Hint, MemoryWriter } from "./memory/memory.ts";
+import type { Hint, MemoryReader, MemoryWriter } from "./memory/memory.ts";
 import { reflectEpisode } from "./reflect.ts";
 import type {
   ReflectionEpisodeInput,
@@ -19,6 +19,7 @@ import type {
 } from "./task.ts";
 import type {
   FeatureMemoryGroup,
+  EpisodeTrace,
   LocateResult,
   MemoryHit,
   ToolEvent,
@@ -111,6 +112,27 @@ function shouldReflect(
   );
 }
 
+function isMemoryWriter(value: unknown): value is MemoryWriter {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.remember === "function" &&
+    typeof candidate.snapshot === "function" &&
+    typeof candidate.restore === "function"
+  );
+}
+
+function memoryReaderForRun(deps: FeatureScopedTaskRuntimeDeps): MemoryReader {
+  const memory: MemoryReader = deps.memory ?? new NullMemory();
+  if (deps.run.mode === "training") return memory;
+  const readOnlyReader = memory.asReadOnlyReader?.();
+  if (readOnlyReader !== undefined) return readOnlyReader;
+  if (isMemoryWriter(memory)) {
+    throw new Error("feature-scoped evaluation/production memory must be reader-only");
+  }
+  return memory;
+}
+
 function reflectionEvent(
   attemptId: string,
   hit: MemoryHit,
@@ -166,20 +188,17 @@ async function reflectEpisodesAfterReveal(
           distanceKm,
         },
         { writer: deps.writer, run: deps.run },
-      ).catch((): ReflectionEpisodeResult => ({
-        status: "reflection_failed",
-        effect: null,
-        lessonId: null,
-        failure: "invalid_tool_arguments",
-      }));
-      result.episodes.push({
+      );
+      const episode: EpisodeTrace = {
         attemptId: result.attemptId,
         featureKey: hit.featureKey,
         memoryHitId: hit.memoryHitId,
         effect: reflection.effect,
         reflectionStatus: reflection.status,
         lessonId: reflection.lessonId,
-      });
+      };
+      result.episodes.push(episode);
+      if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
       sequence += 1;
       result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence));
     }
@@ -195,7 +214,7 @@ export async function runFeatureScopedTask(
       { attemptId: input.attemptId ?? input.imageId, imagePath: input.imagePath },
       {
         ...deps.locateDeps,
-        memory: deps.memory ?? new NullMemory(),
+        memory: memoryReaderForRun(deps),
         run: deps.run,
       },
     );

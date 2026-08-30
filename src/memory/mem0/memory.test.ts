@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { MemoryWriteError } from "../memory.ts";
-import type { LegacyMemory, LessonInput, MemoryWriteErrorCode } from "../memory.ts";
+import type { LegacyLessonInput, LegacyMemory, LessonInput, MemoryWriteErrorCode } from "../memory.ts";
 import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import {
   MEM0_CAPABILITIES,
@@ -135,8 +135,15 @@ const lesson: LessonInput = {
   memoryHitId: "attempt-1/bollards_and_barriers/hit",
   effect: "helped",
   triggers: ["yellow roadside posts"],
-  region: "Iceland",
+  region: "IS",
   idempotencyKey: "attempt-1:bollards_and_barriers:hit",
+};
+
+const legacyLesson: LegacyLessonInput = {
+  content: "Yellow roadside posts can support an Iceland hypothesis.",
+  sourceAttemptId: "attempt-legacy",
+  triggers: [],
+  region: "",
 };
 
 function unexpected(name: string): never {
@@ -220,22 +227,18 @@ test("remember validates before calls and sends the exact scoped add payload", a
   await rejectsCode(memory.remember({ ...lesson, sourceAttemptId: "" }), "invalid_input");
   assert.equal(requests.length, 0);
 
-  await memory.remember({ ...lesson, triggers: [], region: "" });
+  await memory.remember(legacyLesson);
   assert.deepEqual(requests, [
     {
-      messages: [{ role: "assistant", content: lesson.content }],
+      messages: [{ role: "assistant", content: legacyLesson.content }],
       agentId: "agent-1",
       infer: true,
       temporalReasoning: false,
       agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
       metadata: {
-        loci_source_attempt_id: lesson.sourceAttemptId,
+        loci_source_attempt_id: legacyLesson.sourceAttemptId,
         loci_triggers: [],
         loci_region: "",
-        loci_feature_key: lesson.featureKey,
-        loci_memory_hit_id: lesson.memoryHitId,
-        loci_effect: lesson.effect,
-        loci_idempotency_key: lesson.idempotencyKey,
       },
     },
   ]);
@@ -358,6 +361,18 @@ test("remember rejects every malformed lesson before any platform call", async (
     { ...lesson, triggers: ["valid", 1] },
     { ...lesson, region: null },
     { ...lesson, memory_ref: "foreign" },
+    { ...lesson, content: `${"x".repeat(2_000)}.` },
+    { ...lesson, triggers: [] },
+    { ...lesson, triggers: Array.from({ length: 9 }, (_, index) => `trigger-${index}`) },
+    { ...lesson, triggers: ["valid", ""] },
+    { ...lesson, triggers: ["x".repeat(129)] },
+    { ...lesson, region: "" },
+    { ...lesson, region: "Iceland" },
+    { ...lesson, region: "is" },
+    { ...lesson, featureKey: undefined },
+    { ...lesson, memoryHitId: "" },
+    { ...lesson, effect: undefined },
+    { ...lesson, idempotencyKey: "" },
   ];
 
   for (const value of malformed) {

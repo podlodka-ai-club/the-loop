@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import OpenAI from "openai";
-import { reflectEpisodeWithRuntime, type ReflectRuntimeChatClient } from "./reflect-runtime.internal.ts";
+import {
+  ReflectRuntimeError,
+  reflectEpisodeWithRuntime,
+  type ReflectRuntimeChatClient,
+} from "./reflect-runtime.internal.ts";
 import type { ReflectionEpisodeInput } from "./reflect.ts";
 import type { FeatureObservation } from "./observe.ts";
 import type {
@@ -10,6 +14,7 @@ import type {
   MemoryWriteResult,
   MemoryWriter,
 } from "./memory/memory.ts";
+import { MemoryWriteError } from "./memory/memory.ts";
 import {
   makeIdempotencyKey,
   makeMemoryHitId,
@@ -52,6 +57,7 @@ const memoryHit: MemoryHit = {
 class WriterSpy implements MemoryWriter {
   readonly invocations: Array<{ type: "remember"; lesson: LessonInput }> = [];
   result: MemoryWriteResult = { status: "stored", lessonId: "lesson-written" };
+  error: Error | undefined;
 
   async recall(): Promise<Hint[]> {
     return [];
@@ -59,6 +65,7 @@ class WriterSpy implements MemoryWriter {
 
   async remember(lesson: LessonInput): Promise<MemoryWriteResult> {
     this.invocations.push({ type: "remember", lesson });
+    if (this.error !== undefined) throw this.error;
     return this.result;
   }
 
@@ -72,6 +79,7 @@ class WriterSpy implements MemoryWriter {
 class ReflectClientSpy implements ReflectRuntimeChatClient {
   readonly invocations: OpenAI.ChatCompletionCreateParamsNonStreaming[] = [];
   toolCalls: unknown[] = [toolCall({ effect: "misleading" })];
+  error: Error | undefined;
 
   chat = {
     completions: {
@@ -79,6 +87,7 @@ class ReflectClientSpy implements ReflectRuntimeChatClient {
         params: OpenAI.ChatCompletionCreateParamsNonStreaming,
       ): Promise<{ choices: Array<{ message: { tool_calls?: unknown[] } }> }> => {
         this.invocations.push(params);
+        if (this.error !== undefined) throw this.error;
         return { choices: [{ message: { tool_calls: this.toolCalls } }] };
       },
     },
@@ -371,4 +380,78 @@ test("reflectEpisode rejects foreign hits before model and returns writer outcom
     { status: "already_stored", effect: "irrelevant", lessonId: "existing-lesson", failure: null },
   );
   assert.equal(duplicateWriter.invocations.length, 1);
+});
+
+test("reflectEpisode returns write_failed and write_outcome_unknown without retry or rollback", async () => {
+  const scenarios: Array<{
+    code: "write_failed" | "write_outcome_unknown";
+    error: MemoryWriteError;
+  }> = [
+    { code: "write_failed", error: new MemoryWriteError("write_failed") },
+    { code: "write_outcome_unknown", error: new MemoryWriteError("write_outcome_unknown") },
+  ];
+
+  for (const scenario of scenarios) {
+    const writer = new WriterSpy();
+    writer.error = scenario.error;
+    const client = new ReflectClientSpy();
+    client.toolCalls = [toolCall({ effect: "insufficient" })];
+
+    const result = await reflectEpisodeWithRuntime(makeInput(), {
+      writer,
+      run,
+      client,
+      imageDataUri: async () => "data:image/jpeg;base64,AA==",
+    });
+
+    assert.deepEqual(result, {
+      status: scenario.code,
+      effect: "insufficient",
+      lessonId: null,
+      failure: scenario.code,
+    });
+    assert.equal(writer.invocations.length, 1, scenario.code);
+    assert.equal(client.invocations.length, 1, scenario.code);
+  }
+});
+
+test("reflectEpisode propagates image and model failures as typed runtime errors without store", async () => {
+  const imageWriter = new WriterSpy();
+  const imageClient = new ReflectClientSpy();
+  await assert.rejects(
+    reflectEpisodeWithRuntime(makeInput(), {
+      writer: imageWriter,
+      run,
+      client: imageClient,
+      imageDataUri: async () => {
+        throw new Error("image loader failed");
+      },
+    }),
+    (error) => {
+      assert.ok(error instanceof ReflectRuntimeError);
+      assert.equal(error.code, "image_data_uri_failed");
+      return true;
+    },
+  );
+  assert.deepEqual(imageClient.invocations, []);
+  assert.deepEqual(imageWriter.invocations, []);
+
+  const modelWriter = new WriterSpy();
+  const modelClient = new ReflectClientSpy();
+  modelClient.error = new Error("provider rejected model call");
+  await assert.rejects(
+    reflectEpisodeWithRuntime(makeInput(), {
+      writer: modelWriter,
+      run,
+      client: modelClient,
+      imageDataUri: async () => "data:image/jpeg;base64,AA==",
+    }),
+    (error) => {
+      assert.ok(error instanceof ReflectRuntimeError);
+      assert.equal(error.code, "model_failed");
+      return true;
+    },
+  );
+  assert.equal(modelClient.invocations.length, 1);
+  assert.deepEqual(modelWriter.invocations, []);
 });
