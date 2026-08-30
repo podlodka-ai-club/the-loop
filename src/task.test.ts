@@ -8,12 +8,25 @@ import {
   type LocateRuntimeHooks,
 } from "./locate-runtime.internal.ts";
 import type { LocateDeps } from "./locate.ts";
-import type { Hint, MemoryReader } from "./memory/memory.ts";
+import { resolveMemoryBinding } from "./memory/memory.ts";
+import type {
+  Hint,
+  LessonInput,
+  MemoryReader,
+  MemoryWriter,
+  MemoryWriteResult,
+} from "./memory/memory.ts";
 import { FEATURE_KEYS, type FeatureObservation, type ObserveResult } from "./observe.ts";
 import { runTask, type FeatureScopedTaskDeps } from "./task.ts";
-import { runTaskWithRuntime, type LocateFunction } from "./task-runtime.internal.ts";
+import {
+  runTaskWithRuntime,
+  type FeatureScopedTaskRuntimeInput,
+  type LocateFunction,
+  type ReflectEpisodeFunction,
+} from "./task-runtime.internal.ts";
 import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
-import type { LocateResult, MemoryRunConfig } from "./tools/memory.ts";
+import { makeMemoryHitId, type LocateResult, type MemoryRunConfig } from "./tools/memory.ts";
+import type { ReflectionEpisodeInput, ReflectionEpisodeResult } from "./reflect.ts";
 
 const run: MemoryRunConfig = {
   mode: "training",
@@ -48,6 +61,39 @@ class MemoryReaderSpy implements MemoryReader {
       { lessonId: `lesson-${this.invocations.length}-b`, text: `second memory for ${query}`, effect: "misleading" },
     ];
   }
+}
+
+class MemoryWriterSpy extends MemoryReaderSpy implements MemoryWriter {
+  readonly rememberInvocations: Array<{ lesson: LessonInput }> = [];
+  result: MemoryWriteResult = { status: "stored", lessonId: "lesson-written" };
+
+  async remember(lesson: LessonInput): Promise<MemoryWriteResult> {
+    this.rememberInvocations.push({ lesson });
+    return this.result;
+  }
+
+  async snapshot(): Promise<string> {
+    return "snapshot";
+  }
+
+  async restore(): Promise<void> {}
+}
+
+class ReflectEpisodeSpy {
+  readonly invocations: Array<{ input: ReflectionEpisodeInput }> = [];
+  outcomes: ReflectionEpisodeResult[] = [
+    { status: "stored", effect: "helped", lessonId: "lesson-written", failure: null },
+  ];
+
+  reflect: ReflectEpisodeFunction = async (input) => {
+    this.invocations.push({ input });
+    return this.outcomes.shift() ?? {
+      status: "stored",
+      effect: "helped",
+      lessonId: `lesson-${this.invocations.length}`,
+      failure: null,
+    };
+  };
 }
 
 class LocateClientSpy implements LocateChatClient {
@@ -502,6 +548,262 @@ test("runTask feature-scoped path retries analyze rate limits without repeating 
     ["plates", "hits"],
     ["poles", "hits"],
   ]);
+});
+
+test("runTask feature-scoped training reflects one episode per hit after reveal without rollback or blind retry", async () => {
+  const memory = new MemoryReaderSpy();
+  const writer = new MemoryWriterSpy();
+  const client = new LocateClientSpy();
+  const reflect = new ReflectEpisodeSpy();
+  reflect.outcomes = [
+    { status: "stored", effect: "helped", lessonId: "lesson-first", failure: null },
+    {
+      status: "write_outcome_unknown",
+      effect: "misleading",
+      lessonId: null,
+      failure: "write_outcome_unknown",
+    },
+  ];
+
+  const result = await runTaskWithRuntime(
+    {
+      imageId: "image-reflect-training",
+      imagePath: "reflect-training.jpg",
+      attemptId: "attempt-reflect-training",
+      truth: { latitude: -30.03, longitude: -51.23, country: "BR" },
+    },
+    {
+      memory,
+      writer,
+      run,
+      reflectEpisode: reflect.reflect,
+      locate: locateWithHooks({
+        client,
+        imageDataUri: async () => "data:image/jpeg;base64,AA==",
+        observe: async () =>
+          observed({
+            poles: { state: "visible", text: "wooden poles" },
+          }),
+      }),
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(reflect.invocations.length, 2);
+  assert.deepEqual(
+    reflect.invocations.map(({ input }) => ({
+      attemptId: input.attemptId,
+      imagePath: input.imagePath,
+      feature: input.feature,
+      hitId: input.memoryHit.memoryHitId,
+      guess: input.guess,
+      truth: input.truth,
+      distanceKm: Math.round(input.distanceKm),
+    })),
+    result.memoryGroups[0]?.hits.map((hit) => ({
+      attemptId: "attempt-reflect-training",
+      imagePath: "reflect-training.jpg",
+      feature: { key: "poles", state: "visible", text: "wooden poles" },
+      hitId: hit.memoryHitId,
+      guess: result.ok
+        ? {
+            latitude: result.guess.latitude,
+            longitude: result.guess.longitude,
+            place: result.guess.place,
+            reasoning: result.guess.reasoning,
+          }
+        : assert.fail("expected ok result"),
+      truth: { latitude: -30.03, longitude: -51.23, country: "BR" },
+      distanceKm: 10320,
+    })),
+  );
+  assert.deepEqual(result.episodes, [
+    {
+      attemptId: "attempt-reflect-training",
+      featureKey: "poles",
+      memoryHitId: result.memoryGroups[0]?.hits[0]?.memoryHitId,
+      effect: "helped",
+      reflectionStatus: "stored",
+      lessonId: "lesson-first",
+    },
+    {
+      attemptId: "attempt-reflect-training",
+      featureKey: "poles",
+      memoryHitId: result.memoryGroups[0]?.hits[1]?.memoryHitId,
+      effect: "misleading",
+      reflectionStatus: "write_outcome_unknown",
+      lessonId: null,
+    },
+  ]);
+  assert.deepEqual(
+    result.trace?.events.map((event) => [event.phase, event.operation, event.featureKey, event.memoryHitId, event.status]),
+    [
+      ["retrieve", "memory_retrieve", "poles", null, "hits"],
+      ["reflect", "memory_store", "poles", result.memoryGroups[0]?.hits[0]?.memoryHitId, "stored"],
+      [
+        "reflect",
+        "memory_store",
+        "poles",
+        result.memoryGroups[0]?.hits[1]?.memoryHitId,
+        "write_outcome_unknown",
+      ],
+    ],
+  );
+  assert.deepEqual(writer.rememberInvocations, []);
+});
+
+test("runTask feature-scoped path skips reflection for no-hit, not-visible and failed retrieval outcomes", async () => {
+  const client = new LocateClientSpy();
+  client.missingAlwaysFor.add("plates");
+  const memory = new MemoryReaderSpy();
+  memory.emptyQueries.add("vegetation visual cue");
+  const writer = new MemoryWriterSpy();
+  const reflect = new ReflectEpisodeSpy();
+
+  const result = await runTaskWithRuntime(
+    {
+      imageId: "image-no-episode-reflection",
+      imagePath: "no-episode-reflection.jpg",
+      attemptId: "attempt-no-episode-reflection",
+      truth: { latitude: -30.03, longitude: -51.23, country: "BR" },
+    },
+    {
+      memory,
+      writer,
+      run,
+      reflectEpisode: reflect.reflect,
+      locate: locateWithHooks({
+        client,
+        imageDataUri: async () => "data:image/jpeg;base64,AA==",
+        observe: async () =>
+          observed({
+            plates: { state: "visible", text: "white rear plate" },
+            poles: { state: "not_visible", text: "" },
+            vegetation: { state: "visible", text: "dry scrub" },
+          }),
+      }),
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.memoryGroups.map((group) => [group.feature.key, group.status, group.hits.length]),
+    [
+      ["plates", "failed", 0],
+      ["vegetation", "no_hit", 0],
+    ],
+  );
+  assert.deepEqual(result.episodes, []);
+  assert.deepEqual(reflect.invocations, []);
+  assert.deepEqual(writer.rememberInvocations, []);
+});
+
+test("runTask feature-scoped reflection is training-only and memory bindings expose reader-only evaluation and production", async () => {
+  const locateResult = (input: { attemptId: string; imagePath: string }): LocateResult => {
+    const polesFeature: FeatureObservation = { key: "poles", state: "visible", text: "wooden poles" };
+    const hit = {
+      attemptId: input.attemptId,
+      featureKey: "poles" as const,
+      memoryHitId: makeMemoryHitId(input.attemptId, "poles", "lesson-source", "wooden poles", 0),
+      providerId: "lesson-source",
+      text: "wooden poles",
+      score: null,
+      effect: null,
+    };
+    const groups = [
+      {
+        attemptId: input.attemptId,
+        feature: polesFeature,
+        query: "wooden poles",
+        status: "hits" as const,
+        hits: [hit],
+        failure: null,
+      },
+    ];
+    return {
+      attemptId: input.attemptId,
+      guess: {
+        latitude: 1,
+        longitude: 2,
+        place: "Binding place",
+        confidence: 0.8,
+        reasoning: "Structured binding result.",
+        provider: "fake",
+      },
+      observations: [polesFeature],
+      memoryGroups: groups,
+      episodes: [],
+      trace: { attemptId: input.attemptId, groups, episodes: [], events: [] },
+    };
+  };
+  const locateSpy: LocateFunction = async (input) => locateResult(input);
+  const writer = new MemoryWriterSpy();
+
+  for (const scenario of [
+    { mode: "evaluation" as const, snapshotId: "snapshot", readOnly: true },
+    { mode: "production" as const, snapshotId: null, readOnly: true },
+  ]) {
+    const reflect = new ReflectEpisodeSpy();
+    const input: FeatureScopedTaskRuntimeInput = {
+      imageId: `image-${scenario.mode}`,
+      imagePath: `${scenario.mode}.jpg`,
+      attemptId: "attempt-binding",
+      truth: { latitude: 1, longitude: 2, country: "BR" },
+    };
+    const result = await runTaskWithRuntime(input, {
+      memory: writer,
+      writer,
+      run: { ...scenario, recallLimit: 5 },
+      locate: locateSpy,
+      reflectEpisode: reflect.reflect,
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.episodes, []);
+    assert.deepEqual(reflect.invocations, [], scenario.mode);
+  }
+
+  const evaluation = await resolveMemoryBinding({
+    mode: "evaluation",
+    snapshotId: "frozen-snapshot",
+    readOnly: true,
+    recallLimit: 5,
+  });
+  const production = await resolveMemoryBinding({
+    mode: "production",
+    snapshotId: null,
+    readOnly: true,
+    recallLimit: 5,
+  });
+  const training = await resolveMemoryBinding({
+    mode: "training",
+    snapshotId: null,
+    readOnly: false,
+    recallLimit: 5,
+  });
+
+  assert.equal(evaluation.mode, "evaluation");
+  assert.equal(Object.prototype.hasOwnProperty.call(evaluation, "writer"), false);
+  assert.equal("remember" in evaluation.reader, false);
+  assert.equal("restore" in evaluation.reader, false);
+  assert.equal(production.mode, "production");
+  assert.equal(Object.prototype.hasOwnProperty.call(production, "writer"), false);
+  assert.equal("remember" in production.reader, false);
+  assert.equal("restore" in production.reader, false);
+  assert.equal(training.mode, "training");
+  assert.equal(typeof training.writer.remember, "function");
+  await assert.rejects(
+    resolveMemoryBinding({ mode: "evaluation", snapshotId: "", readOnly: true, recallLimit: 5 }),
+    /evaluation memory requires/,
+  );
+  await assert.rejects(
+    resolveMemoryBinding({ mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 }),
+    /production memory requires/,
+  );
+  await assert.rejects(
+    resolveMemoryBinding({ mode: "training", snapshotId: "snapshot", readOnly: false, recallLimit: 5 }),
+    /training memory requires/,
+  );
 });
 
 test("runTask legacy path rejects a feature-scoped MemoryReader when deps.run is absent", async () => {

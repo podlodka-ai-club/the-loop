@@ -297,7 +297,7 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
   if (!isReflectionEffect(value.effect)) throw new MemoryToolValidationError("invalid_tool_arguments");
   if (typeof value.content !== "string") throw new MemoryToolValidationError("invalid_tool_arguments");
   const content = value.content.trim().replace(/\s+/g, " ");
-  if (content === "" || content.length > 2_000) {
+  if (content === "" || content.length > 2_000 || sentenceCount(content) > 2) {
     throw new MemoryToolValidationError("invalid_tool_arguments");
   }
   if (!Array.isArray(value.triggers) || value.triggers.length < 1 || value.triggers.length > 8) {
@@ -322,6 +322,11 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
     triggers,
     region: value.region,
   };
+}
+
+function sentenceCount(content: string): number {
+  const segments = content.match(/[^.!?]+(?:[.!?]+(?:\s+|$)|$)/g) ?? [];
+  return segments.map((segment) => segment.trim()).filter((segment) => segment !== "").length;
 }
 
 export function validateMemoryRunConfig(run: MemoryRunConfig): void {

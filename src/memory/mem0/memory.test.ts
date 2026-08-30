@@ -241,6 +241,67 @@ test("remember validates before calls and sends the exact scoped add payload", a
   ]);
 });
 
+test("remember prefixes non-helped content and duplicate idempotency returns existing id without another add", async () => {
+  const requests: unknown[] = [];
+  const invocations: string[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: async (request) => {
+        invocations.push("add");
+        requests.push(request);
+        return { eventId: "event-negative", status: "PENDING" };
+      },
+      getEvent: async (eventId) => {
+        invocations.push(`getEvent:${eventId}`);
+        return { eventId, status: "SUCCEEDED", memoryIds: ["memory-negative"] };
+      },
+      get: async (memoryId) => {
+        invocations.push(`get:${memoryId}`);
+        return { id: memoryId, memory: "stored", metadata: {} };
+      },
+    }),
+  );
+  const negative: LessonInput = {
+    ...lesson,
+    effect: "misleading",
+    content: "Single yellow center lines were too broad for this road type.",
+    idempotencyKey: "attempt-1:bollards_and_barriers:negative",
+  };
+
+  assert.deepEqual(await memory.remember(negative), {
+    status: "stored",
+    lessonId: "memory-negative",
+  });
+  assert.deepEqual(await memory.remember(negative), {
+    status: "already_stored",
+    lessonId: "memory-negative",
+  });
+  assert.deepEqual(invocations, ["add", "getEvent:event-negative", "get:memory-negative"]);
+  assert.deepEqual(requests, [
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: "[effect=misleading] Single yellow center lines were too broad for this road type.",
+        },
+      ],
+      agentId: "agent-1",
+      infer: true,
+      temporalReasoning: false,
+      agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
+      metadata: {
+        loci_source_attempt_id: negative.sourceAttemptId,
+        loci_triggers: negative.triggers,
+        loci_region: negative.region,
+        loci_feature_key: negative.featureKey,
+        loci_memory_hit_id: negative.memoryHitId,
+        loci_effect: "misleading",
+        loci_idempotency_key: negative.idempotencyKey,
+      },
+    },
+  ]);
+});
+
 test("remember rejects every malformed lesson before any platform call", async () => {
   const invocations: string[] = [];
   const memory = adapter(
@@ -266,6 +327,7 @@ test("remember rejects every malformed lesson before any platform call", async (
     { ...lesson, triggers: null },
     { ...lesson, triggers: ["valid", 1] },
     { ...lesson, region: null },
+    { ...lesson, memory_ref: "foreign" },
   ];
 
   for (const value of malformed) {
@@ -671,7 +733,11 @@ test("concurrent remembers execute FIFO and a first failure quarantines queued w
   });
   const memory = adapter(platform);
   const first = memory.remember({ ...lesson, sourceAttemptId: "first" });
-  const second = memory.remember({ ...lesson, sourceAttemptId: "second" });
+  const second = memory.remember({
+    ...lesson,
+    sourceAttemptId: "second",
+    idempotencyKey: "attempt-1:bollards_and_barriers:second",
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(starts, ["first"]);
   releaseFirst?.();
@@ -1110,6 +1176,49 @@ test("recall normalizes query, sends exact search policy, preserves order and sl
 
   assert.deepEqual(await asMemory.recall(["", "   "], 5), []);
   assert.equal(requests.length, 1);
+});
+
+test("recall preserves episode metadata and renders non-helped effect prefix exactly once", async () => {
+  const memory = adapter(
+    memoryPort({
+      search: async () => [
+        {
+          id: "memory-1",
+          memory: "Single yellow center lines were too broad.",
+          metadata: {
+            loci_feature_key: "road_markings",
+            loci_effect: "misleading",
+            loci_source_attempt_id: "attempt-1",
+            loci_memory_hit_id: "attempt-1/road_markings/hit",
+            loci_idempotency_key: "attempt-1:road_markings:hit",
+          },
+        },
+        {
+          id: "memory-2",
+          memory: "[effect=insufficient] Wooden poles alone were not enough.",
+          metadata: {
+            loci_feature_key: "poles",
+            loci_effect: "insufficient",
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(await memory.recall(["road cues"], 5), [
+    {
+      lessonId: "memory-1",
+      text: "[effect=misleading] Single yellow center lines were too broad.",
+      featureKey: "road_markings",
+      effect: "misleading",
+    },
+    {
+      lessonId: "memory-2",
+      text: "[effect=insufficient] Wooden poles alone were not enough.",
+      featureKey: "poles",
+      effect: "insufficient",
+    },
+  ]);
 });
 
 test("recall rejects malformed results and sanitizes provider failures", async () => {

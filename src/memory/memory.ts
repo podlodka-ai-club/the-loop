@@ -106,13 +106,22 @@ export function renderHint(lesson: Lesson): Hint;
 export function renderHint(lesson: LegacyLesson): Hint;
 export function renderHint(lesson: Lesson | LegacyLesson): Hint {
   const region = lesson.region.trim();
+  const content = renderedLessonContent(lesson);
   const hint: Hint = {
     lessonId: lesson.id,
-    text: region === "" ? lesson.content : `${region}: ${lesson.content}`,
+    text: region === "" ? content : `${region}: ${content}`,
   };
   if (lesson.featureKey !== undefined) hint.featureKey = lesson.featureKey;
   if (lesson.effect !== undefined) hint.effect = lesson.effect;
   return hint;
+}
+
+export function renderedLessonContent(
+  lesson: Pick<LegacyLesson, "content"> & Partial<Pick<Lesson, "effect">>,
+): string {
+  if (lesson.effect === undefined || lesson.effect === "helped") return lesson.content;
+  const prefix = `[effect=${lesson.effect}]`;
+  return lesson.content.startsWith(prefix) ? lesson.content : `${prefix} ${lesson.content}`;
 }
 
 export interface MemoryReader {
@@ -135,6 +144,17 @@ export interface MemoryReader {
 export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
   if (reader.featureScope !== "global") return reader;
   return reader.asFeatureScopedReader?.() ?? reader;
+}
+
+function readerOnly(memory: MemoryReader): MemoryReader {
+  const reader: MemoryReader =
+    memory.featureScope === undefined
+      ? { recall: (query, limit) => memory.recall(query, limit) }
+      : { featureScope: memory.featureScope, recall: (query, limit) => memory.recall(query, limit) };
+  if (memory.asFeatureScopedReader !== undefined) {
+    reader.asFeatureScopedReader = () => readerOnly(memory.asFeatureScopedReader?.() ?? memory);
+  }
+  return reader;
 }
 
 export interface MemoryWriter extends MemoryReader {
@@ -233,7 +253,7 @@ export async function resolveMemoryBinding(config: {
     }
     return {
       mode: "evaluation",
-      reader: new InMemoryMemory(),
+      reader: readerOnly(new InMemoryMemory()),
       snapshotId: config.snapshotId,
       readOnly: true,
     };
@@ -242,7 +262,7 @@ export async function resolveMemoryBinding(config: {
     if (config.readOnly !== true) throw new Error("production memory requires readOnly=true");
     return {
       mode: "production",
-      reader: new InMemoryMemory(),
+      reader: readerOnly(new InMemoryMemory()),
       snapshotId: config.snapshotId,
       readOnly: true,
     };

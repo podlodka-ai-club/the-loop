@@ -94,6 +94,10 @@ test("remember stores episode provenance and duplicate idempotency returns exist
 
   assert.deepEqual(await sut.remember(input), { status: "stored", lessonId: "lesson-0001" });
   assert.deepEqual(await sut.remember(input), { status: "already_stored", lessonId: "lesson-0001" });
+  assert.deepEqual(await new FileMemory(path).remember(input), {
+    status: "already_stored",
+    lessonId: "lesson-0001",
+  });
   assert.deepEqual(await readLessons(path), [{ id: "lesson-0001", ...input, hits: 0, wins: 0 }]);
   assert.deepEqual(await sut.recall(["wooden crossarms"], 1), [
     {
@@ -101,6 +105,52 @@ test("remember stores episode provenance and duplicate idempotency returns exist
       text: "BR: Wooden crossarms helped separate the region.",
       featureKey: "poles",
       effect: "helped",
+    },
+  ]);
+});
+
+test("recall rendering keeps non-helped effects visible in text and metadata", async () => {
+  const { sut, path } = makeSUT({ mode: "top" });
+  const misleading: LessonInput = {
+    content: "Single yellow center lines were too broad for this road type.",
+    sourceAttemptId: "attempt-negative",
+    featureKey: "road_markings",
+    memoryHitId: "attempt-negative/road_markings/hit",
+    effect: "misleading",
+    triggers: ["single yellow center lines"],
+    region: "BR",
+    idempotencyKey: "attempt-negative:road_markings:hit",
+  };
+  const insufficient: LessonInput = {
+    ...misleading,
+    content: "[effect=insufficient] Wooden poles alone were not enough.",
+    memoryHitId: "attempt-negative/poles/hit",
+    featureKey: "poles",
+    effect: "insufficient",
+    triggers: ["wooden poles"],
+    idempotencyKey: "attempt-negative:poles:hit",
+  };
+  await sut.remember(misleading);
+  await sut.remember(insufficient);
+
+  assert.deepEqual(await readLessons(path), [
+    { id: "lesson-0001", ...misleading, hits: 0, wins: 0 },
+    { id: "lesson-0002", ...insufficient, hits: 0, wins: 0 },
+  ]);
+  assert.deepEqual(await sut.recall(["yellow"], 2), [
+    {
+      lessonId: "lesson-0001",
+      text: "BR: [effect=misleading] Single yellow center lines were too broad for this road type.",
+      featureKey: "road_markings",
+      effect: "misleading",
+    },
+  ]);
+  assert.deepEqual(await sut.recall(["wooden poles"], 2), [
+    {
+      lessonId: "lesson-0002",
+      text: "BR: [effect=insufficient] Wooden poles alone were not enough.",
+      featureKey: "poles",
+      effect: "insufficient",
     },
   ]);
 });

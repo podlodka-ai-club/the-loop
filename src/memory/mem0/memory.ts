@@ -5,6 +5,7 @@ import { FEATURE_KEYS } from "../../observe.ts";
 import type { FeatureKey } from "../../observe.ts";
 import {
   MemoryWriteError,
+  renderedLessonContent,
   type Hint,
   type LegacyLessonInput,
   type LegacyMemory,
@@ -193,6 +194,7 @@ export class Mem0Memory implements Memory, LegacyMemory {
   private readonly dependencies: ResolvedDependencies;
   private quarantined = false;
   private rememberTail: Promise<void> = Promise.resolve();
+  private readonly lessonIdsByIdempotencyKey = new Map<string, string>();
 
   constructor(config: Mem0MemoryConfig, dependencies: Mem0MemoryDependencies = {}) {
     this.config = validateConfig(config);
@@ -266,9 +268,10 @@ export class Mem0Memory implements Memory, LegacyMemory {
       }
       const featureKey = readFeatureKey(record.metadata.loci_feature_key);
       const effect = readEffect(record.metadata.loci_effect);
+      const memory = renderedLessonContent({ content: record.memory, ...(effect === undefined ? {} : { effect }) });
       return {
         lessonId: record.id,
-        text: record.memory,
+        text: memory,
         ...(featureKey === undefined ? {} : { featureKey }),
         ...(effect === undefined ? {} : { effect }),
       };
@@ -293,9 +296,15 @@ export class Mem0Memory implements Memory, LegacyMemory {
   private async rememberOne(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
     this.assertUsable();
     this.validateLesson(lesson);
+    if (lesson.idempotencyKey !== undefined) {
+      const existing = this.lessonIdsByIdempotencyKey.get(lesson.idempotencyKey);
+      if (existing !== undefined) {
+        return { status: "already_stored", lessonId: existing };
+      }
+    }
 
     const request = {
-      messages: [{ role: "assistant" as const, content: lesson.content }],
+      messages: [{ role: "assistant" as const, content: renderedLessonContent(lesson) }],
       agentId: this.config.agentId,
       infer: true as const,
       temporalReasoning: false as const,
@@ -327,7 +336,11 @@ export class Mem0Memory implements Memory, LegacyMemory {
     const memoryIds = await this.waitForTerminalEvent(eventId, deadline);
     await this.waitForVisibility(memoryIds, eventId, deadline);
     this.notifyRememberCompleted(lesson.sourceAttemptId, memoryIds);
-    return { status: "stored", lessonId: memoryIds[0] ?? `mem0-event:${eventId}` };
+    const lessonId = memoryIds[0] ?? `mem0-event:${eventId}`;
+    if (lesson.idempotencyKey !== undefined) {
+      this.lessonIdsByIdempotencyKey.set(lesson.idempotencyKey, lessonId);
+    }
+    return { status: "stored", lessonId };
   }
 
   private validateLesson(lesson: LessonInput | LegacyLessonInput): void {
@@ -339,7 +352,8 @@ export class Mem0Memory implements Memory, LegacyMemory {
       lesson.sourceAttemptId.trim() === "" ||
       !Array.isArray(lesson.triggers) ||
       lesson.triggers.some((trigger) => typeof trigger !== "string") ||
-      typeof lesson.region !== "string"
+      typeof lesson.region !== "string" ||
+      Object.prototype.hasOwnProperty.call(lesson, "memory_ref")
     ) {
       throw sanitizedError("invalid_input");
     }

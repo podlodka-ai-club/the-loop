@@ -1331,6 +1331,7 @@ test("store dispatcher rejects bounded payload violations before writing", async
   const scenarios: unknown[] = [
     { ...validStoreArgs, content: "" },
     { ...validStoreArgs, content: "x".repeat(2_001) },
+    { ...validStoreArgs, content: "One. Two. Three." },
     { ...validStoreArgs, triggers: [] },
     { ...validStoreArgs, triggers: Array.from({ length: 9 }, (_value, index) => `trigger ${index}`) },
     { ...validStoreArgs, triggers: [" "] },

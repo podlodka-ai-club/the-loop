@@ -1,0 +1,304 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import OpenAI from "openai";
+import { reflectEpisodeWithRuntime, type ReflectRuntimeChatClient } from "./reflect-runtime.internal.ts";
+import type { ReflectionEpisodeInput } from "./reflect.ts";
+import type { FeatureObservation } from "./observe.ts";
+import type {
+  Hint,
+  LessonInput,
+  MemoryWriteResult,
+  MemoryWriter,
+} from "./memory/memory.ts";
+import {
+  makeIdempotencyKey,
+  makeMemoryHitId,
+  type MemoryHit,
+  type MemoryRunConfig,
+  type ReflectionEffect,
+} from "./tools/memory.ts";
+
+const run: MemoryRunConfig = {
+  mode: "training",
+  snapshotId: null,
+  readOnly: false,
+  recallLimit: 5,
+};
+
+const feature: FeatureObservation = {
+  key: "road_markings",
+  state: "visible",
+  text: "single yellow center line on a rural road",
+};
+
+const memoryHitId = makeMemoryHitId(
+  "attempt-reflect",
+  "road_markings",
+  "lesson-source",
+  "Single yellow center lines can be broad in South America.",
+  0,
+);
+
+const memoryHit: MemoryHit = {
+  attemptId: "attempt-reflect",
+  featureKey: "road_markings",
+  memoryHitId,
+  providerId: "lesson-source",
+  text: "Single yellow center lines can be broad in South America.",
+  score: 2,
+  effect: "insufficient",
+};
+
+class WriterSpy implements MemoryWriter {
+  readonly invocations: Array<{ type: "remember"; lesson: LessonInput }> = [];
+  result: MemoryWriteResult = { status: "stored", lessonId: "lesson-written" };
+
+  async recall(): Promise<Hint[]> {
+    return [];
+  }
+
+  async remember(lesson: LessonInput): Promise<MemoryWriteResult> {
+    this.invocations.push({ type: "remember", lesson });
+    return this.result;
+  }
+
+  async snapshot(): Promise<string> {
+    return "snapshot";
+  }
+
+  async restore(): Promise<void> {}
+}
+
+class ReflectClientSpy implements ReflectRuntimeChatClient {
+  readonly invocations: OpenAI.ChatCompletionCreateParamsNonStreaming[] = [];
+  toolCalls: unknown[] = [toolCall({ effect: "misleading" })];
+
+  chat = {
+    completions: {
+      create: async (
+        params: OpenAI.ChatCompletionCreateParamsNonStreaming,
+      ): Promise<{ choices: Array<{ message: { tool_calls?: unknown[] } }> }> => {
+        this.invocations.push(params);
+        return { choices: [{ message: { tool_calls: this.toolCalls } }] };
+      },
+    },
+  };
+}
+
+function makeInput(overrides: Partial<ReflectionEpisodeInput> = {}): ReflectionEpisodeInput {
+  return {
+    attemptId: "attempt-reflect",
+    imagePath: "image-reflect.jpg",
+    feature,
+    memoryHit,
+    guess: {
+      latitude: -23.55,
+      longitude: -46.63,
+      place: "Sao Paulo, Brazil",
+      reasoning: "The road markings looked broadly Brazilian.",
+    },
+    truth: {
+      latitude: -30.03,
+      longitude: -51.23,
+      country: "BR",
+    },
+    distanceKm: 842.25,
+    ...overrides,
+  };
+}
+
+function toolCall(overrides: Partial<{
+  feature_key: string;
+  memory_hit_id: string;
+  effect: ReflectionEffect | "unknown";
+  content: string;
+  triggers: string[];
+  region: string;
+}> = {}): unknown {
+  return {
+    id: "call-store",
+    type: "function",
+    function: {
+      name: "memory_store",
+      arguments: JSON.stringify({
+        feature_key: "road_markings",
+        memory_hit_id: memoryHitId,
+        effect: "helped",
+        content: "The single yellow center line matched the revealed Brazilian road. It should stay a weak cue unless poles agree.",
+        triggers: ["single yellow center line", "rural road"],
+        region: "BR",
+        ...overrides,
+      }),
+    },
+  };
+}
+
+function textPart(request: OpenAI.ChatCompletionCreateParamsNonStreaming): string {
+  const content = request.messages[0]?.content;
+  assert.ok(Array.isArray(content));
+  const part = content.find((item) => typeof item === "object" && item !== null && "text" in item) as
+    | { text?: unknown }
+    | undefined;
+  if (typeof part?.text !== "string") assert.fail("expected prompt text");
+  return part.text;
+}
+
+test("reflectEpisode sends one feature and one memory hit with guess, truth, distance and image", async () => {
+  const writer = new WriterSpy();
+  const client = new ReflectClientSpy();
+
+  const result = await reflectEpisodeWithRuntime(makeInput(), {
+    writer,
+    run,
+    client,
+    imageDataUri: async (imagePath) => `data:image/jpeg;base64,${imagePath}`,
+  });
+
+  assert.deepEqual(result, {
+    status: "stored",
+    effect: "misleading",
+    lessonId: "lesson-written",
+    failure: null,
+  });
+  assert.equal(client.invocations.length, 1);
+  const request = client.invocations[0];
+  assert.ok(request);
+  assert.deepEqual(
+    request.tools?.map((tool) => (tool.type === "function" ? tool.function.name : "custom")),
+    ["memory_store"],
+  );
+  assert.deepEqual(request.tool_choice, { type: "function", function: { name: "memory_store" } });
+  assert.equal(request.parallel_tool_calls, false);
+  const tool = request.tools?.[0];
+  if (tool?.type !== "function") assert.fail("expected function tool");
+  assert.deepEqual(
+    (tool?.function.parameters as { properties?: { feature_key?: { enum?: string[] } } }).properties
+      ?.feature_key?.enum,
+    ["road_markings"],
+  );
+  const prompt = textPart(request);
+  assert.equal(prompt.includes(JSON.stringify(feature)), true);
+  assert.equal(prompt.includes(memoryHitId), true);
+  assert.equal(prompt.includes(memoryHit.text), true);
+  assert.equal(prompt.includes("Sao Paulo, Brazil"), true);
+  assert.equal(prompt.includes("\"country\":\"BR\""), true);
+  assert.equal(prompt.includes("842.250"), true);
+  assert.equal(JSON.stringify(request.messages).includes("data:image/jpeg;base64,image-reflect.jpg"), true);
+});
+
+test("reflectEpisode accepts all effect values and writes app-owned provenance", async () => {
+  const effects: ReflectionEffect[] = ["helped", "irrelevant", "misleading", "insufficient"];
+
+  for (const effect of effects) {
+    const writer = new WriterSpy();
+    const client = new ReflectClientSpy();
+    client.toolCalls = [toolCall({ effect })];
+
+    const result = await reflectEpisodeWithRuntime(makeInput(), {
+      writer,
+      run,
+      client,
+      imageDataUri: async () => "data:image/jpeg;base64,AA==",
+    });
+
+    assert.deepEqual(result, { status: "stored", effect, lessonId: "lesson-written", failure: null });
+    assert.deepEqual(writer.invocations, [
+      {
+        type: "remember",
+        lesson: {
+          content: "The single yellow center line matched the revealed Brazilian road. It should stay a weak cue unless poles agree.",
+          sourceAttemptId: "attempt-reflect",
+          featureKey: "road_markings",
+          memoryHitId,
+          effect,
+          triggers: ["single yellow center line", "rural road"],
+          region: "BR",
+          idempotencyKey: makeIdempotencyKey("attempt-reflect", "road_markings", memoryHitId),
+        },
+      },
+    ]);
+  }
+});
+
+test("reflectEpisode keeps reflection failure distinct from write failure and enforces bounds", async () => {
+  const malformedScenarios: Array<{ name: string; toolCalls: unknown[]; failure: string }> = [
+    { name: "missing", toolCalls: [], failure: "missing_tool_call" },
+    { name: "multiple", toolCalls: [toolCall(), toolCall()], failure: "multiple_tool_calls" },
+    {
+      name: "malformed json",
+      toolCalls: [{ function: { name: "memory_store", arguments: "{bad-json}" } }],
+      failure: "malformed_tool_json",
+    },
+    {
+      name: "three sentences",
+      toolCalls: [toolCall({ content: "One. Two. Three." })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "bad region",
+      toolCalls: [toolCall({ region: "Brazil" })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "bad trigger",
+      toolCalls: [toolCall({ triggers: ["x".repeat(129)] })],
+      failure: "invalid_tool_arguments",
+    },
+  ];
+
+  for (const scenario of malformedScenarios) {
+    const writer = new WriterSpy();
+    const client = new ReflectClientSpy();
+    client.toolCalls = scenario.toolCalls;
+    const result = await reflectEpisodeWithRuntime(makeInput(), {
+      writer,
+      run,
+      client,
+      imageDataUri: async () => "data:image/jpeg;base64,AA==",
+    });
+    assert.deepEqual(
+      result,
+      { status: "reflection_failed", effect: null, lessonId: null, failure: scenario.failure },
+      scenario.name,
+    );
+    assert.deepEqual(writer.invocations, [], scenario.name);
+  }
+});
+
+test("reflectEpisode rejects foreign hits before model and returns writer outcomes without blind retry", async () => {
+  const foreignClient = new ReflectClientSpy();
+  const foreignWriter = new WriterSpy();
+  const foreign = await reflectEpisodeWithRuntime(
+    makeInput({ memoryHit: { ...memoryHit, attemptId: "foreign-attempt" } }),
+    {
+      writer: foreignWriter,
+      run,
+      client: foreignClient,
+      imageDataUri: async () => "data:image/jpeg;base64,AA==",
+    },
+  );
+
+  assert.deepEqual(foreign, {
+    status: "reflection_failed",
+    effect: null,
+    lessonId: null,
+    failure: "foreign_hit",
+  });
+  assert.deepEqual(foreignClient.invocations, []);
+  assert.deepEqual(foreignWriter.invocations, []);
+
+  const duplicateWriter = new WriterSpy();
+  duplicateWriter.result = { status: "already_stored", lessonId: "existing-lesson" };
+  const duplicateClient = new ReflectClientSpy();
+  duplicateClient.toolCalls = [toolCall({ effect: "irrelevant" })];
+  assert.deepEqual(
+    await reflectEpisodeWithRuntime(makeInput(), {
+      writer: duplicateWriter,
+      run,
+      client: duplicateClient,
+      imageDataUri: async () => "data:image/jpeg;base64,AA==",
+    }),
+    { status: "already_stored", effect: "irrelevant", lessonId: "existing-lesson", failure: null },
+  );
+  assert.equal(duplicateWriter.invocations.length, 1);
+});

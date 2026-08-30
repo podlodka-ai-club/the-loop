@@ -1,10 +1,16 @@
 import { UnparseableOutputError } from "./agent.ts";
 import type { Guess } from "./agent.ts";
+import { haversineKm } from "./geo.ts";
 import { locate } from "./locate.ts";
 import type { LocateDeps } from "./locate.ts";
 import { readLocatePartialResult } from "./locate-partial.internal.ts";
 import { NullMemory } from "./memory/null/memory.ts";
-import type { Hint } from "./memory/memory.ts";
+import type { Hint, MemoryWriter } from "./memory/memory.ts";
+import { reflectEpisode } from "./reflect.ts";
+import type {
+  ReflectionEpisodeInput,
+  ReflectionEpisodeResult,
+} from "./reflect.ts";
 import type {
   ExampleInput,
   FeatureScopedTaskDeps,
@@ -14,15 +20,29 @@ import type {
 import type {
   FeatureMemoryGroup,
   LocateResult,
+  MemoryHit,
+  ToolEvent,
 } from "./tools/memory.ts";
+import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
 
 export type LocateFunction = (
   input: { attemptId: string; imagePath: string },
   deps: LocateDeps,
 ) => Promise<LocateResult>;
 
+export type FeatureScopedTaskRuntimeInput = ExampleInput & {
+  truth?: { latitude: number; longitude: number; country: string };
+};
+
+export type ReflectEpisodeFunction = (
+  input: ReflectionEpisodeInput,
+  deps: { writer: MemoryWriter; run: FeatureScopedTaskDeps["run"] },
+) => Promise<ReflectionEpisodeResult>;
+
 export type FeatureScopedTaskRuntimeDeps = FeatureScopedTaskDeps & {
   locate?: LocateFunction;
+  writer?: MemoryWriter;
+  reflectEpisode?: ReflectEpisodeFunction;
 };
 
 function estimateHintTokens(hints: readonly Hint[]): number {
@@ -77,8 +97,97 @@ function memoryUseFromLocate(
   };
 }
 
+function shouldReflect(
+  input: FeatureScopedTaskRuntimeInput,
+  deps: FeatureScopedTaskRuntimeDeps,
+): input is FeatureScopedTaskRuntimeInput & {
+  truth: { latitude: number; longitude: number; country: string };
+} {
+  return (
+    deps.run.mode === "training" &&
+    deps.run.readOnly === false &&
+    deps.writer !== undefined &&
+    input.truth !== undefined
+  );
+}
+
+function reflectionEvent(
+  attemptId: string,
+  hit: MemoryHit,
+  result: ReflectionEpisodeResult,
+  sequence: number,
+): ToolEvent {
+  return {
+    attemptId,
+    phase: "reflect",
+    operation: "memory_store",
+    featureKey: hit.featureKey,
+    memoryHitId: hit.memoryHitId,
+    status: result.status === "reflection_failed" ? result.failure : result.status,
+    sequence,
+  };
+}
+
+async function reflectEpisodesAfterReveal(
+  input: FeatureScopedTaskRuntimeInput & {
+    truth: { latitude: number; longitude: number; country: string };
+  },
+  result: LocateResult,
+  deps: FeatureScopedTaskRuntimeDeps & { writer: MemoryWriter },
+): Promise<void> {
+  const reflect = deps.reflectEpisode ?? reflectEpisode;
+  let sequence = result.trace.events.length;
+  const candidates = new Set(
+    episodeCandidatesFromGroups(result.attemptId, result.memoryGroups).map(
+      (candidate) => `${candidate.featureKey}\0${candidate.memoryHitId}`,
+    ),
+  );
+  const distanceKm = haversineKm(result.guess, {
+    latitude: input.truth.latitude,
+    longitude: input.truth.longitude,
+  });
+  for (const group of result.memoryGroups) {
+    if (group.status !== "hits") continue;
+    for (const hit of group.hits) {
+      if (!candidates.has(`${hit.featureKey}\0${hit.memoryHitId}`)) continue;
+      const reflection = await reflect(
+        {
+          attemptId: result.attemptId,
+          imagePath: input.imagePath,
+          feature: group.feature,
+          memoryHit: hit,
+          guess: {
+            latitude: result.guess.latitude,
+            longitude: result.guess.longitude,
+            place: result.guess.place,
+            reasoning: result.guess.reasoning,
+          },
+          truth: input.truth,
+          distanceKm,
+        },
+        { writer: deps.writer, run: deps.run },
+      ).catch((): ReflectionEpisodeResult => ({
+        status: "reflection_failed",
+        effect: null,
+        lessonId: null,
+        failure: "invalid_tool_arguments",
+      }));
+      result.episodes.push({
+        attemptId: result.attemptId,
+        featureKey: hit.featureKey,
+        memoryHitId: hit.memoryHitId,
+        effect: reflection.effect,
+        reflectionStatus: reflection.status,
+        lessonId: reflection.lessonId,
+      });
+      sequence += 1;
+      result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence));
+    }
+  }
+}
+
 export async function runFeatureScopedTask(
-  input: ExampleInput,
+  input: FeatureScopedTaskRuntimeInput,
   deps: FeatureScopedTaskRuntimeDeps,
 ): Promise<TaskResult> {
   try {
@@ -90,6 +199,9 @@ export async function runFeatureScopedTask(
         run: deps.run,
       },
     );
+    if (shouldReflect(input, deps)) {
+      await reflectEpisodesAfterReveal(input, result, deps as FeatureScopedTaskRuntimeDeps & { writer: MemoryWriter });
+    }
     const use = memoryUseFromLocate(result);
     return { ok: true, guess: result.guess as Guess, ...use };
   } catch (error) {
