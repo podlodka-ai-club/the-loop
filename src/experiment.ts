@@ -38,6 +38,11 @@ const label = flag("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
 // with extra steps, and the held-out numbers stop meaning anything.
 const snapshotId = flag("snapshot", "");
 const recallMode = parseRecallMode(flag("recall", "all"));
+
+// Two-step costs a second vision call per item. It is pointless without memory, and
+// mandatory with a ranked or query-based backend, which has nothing to rank on
+// otherwise.
+const twoStep = process.argv.includes("--two-step");
 const memory: Memory =
   snapshotId === "" ? new NullMemory() : new FrozenMemory(snapshotId, recallMode);
 
@@ -79,7 +84,8 @@ console.log(
     `strata=${sample.strata} seed=${sample.seed} fp=${sample.fingerprint}`,
 );
 console.log(
-  `memory  ${snapshotId === "" ? "off (baseline)" : `snapshot ${snapshotId}, recall ${recallMode}`}`,
+  `memory  ${snapshotId === "" ? "off (baseline)" : `snapshot ${snapshotId}, recall ${recallMode}`}` +
+    `${twoStep ? ", two-step (observe then guess)" : ""}`,
 );
 
 const datasetName = `osv5m-${seed}-n${sample.rows.length}-${sample.fingerprint}`;
@@ -132,9 +138,10 @@ const experiment = await runExperiment({
     sampleSize: sample.rows.length,
     memorySnapshot: snapshotId === "" ? "none" : snapshotId,
     recallMode: snapshotId === "" ? "off" : recallMode,
+    twoStep,
     recallLimit: RECALL_LIMIT,
   },
-  task: (example) => runTask(example.input as ExampleInput, { memory }),
+  task: (example) => runTask(example.input as ExampleInput, { memory, twoStep }),
   evaluators: geoEvaluators,
   concurrency,
 });
@@ -192,10 +199,15 @@ for (const name of [
   "suspected_leak",
   "hints_in_prompt",
   "hint_tokens",
+  "features_observed",
 ]) {
   const values = scoresByMetric.get(name) ?? [];
   const value = mean(values);
-  const asCount = name === "geoscore" || name === "hints_in_prompt" || name === "hint_tokens";
+  const asCount =
+    name === "geoscore" ||
+    name === "hints_in_prompt" ||
+    name === "hint_tokens" ||
+    name === "features_observed";
   const shown = asCount ? value.toFixed(1) : `${(value * 100).toFixed(1)}%`;
   console.log(`${name.padEnd(21)} ${String(values.length).padStart(4)}   ${shown}`);
 }
