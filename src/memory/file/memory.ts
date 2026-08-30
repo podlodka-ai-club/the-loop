@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { RECALL_LIMIT } from "../memory.ts";
+import { RECALL_LIMIT, renderHint } from "../memory.ts";
 import type { Hint, Lesson, LessonInput, Memory } from "../memory.ts";
 
 export const MEMORY_DIR = process.env.MEMORY_DIR ?? join("data", "memory");
@@ -93,7 +93,7 @@ export class FileMemory implements Memory {
     if (this.mode === "all") {
       const every = lessons.slice().sort((a, b) => (a.id < b.id ? -1 : 1));
       await this.countHits(every.map((lesson) => lesson.id));
-      return every.map((lesson) => ({ lessonId: lesson.id, text: lesson.content }));
+      return every.map(renderHint);
     }
 
     const query = tokenize(features);
@@ -110,7 +110,7 @@ export class FileMemory implements Memory {
         .sort((a, b) => b.hits - a.hits || (a.id < b.id ? -1 : 1))
         .slice(0, limit);
       await this.countHits(prior.map((lesson) => lesson.id));
-      return prior.map((lesson) => ({ lessonId: lesson.id, text: lesson.content }));
+      return prior.map(renderHint);
     }
 
     const ranked = lessons
@@ -128,7 +128,7 @@ export class FileMemory implements Memory {
     if (ranked.length > 0) {
       await this.countHits(ranked.map((entry) => entry.lesson.id));
     }
-    return ranked.map(({ lesson }) => ({ lessonId: lesson.id, text: lesson.content }));
+    return ranked.map(({ lesson }) => renderHint(lesson));
   }
 
   async remember(input: LessonInput): Promise<void> {

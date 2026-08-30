@@ -80,10 +80,29 @@ function manifestQuotas(evalRows: readonly Row[], total: number): Map<string, nu
 
 const matchManifest = !process.argv.includes("--no-match-manifest");
 
+/**
+ * Restrict the draw to these countries, keeping their manifest quotas.
+ *
+ * Used to top up a store after a run came up short: the local shard holds only part
+ * of the split, so some quotas cannot be filled until more images are unpacked.
+ * Re-running the whole stream to add the missing few would pay for every attempt
+ * again.
+ */
+const onlyCountries = new Set(
+  flag("only", "")
+    .split(",")
+    .map((code) => code.trim().toUpperCase())
+    .filter((code) => code !== ""),
+);
+
 let sample: ReturnType<typeof drawSample>;
 if (matchManifest) {
   const evalRows = pool.filter((row) => evalIds.has(row.id));
-  const quotas = manifestQuotas(evalRows, limit);
+  const allQuotas = manifestQuotas(evalRows, limit);
+  const quotas =
+    onlyCountries.size === 0
+      ? allQuotas
+      : new Map([...allQuotas].filter(([country]) => onlyCountries.has(country)));
   const picked: Row[] = [];
   const shortfalls: string[] = [];
   for (const [country, quota] of [...quotas].sort(([a], [b]) => (a < b ? -1 : 1))) {

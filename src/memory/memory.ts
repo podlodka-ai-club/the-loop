@@ -39,6 +39,24 @@ export type Hint = {
   text: string;
 };
 
+/**
+ * How a lesson is rendered into the prompt.
+ *
+ * The region is stated explicitly rather than left to the prose. Lessons routinely
+ * describe places by sub-national names - "the Eastern Cape", "the South Island" -
+ * so a shuffled-memory control that rewrites country names in the text leaves those
+ * untouched and produces a control whose prompt is identical to the real run. Making
+ * the attribution part of the hint means swapping it always changes what the model
+ * reads. Shared by every adapter so the two runs stay comparable across backends.
+ */
+export function renderHint(lesson: Lesson): Hint {
+  const region = lesson.region.trim();
+  return {
+    lessonId: lesson.id,
+    text: region === "" ? lesson.content : `${region}: ${lesson.content}`,
+  };
+}
+
 export interface Memory {
   /** Lessons worth showing, most relevant first. Never throws on an empty store. */
   recall(features: string[], limit: number): Promise<Hint[]>;

@@ -22,7 +22,8 @@
     "xmemory:pilot": "node --env-file-if-exists=.env src/memory/xmemory/pilot.ts",
     "xmemory:pilot:finalize": "node src/memory/xmemory/pilot-finalize.ts",
     "typecheck": "tsc --noEmit",
-    "train": "node --env-file-if-exists=.env src/train.ts"
+    "train": "node --env-file-if-exists=.env src/train.ts",
+    "shuffle-memory": "node --env-file-if-exists=.env src/shuffle-memory.ts"
   },
   "dependencies": {
     "@arizeai/openinference-instrumentation-openai": "4.1.9",
