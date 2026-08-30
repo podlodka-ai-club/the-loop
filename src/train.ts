@@ -29,6 +29,7 @@ const limit = Number(flag("limit", "30"));
 const snapshotEvery = Number(flag("snapshot-every", "10"));
 const seed = flag("seed", "train-v1");
 const recallMode = parseRecallMode(flag("recall", "all"));
+const twoStep = process.argv.includes("--two-step");
 
 const { rows: pool } = await loadRows();
 const manifest = await readManifest(flag("manifest", DEFAULT_MANIFEST));
@@ -144,6 +145,7 @@ for (const [index, row] of sample.rows.entries()) {
 
   const result = await runTask(input, {
     memory,
+    twoStep,
     learn: async (guess) => {
       const distanceKm = haversineKm(guess, {
         latitude: row.latitude,

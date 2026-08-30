@@ -15,10 +15,9 @@ import { runExperiment } from "@arizeai/phoenix-client/experiments";
 import { MODEL } from "./agent.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
-import { NullMemory } from "./memory/null/memory.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
-import { FrozenMemory, parseRecallMode } from "./memory/file/memory.ts";
-import type { Memory } from "./memory/memory.ts";
+import { parseRecallMode } from "./memory/file/memory.ts";
+import { parseBackend, selectMemory } from "./memory/select.ts";
 import { fingerprintOf, loadRows } from "./osv5m.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
@@ -38,8 +37,14 @@ const label = flag("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
 // with extra steps, and the held-out numbers stop meaning anything.
 const snapshotId = flag("snapshot", "");
 const recallMode = parseRecallMode(flag("recall", "all"));
-const memory: Memory =
-  snapshotId === "" ? new NullMemory() : new FrozenMemory(snapshotId, recallMode);
+
+// Two-step costs a second vision call per item. It is pointless without memory, and
+// mandatory with a ranked or query-based backend, which has nothing to rank on
+// otherwise.
+const twoStep = process.argv.includes("--two-step");
+const backend = parseBackend(flag("backend", "file"));
+const selection = selectMemory({ backend, snapshotId, recall: flag("recall", "all") });
+const memory = selection.memory;
 
 // The sample is read from a file in the repository, never drawn afresh. `loadRows`
 // sees only the image shards this machine holds, so a fresh draw would silently
@@ -79,7 +84,8 @@ console.log(
     `strata=${sample.strata} seed=${sample.seed} fp=${sample.fingerprint}`,
 );
 console.log(
-  `memory  ${snapshotId === "" ? "off (baseline)" : `snapshot ${snapshotId}, recall ${recallMode}`}`,
+  `memory  ${selection.describe}${twoStep ? ", two-step (observe then guess)" : ""}` +
+    `${selection.frozen ? "" : " [not frozen: reproducible only by convention]"}`,
 );
 
 const datasetName = `osv5m-${seed}-n${sample.rows.length}-${sample.fingerprint}`;
@@ -130,11 +136,14 @@ const experiment = await runExperiment({
     seed,
     fingerprint: sample.fingerprint,
     sampleSize: sample.rows.length,
+    memoryBackend: backend,
     memorySnapshot: snapshotId === "" ? "none" : snapshotId,
+    memoryFrozen: selection.frozen,
     recallMode: snapshotId === "" ? "off" : recallMode,
+    twoStep,
     recallLimit: RECALL_LIMIT,
   },
-  task: (example) => runTask(example.input as ExampleInput, { memory }),
+  task: (example) => runTask(example.input as ExampleInput, { memory, twoStep }),
   evaluators: geoEvaluators,
   concurrency,
 });
@@ -192,10 +201,15 @@ for (const name of [
   "suspected_leak",
   "hints_in_prompt",
   "hint_tokens",
+  "features_observed",
 ]) {
   const values = scoresByMetric.get(name) ?? [];
   const value = mean(values);
-  const asCount = name === "geoscore" || name === "hints_in_prompt" || name === "hint_tokens";
+  const asCount =
+    name === "geoscore" ||
+    name === "hints_in_prompt" ||
+    name === "hint_tokens" ||
+    name === "features_observed";
   const shown = asCount ? value.toFixed(1) : `${(value * 100).toFixed(1)}%`;
   console.log(`${name.padEnd(21)} ${String(values.length).padStart(4)}   ${shown}`);
 }
