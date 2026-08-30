@@ -6,10 +6,19 @@
  */
 import { UnparseableOutputError, geolocate } from "./agent.ts";
 import type { Guess } from "./agent.ts";
+import type { LocateDeps } from "./locate.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import { observe } from "./observe.ts";
+import type { FeatureObservation } from "./observe.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
-import type { Hint, LegacyMemory } from "./memory/memory.ts";
+import type { Hint, LegacyMemory, MemoryReader } from "./memory/memory.ts";
+import { runFeatureScopedTask } from "./task-feature-scoped.internal.ts";
+import type {
+  AttemptTrace,
+  EpisodeTrace,
+  FeatureMemoryGroup,
+  MemoryRunConfig,
+} from "./tools/memory.ts";
 
 export type FailureKind = "unparseable" | "api_error" | "missing_image";
 
@@ -19,6 +28,10 @@ export type FailureKind = "unparseable" | "api_error" | "missing_image";
  * is just a better number - there is nothing tying it to the lessons.
  */
 export type MemoryUse = {
+  observations: FeatureObservation[];
+  memoryGroups: FeatureMemoryGroup[];
+  episodes: EpisodeTrace[];
+  trace: AttemptTrace | null;
   hints: Hint[];
   hintCount: number;
   hintIds: string[];
@@ -34,6 +47,7 @@ export type TaskResult =
 export type ExampleInput = {
   imageId: string;
   imagePath: string;
+  attemptId?: string;
   /**
    * Observed features to rank lessons against, when something has already looked at
    * the image. The single-call agent has none, and recall falls back to a global
@@ -46,7 +60,20 @@ export type ExampleInput = {
  * What a task may do with memory. Evaluation passes a store and no learner, so it
  * reads lessons and never writes one. Training passes both.
  */
-export type TaskDeps = {
+export type FeatureScopedTaskDeps = {
+  /**
+   * New feature-scoped path. When present, runTask delegates observe/retrieve/analyze
+   * to locate and keeps flattened hints only as a telemetry projection.
+   */
+  run: MemoryRunConfig;
+  memory?: MemoryReader;
+  locateDeps?: Partial<Pick<LocateDeps, "maxToolAttemptsPerFeature">>;
+  recallLimit?: never;
+  twoStep?: never;
+  learn?: never;
+};
+
+export type LegacyTaskDeps = {
   memory?: LegacyMemory;
   recallLimit?: number;
   /**
@@ -57,12 +84,16 @@ export type TaskDeps = {
    * at all - and the only way a query-based backend can work.
    */
   twoStep?: boolean;
+  run?: undefined;
+  locateDeps?: never;
   /**
    * Called after a successful guess, with the hints that were in the prompt. This is
    * where training turns an outcome into a lesson; it is absent during evaluation.
    */
   learn?: (guess: Guess, input: ExampleInput, hints: Hint[]) => Promise<void>;
 };
+
+export type TaskDeps = FeatureScopedTaskDeps | LegacyTaskDeps;
 
 /**
  * Novita rate-limits per minute, and a sequential 200-image run still trips it: half
@@ -101,7 +132,17 @@ export function estimateHintTokens(hints: readonly Hint[]): number {
 }
 
 export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise<TaskResult> {
+  if (deps.run !== undefined) {
+    const featureScopedDeps: FeatureScopedTaskDeps = { run: deps.run };
+    if (deps.memory !== undefined) featureScopedDeps.memory = deps.memory;
+    if (deps.locateDeps !== undefined) featureScopedDeps.locateDeps = deps.locateDeps;
+    return runFeatureScopedTask(input, featureScopedDeps);
+  }
+
   const memory = deps.memory ?? new NullMemory();
+  if (!isLegacyMemory(memory)) {
+    throw new Error("legacy runTask path requires LegacyMemory; pass deps.run for feature-scoped MemoryReader");
+  }
 
   // Observation runs before recall because recall needs a query. Its output is used
   // for search only: the solver below still receives the image, so anything this
@@ -116,6 +157,10 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
 
   const hints = await memory.recall(features, deps.recallLimit ?? RECALL_LIMIT);
   const use: MemoryUse = {
+    observations: [],
+    memoryGroups: [],
+    episodes: [],
+    trace: null,
     hints: [...hints],
     hintCount: hints.length,
     hintIds: hints.map((hint) => hint.lessonId),
@@ -136,4 +181,15 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
     }
     return { ok: false, failure: "api_error", message, ...use };
   }
+}
+
+function isLegacyMemory(value: unknown): value is LegacyMemory {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.recall === "function" &&
+    typeof candidate.remember === "function" &&
+    typeof candidate.snapshot === "function" &&
+    typeof candidate.restore === "function"
+  );
 }

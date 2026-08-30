@@ -122,8 +122,19 @@ export interface MemoryReader {
    * contract and can leave this undefined.
    */
   readonly featureScope?: MemoryReaderFeatureScope;
+  /**
+   * Optional composition hook for readers that can expose the same backing store
+   * through feature-scoped ranking. Workflow code depends only on this capability,
+   * not on a concrete adapter class.
+   */
+  asFeatureScopedReader?(): MemoryReader;
   /** Feature-scoped dispatcher path: one query for one active feature. */
   recall(query: string, limit: number): Promise<Hint[]>;
+}
+
+export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
+  if (reader.featureScope !== "global") return reader;
+  return reader.asFeatureScopedReader?.() ?? reader;
 }
 
 export interface MemoryWriter extends MemoryReader {

@@ -95,6 +95,11 @@ export class FileMemory implements Memory, LegacyMemory {
     return this.mode === "all" ? "global" : "feature";
   }
 
+  asFeatureScopedReader(): MemoryReader {
+    if (this.mode === "all") return new FileMemory(this.path, "top", this.readOnly);
+    return this;
+  }
+
   private async load(): Promise<StoredLesson[]> {
     try {
       return parseLessons(await readFile(this.path, "utf8"));
@@ -236,6 +241,5 @@ export class FrozenMemory extends FileMemory {
 }
 
 export function featureScopedFileMemoryReader(memory: FileMemory): MemoryReader {
-  if (memory.mode === "all") return new FileMemory(memory.path, "top", memory.readOnly);
-  return memory;
+  return memory.asFeatureScopedReader();
 }

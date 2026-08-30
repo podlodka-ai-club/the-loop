@@ -9,6 +9,8 @@ import {
   type MemoryWriteResult,
 } from "../memory/memory.ts";
 import { HindsightMemoryError } from "../memory/hindsight/error.ts";
+import { episodeCandidatesFromGroups } from "./episode-ledger.internal.ts";
+import { executeMemoryRetrieveWithRuntimeBudget } from "./memory-runtime.internal.ts";
 import {
   MEMORY_RETRIEVE_TOOL,
   MEMORY_STORE_TOOL,
@@ -18,6 +20,7 @@ import {
   makeIdempotencyKey,
   makeMemoryHitId,
   memoryToolsForPhase,
+  type FeatureMemoryGroup,
   type MemoryHit,
   type MemoryRunConfig,
   type MemoryToolContext,
@@ -79,6 +82,17 @@ function context(reader = new FakeReader()): MemoryToolContext {
   };
 }
 
+const _publicMemoryToolContextRejectsBudget = {
+  attemptId: "attempt-type",
+  reader: new FakeReader(),
+  phase: "retrieve",
+  run,
+  activeFeature: feature,
+  // @ts-expect-error budget is internal-only; use memory-runtime.internal for runtime budget tests.
+  budget: { retrievalCallsRemaining: 0 },
+} satisfies MemoryToolContext;
+void _publicMemoryToolContextRejectsBudget;
+
 function hit(overrides: Partial<MemoryHit> = {}): MemoryHit {
   return {
     attemptId: "attempt-1",
@@ -89,6 +103,24 @@ function hit(overrides: Partial<MemoryHit> = {}): MemoryHit {
     score: null,
     effect: null,
     ...overrides,
+  };
+}
+
+function candidateHit(overrides: Partial<MemoryHit> = {}, occurrence = 0): MemoryHit {
+  const value = {
+    attemptId: "attempt-1",
+    featureKey: "poles",
+    providerId: "lesson-source",
+    text: "wooden poles",
+    score: null,
+    effect: null,
+    ...overrides,
+  } satisfies Omit<MemoryHit, "memoryHitId"> & { memoryHitId?: string };
+  return {
+    ...value,
+    memoryHitId:
+      overrides.memoryHitId ??
+      makeMemoryHitId(value.attemptId, value.featureKey, value.providerId, value.text, occurrence),
   };
 }
 
@@ -188,15 +220,26 @@ test("memory payload is returned as data and cannot override the active retrieva
 });
 
 test("invalid retrieve calls are rejected before Memory access", async () => {
-  const scenarios: Array<{ name: string; args: unknown; failure: string }> = [
-    { name: "wrong feature", args: { feature_key: "plates", query: "yellow plate" }, failure: "wrong_feature" },
-    { name: "empty query", args: { feature_key: "poles", query: " " }, failure: "invalid_tool_arguments" },
+  const scenarios: Array<{ name: string; args: unknown; failure: string; query: string | null }> = [
+    {
+      name: "wrong feature",
+      args: { feature_key: "plates", query: "yellow plate" },
+      failure: "wrong_feature",
+      query: "yellow plate",
+    },
+    {
+      name: "empty query",
+      args: { feature_key: "poles", query: " " },
+      failure: "invalid_tool_arguments",
+      query: null,
+    },
     {
       name: "overlong query",
       args: { feature_key: "poles", query: "x".repeat(513) },
       failure: "invalid_tool_arguments",
+      query: null,
     },
-    { name: "missing call", args: [], failure: "missing_tool_call" },
+    { name: "missing call", args: [], failure: "missing_tool_call", query: null },
     {
       name: "multiple calls",
       args: [
@@ -204,27 +247,32 @@ test("invalid retrieve calls are rejected before Memory access", async () => {
         { function: { name: "memory_retrieve", arguments: "{}" } },
       ],
       failure: "multiple_tool_calls",
+      query: null,
     },
     {
       name: "malformed json",
       args: [{ function: { name: "memory_retrieve", arguments: "{not-json}" } }],
       failure: "malformed_tool_json",
+      query: null,
     },
-    { name: "raw malformed json", args: "{not-json}", failure: "malformed_tool_json" },
+    { name: "raw malformed json", args: "{not-json}", failure: "malformed_tool_json", query: null },
     {
       name: "wrong tool name",
       args: [{ function: { name: "memory_store", arguments: "{}" } }],
       failure: "missing_tool_call",
+      query: null,
     },
     {
       name: "non-string tool arguments",
       args: [{ function: { name: "memory_retrieve", arguments: { feature_key: "poles", query: "wooden poles" } } }],
       failure: "malformed_tool_json",
+      query: null,
     },
     {
       name: "extra property",
       args: { feature_key: "poles", query: "wooden poles", memory_ref: "foreign" },
       failure: "invalid_tool_arguments",
+      query: null,
     },
   ];
 
@@ -233,6 +281,7 @@ test("invalid retrieve calls are rejected before Memory access", async () => {
     const result = await executeMemoryRetrieve(context(reader), scenario.args);
     assert.equal(result.status, "failed", scenario.name);
     assert.equal(result.failure, scenario.failure, scenario.name);
+    assert.equal(result.query, scenario.query, scenario.name);
     assert.deepEqual(result.hits, [], scenario.name);
     assert.deepEqual(reader.calls, [], scenario.name);
   }
@@ -309,6 +358,45 @@ test("all recall mode is rejected and grouped retrieval is not globally merged",
   assert.equal(Object.prototype.hasOwnProperty.call(plates, "hints"), false);
 });
 
+test("retrieve dispatchers reject invalid run config before scope or budget outcomes", async () => {
+  const invalidRuns: MemoryRunConfig[] = [
+    { mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 },
+    { mode: "evaluation", snapshotId: null, readOnly: true, recallLimit: 5 },
+    { mode: "training", snapshotId: null, readOnly: true, recallLimit: 5 },
+  ];
+
+  for (const invalidRun of invalidRuns) {
+    const globalReader = new FakeReader();
+    globalReader.featureScope = "global";
+    await assert.rejects(
+      () =>
+        executeMemoryRetrieve(
+          { ...context(globalReader), run: invalidRun },
+          { feature_key: "poles", query: "wooden poles" },
+        ),
+      MemoryToolValidationError,
+      invalidRun.mode,
+    );
+    assert.deepEqual(globalReader.calls, [], invalidRun.mode);
+
+    const budgetedReader = new FakeReader();
+    await assert.rejects(
+      () =>
+        executeMemoryRetrieveWithRuntimeBudget(
+          {
+            ...context(budgetedReader),
+            run: invalidRun,
+            budget: { retrievalCallsRemaining: 0, memoryHitsRemaining: 0 },
+          },
+          { feature_key: "poles", query: "wooden poles" },
+        ),
+      MemoryToolValidationError,
+      invalidRun.mode,
+    );
+    assert.deepEqual(budgetedReader.calls, [], invalidRun.mode);
+  }
+});
+
 test("empty result, provider errors, timeout, skipped feature and exhausted budget are distinct no-episode outcomes", async () => {
   const empty = await executeMemoryRetrieve(context(), { feature_key: "poles", query: "wooden poles" });
   assert.equal(empty.status, "no_hit");
@@ -351,26 +439,761 @@ test("empty result, provider errors, timeout, skipped feature and exhausted budg
   );
   assert.equal(skipped.status, "failed");
   assert.equal(skipped.failure, "skipped");
+  assert.equal(skipped.query, null);
   assertNoEpisodeOutcome(skipped, "skipped feature");
 
-  const exhausted = await executeMemoryRetrieve(
+  const exhausted = await executeMemoryRetrieveWithRuntimeBudget(
     { ...context(), budget: { retrievalCallsRemaining: 0 } },
     { feature_key: "poles", query: "wooden poles" },
   );
   assert.equal(exhausted.status, "failed");
   assert.equal(exhausted.failure, "budget_exhausted");
+  assert.equal(exhausted.query, null);
   assertNoEpisodeOutcome(exhausted, "retrieval call budget exhausted");
 
   const hitBudgetExhausted = new FakeReader();
   hitBudgetExhausted.hints = [{ lessonId: "lesson-1", text: "would otherwise match" }];
-  const exhaustedHits = await executeMemoryRetrieve(
+  const exhaustedHits = await executeMemoryRetrieveWithRuntimeBudget(
     { ...context(hitBudgetExhausted), budget: { memoryHitsRemaining: 0 } },
     { feature_key: "poles", query: "wooden poles" },
   );
   assert.equal(exhaustedHits.status, "failed");
   assert.equal(exhaustedHits.failure, "budget_exhausted");
+  assert.equal(exhaustedHits.query, null);
   assertNoEpisodeOutcome(exhaustedHits, "memory hit budget exhausted");
   assert.deepEqual(hitBudgetExhausted.calls, []);
+});
+
+test("public memory retrieval ignores runtime budget on widened context", async () => {
+  const reader = new FakeReader();
+  reader.hints = [{ lessonId: "lesson-1", text: "wooden pole match" }];
+  const widenedContext = {
+    ...context(reader),
+    budget: {
+      retrievalCallsRemaining: 0,
+      memoryHitsRemaining: 0,
+    },
+  } satisfies MemoryToolContext & {
+    budget: {
+      retrievalCallsRemaining: number;
+      memoryHitsRemaining: number;
+    };
+  };
+  const publicContext: MemoryToolContext = widenedContext;
+
+  const result = await executeMemoryRetrieve(publicContext, {
+    feature_key: "poles",
+    query: "wooden poles",
+  });
+
+  assert.equal(result.status, "hits");
+  assert.equal(result.failure, null);
+  assert.equal(result.hits.length, 1);
+  assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 5 }]);
+});
+
+test("episode candidates are created only for returned hits in registry-order eligible groups", () => {
+  const firstHit = candidateHit({ providerId: "lesson-pole-a", text: "wooden poles" }, 0);
+  const secondHit = candidateHit({ providerId: null, text: "crossarms" }, 1);
+  const groups: FeatureMemoryGroup[] = [
+    {
+      attemptId: "attempt-1",
+      feature: { key: "plates", state: "visible", text: "white plate" },
+      query: "white plate",
+      status: "no_hit",
+      hits: [],
+      failure: null,
+    },
+    {
+      attemptId: "attempt-1",
+      feature,
+      query: "wooden poles",
+      status: "hits",
+      hits: [firstHit, secondHit],
+      failure: null,
+    },
+    {
+      attemptId: "attempt-1",
+      feature: { key: "vegetation", state: "visible", text: "dry scrub" },
+      query: null,
+      status: "failed",
+      hits: [],
+      failure: "memory_error",
+    },
+  ];
+
+  const candidates = episodeCandidatesFromGroups("attempt-1", groups);
+
+  assert.deepEqual(candidates, [
+    { attemptId: "attempt-1", featureKey: "poles", memoryHitId: firstHit.memoryHitId },
+    { attemptId: "attempt-1", featureKey: "poles", memoryHitId: secondHit.memoryHitId },
+  ]);
+  assert.deepEqual(
+    candidates.map((candidate) => Object.keys(candidate)),
+    [
+      ["attemptId", "featureKey", "memoryHitId"],
+      ["attemptId", "featureKey", "memoryHitId"],
+    ],
+  );
+  for (const candidate of candidates) {
+    assert.equal(Object.prototype.hasOwnProperty.call(candidate, "pending"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(candidate, "reflectionStatus"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(candidate, "effect"), false);
+  }
+});
+
+test("episode candidate ledger accepts valid failed and skipped no-episode groups", () => {
+  const groups: FeatureMemoryGroup[] = [
+    {
+      attemptId: "attempt-1",
+      feature: { key: "plates", state: "not_visible", text: "" },
+      query: null,
+      status: "failed",
+      hits: [],
+      failure: "skipped",
+    },
+    {
+      attemptId: "attempt-1",
+      feature,
+      query: "bounded failure query",
+      status: "failed",
+      hits: [],
+      failure: "memory_error",
+    },
+    {
+      attemptId: "attempt-1",
+      feature: { key: "road_markings", state: "visible", text: "single center line" },
+      query: "bounded wrong feature query",
+      status: "failed",
+      hits: [],
+      failure: "wrong_feature",
+    },
+    {
+      attemptId: "attempt-1",
+      feature: { key: "vegetation", state: "visible", text: "dry scrub" },
+      query: null,
+      status: "failed",
+      hits: [],
+      failure: "skipped",
+    },
+  ];
+
+  assert.deepEqual(episodeCandidatesFromGroups("attempt-1", groups), []);
+});
+
+test("episode candidate ledger accepts null provider ids but rejects empty provider ids", () => {
+  const providerlessHit = candidateHit({ providerId: null, text: "providerless cue" });
+  assert.deepEqual(
+    episodeCandidatesFromGroups("attempt-1", [
+      {
+        attemptId: "attempt-1",
+        feature,
+        query: "providerless cue",
+        status: "hits",
+        hits: [providerlessHit],
+        failure: null,
+      },
+    ]),
+    [{ attemptId: "attempt-1", featureKey: "poles", memoryHitId: providerlessHit.memoryHitId }],
+  );
+
+  for (const providerId of ["", " "]) {
+    assert.throws(
+      () =>
+        episodeCandidatesFromGroups("attempt-1", [
+          {
+            attemptId: "attempt-1",
+            feature,
+            query: "wooden poles",
+            status: "hits",
+            hits: [candidateHit({ providerId })],
+            failure: null,
+          },
+        ]),
+      (error) => error instanceof MemoryToolValidationError && error.failure === "foreign_hit",
+      `providerId=${JSON.stringify(providerId)}`,
+    );
+  }
+});
+
+test("episode candidate ledger rejects duplicate, out-of-order and oversized groups", () => {
+  const platesGroup: FeatureMemoryGroup = {
+    attemptId: "attempt-1",
+    feature: { key: "plates", state: "visible", text: "white plate" },
+    query: "white plate",
+    status: "no_hit",
+    hits: [],
+    failure: null,
+  };
+  const polesGroup: FeatureMemoryGroup = {
+    attemptId: "attempt-1",
+    feature,
+    query: "wooden poles",
+    status: "hits",
+    hits: [candidateHit()],
+    failure: null,
+  };
+  const tooManyHits: FeatureMemoryGroup = {
+    attemptId: "attempt-1",
+    feature,
+    query: "wooden poles",
+    status: "hits",
+    hits: Array.from({ length: 6 }, (_value, index) =>
+      candidateHit({ providerId: `lesson-${index}`, text: `wooden poles ${index}` }, index),
+    ),
+    failure: null,
+  };
+
+  const scenarios: Array<{ name: string; groups: readonly FeatureMemoryGroup[] }> = [
+    { name: "duplicate feature group", groups: [platesGroup, platesGroup] },
+    { name: "out of registry order", groups: [polesGroup, platesGroup] },
+    { name: "more than five hits in one group", groups: [tooManyHits] },
+    {
+      name: "more groups than registry keys",
+      groups: Array.from({ length: FEATURE_KEYS.length + 1 }, (_value, index) => ({
+        ...platesGroup,
+        feature: { key: FEATURE_KEYS[index % FEATURE_KEYS.length], state: "visible", text: "visible cue" },
+      })) as FeatureMemoryGroup[],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    assert.throws(
+      () => episodeCandidatesFromGroups("attempt-1", scenario.groups),
+      (error) => error instanceof MemoryToolValidationError && error.failure === "foreign_hit",
+      scenario.name,
+    );
+  }
+});
+
+test("episode candidate ledger rejects inconsistent group and hit envelopes", () => {
+  const malformedScenarios: Array<{ name: string; groups: readonly FeatureMemoryGroup[] }> = [
+    { name: "malformed group object", groups: [null as unknown as FeatureMemoryGroup] },
+    {
+      name: "extra group property",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit()],
+          failure: null,
+          episode: {},
+        } as unknown as FeatureMemoryGroup,
+      ],
+    },
+    {
+      name: "missing feature object",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          query: null,
+          status: "failed",
+          hits: [],
+          failure: "memory_error",
+        } as unknown as FeatureMemoryGroup,
+      ],
+    },
+    {
+      name: "hits group with null query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: null,
+          status: "hits",
+          hits: [candidateHit()],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "hits group with empty query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "",
+          status: "hits",
+          hits: [candidateHit()],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "no-hit group with whitespace query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: " ",
+          status: "no_hit",
+          hits: [],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "no-hit group with null query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: null,
+          status: "no_hit",
+          hits: [],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "no-hit group with oversized query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "x".repeat(513),
+          status: "no_hit",
+          hits: [],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "failed group with empty query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "",
+          status: "failed",
+          hits: [],
+          failure: "memory_error",
+        },
+      ],
+    },
+    {
+      name: "failed group with oversized query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "x".repeat(513),
+          status: "failed",
+          hits: [],
+          failure: "memory_error",
+        },
+      ],
+    },
+    {
+      name: "invalid tool arguments group with query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "parsed but invalid query",
+          status: "failed",
+          hits: [],
+          failure: "invalid_tool_arguments",
+        },
+      ],
+    },
+    {
+      name: "missing tool call group with query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "query that should not exist",
+          status: "failed",
+          hits: [],
+          failure: "missing_tool_call",
+        },
+      ],
+    },
+    {
+      name: "multiple tool calls group with query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "query that should not exist",
+          status: "failed",
+          hits: [],
+          failure: "multiple_tool_calls",
+        },
+      ],
+    },
+    {
+      name: "malformed tool json group with query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "query that should not exist",
+          status: "failed",
+          hits: [],
+          failure: "malformed_tool_json",
+        },
+      ],
+    },
+    {
+      name: "extra feature property",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature: { ...feature, country: "BR" } as unknown as FeatureObservation,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit()],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "not visible no-hit group",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature: { key: "poles", state: "not_visible", text: "" },
+          query: null,
+          status: "no_hit",
+          hits: [],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "non-array hits",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: {},
+          failure: null,
+        } as unknown as FeatureMemoryGroup,
+      ],
+    },
+    {
+      name: "malformed hit object",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [null],
+          failure: null,
+        } as unknown as FeatureMemoryGroup,
+      ],
+    },
+    {
+      name: "extra hit property",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [{ ...candidateHit(), sourceAttemptId: "attempt-1" } as unknown as MemoryHit],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "empty memory hit id",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit({ memoryHitId: "" })],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "invalid provider id",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit({ providerId: 42 as unknown as string })],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "empty hit text",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit({ text: " " })],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "invalid hit score",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit({ score: Number.NaN })],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "invalid hit effect",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit({ effect: "unknown" as unknown as MemoryHit["effect"] })],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "unknown feature key",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature: { key: "unknown", state: "visible", text: "unknown cue" },
+          query: "unknown cue",
+          status: "no_hit",
+          hits: [],
+          failure: null,
+        } as unknown as FeatureMemoryGroup,
+      ],
+    },
+    {
+      name: "unknown feature state",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature: { key: "poles", state: "unknown", text: "" },
+          query: null,
+          status: "failed",
+          hits: [],
+          failure: "memory_error",
+        } as unknown as FeatureMemoryGroup,
+      ],
+    },
+    {
+      name: "foreign group attempt",
+      groups: [
+        {
+          attemptId: "attempt-2",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit()],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "foreign hit attempt",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit({ attemptId: "attempt-2" })],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "foreign hit feature",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit({ featureKey: "plates" })],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "no-hit group with hits",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "no_hit",
+          hits: [candidateHit()],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "failed group with hits",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "failed",
+          hits: [candidateHit()],
+          failure: "memory_error",
+        },
+      ],
+    },
+    {
+      name: "not visible skipped group with hits",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature: { key: "poles", state: "not_visible", text: "" },
+          query: null,
+          status: "failed",
+          hits: [candidateHit()],
+          failure: "skipped",
+        },
+      ],
+    },
+    {
+      name: "not visible skipped group with query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature: { key: "poles", state: "not_visible", text: "" },
+          query: "should not have queried a hidden feature",
+          status: "failed",
+          hits: [],
+          failure: "skipped",
+        },
+      ],
+    },
+    {
+      name: "visible skipped group with query",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "should not have queried a skipped feature",
+          status: "failed",
+          hits: [],
+          failure: "skipped",
+        },
+      ],
+    },
+    {
+      name: "no-hit group with failure",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "no_hit",
+          hits: [],
+          failure: "memory_error",
+        },
+      ],
+    },
+    {
+      name: "failed group without failure",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "failed",
+          hits: [],
+          failure: null,
+        },
+      ],
+    },
+    {
+      name: "hits group with failure",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit()],
+          failure: "memory_error",
+        },
+      ],
+    },
+    {
+      name: "duplicate hit identity",
+      groups: [
+        {
+          attemptId: "attempt-1",
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [candidateHit(), candidateHit({ memoryHitId: candidateHit().memoryHitId }, 1)],
+          failure: null,
+        },
+      ],
+    },
+  ];
+
+  for (const scenario of malformedScenarios) {
+    assert.throws(
+      () => episodeCandidatesFromGroups("attempt-1", scenario.groups),
+      (error) => error instanceof MemoryToolValidationError && error.failure === "foreign_hit",
+      scenario.name,
+    );
+  }
+});
+
+test("episode candidate ledger rejects memoryHitId foreign prefixes and identity mismatches", () => {
+  const scenarios: Array<{ name: string; memoryHitId: string }> = [
+    {
+      name: "foreign attempt prefix",
+      memoryHitId: makeMemoryHitId("attempt-2", "poles", "lesson-source", "wooden poles", 0),
+    },
+    {
+      name: "foreign feature prefix",
+      memoryHitId: makeMemoryHitId("attempt-1", "plates", "lesson-source", "wooden poles", 0),
+    },
+    {
+      name: "same prefix wrong digest",
+      memoryHitId: "attempt-1/poles/000000000000",
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    assert.throws(
+      () =>
+        episodeCandidatesFromGroups("attempt-1", [
+          {
+            attemptId: "attempt-1",
+            feature,
+            query: "wooden poles",
+            status: "hits",
+            hits: [candidateHit({ memoryHitId: scenario.memoryHitId })],
+            failure: null,
+          },
+        ]),
+      (error) => error instanceof MemoryToolValidationError && error.failure === "foreign_hit",
+      scenario.name,
+    );
+  }
 });
 
 test("malformed recall outputs fail as memory errors without leaking invalid hits", async () => {

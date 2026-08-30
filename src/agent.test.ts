@@ -7,7 +7,15 @@ import OpenAI from "openai";
 import { FileMemory } from "./memory/file/memory.ts";
 import type { Hint, MemoryReader } from "./memory/memory.ts";
 import { FEATURE_KEYS, type FeatureObservation, type ObserveResult } from "./observe.ts";
-import { locate, type LocateChatClient, type LocateChatCompletion } from "./locate.ts";
+import { locate, type LocateDeps } from "./locate.ts";
+import {
+  locateWithRuntime,
+  type LocateRuntimeChatClient as LocateChatClient,
+  type LocateRuntimeChatCompletion as LocateChatCompletion,
+  type LocateRuntimeHooks,
+} from "./locate-runtime.internal.ts";
+import { readLocatePartialResult } from "./locate-partial.internal.ts";
+import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
 import { MemoryToolValidationError, type MemoryRunConfig } from "./tools/memory.ts";
 
 const run: MemoryRunConfig = {
@@ -48,6 +56,7 @@ class FakeClient implements LocateChatClient {
   readonly missingFirstFor = new Set<string>();
   readonly missingAlwaysFor = new Set<string>();
   readonly multipleFirstFor = new Set<string>();
+  readonly analyzeErrors: Error[] = [];
   readonly seen = new Map<string, number>();
 
   chat = {
@@ -147,6 +156,8 @@ class FakeClient implements LocateChatClient {
             ],
           };
         }
+        const analyzeError = this.analyzeErrors.shift();
+        if (analyzeError !== undefined) throw analyzeError;
         return {
           provider: "fake",
           choices: [
@@ -167,6 +178,45 @@ class FakeClient implements LocateChatClient {
     },
   };
 }
+
+const _publicLocateDepsRejectRuntimeHooks = {
+  memory: new FakeReader(),
+  run,
+  // @ts-expect-error client is an internal runtime seam, not public LocateDeps.
+  client: new FakeClient(),
+} satisfies LocateDeps;
+void _publicLocateDepsRejectRuntimeHooks;
+
+test("public locate ignores runtime hooks on widened deps", async () => {
+  await withImage(async (imagePath) => {
+    const client = new FakeClient();
+    let hiddenObserveCalls = 0;
+    let hiddenImageDataUriCalls = 0;
+    const widenedDeps = {
+      memory: new FakeReader(),
+      run,
+      observe: async () => {
+        hiddenObserveCalls += 1;
+        return observed({});
+      },
+      imageDataUri: async () => {
+        hiddenImageDataUriCalls += 1;
+        return "data:image/jpeg;base64,AA==";
+      },
+      client,
+    } satisfies LocateDeps & LocateRuntimeHooks;
+    const publicDeps: LocateDeps = widenedDeps;
+
+    await assert.rejects(
+      () => locate({ attemptId: "attempt-public-boundary", imagePath }, publicDeps),
+      /OPENROUTER_API_KEY|ENOENT/,
+    );
+
+    assert.equal(hiddenObserveCalls, 0);
+    assert.equal(hiddenImageDataUriCalls, 0);
+    assert.deepEqual(client.requests, []);
+  });
+});
 
 async function withImage<T>(fn: (path: string, dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "loci-agent-"));
@@ -232,7 +282,7 @@ test("retrieve loop processes visible features in order, retries once and disabl
     const client = new FakeClient();
     client.missingFirstFor.add("poles");
 
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-1", imagePath },
       {
         memory,
@@ -280,6 +330,17 @@ test("retrieve loop processes visible features in order, retries once and disabl
         ["poles", "hits", 1],
       ],
     );
+    assert.deepEqual(result.episodes, []);
+    const episodeCandidates = episodeCandidatesFromGroups("attempt-1", result.memoryGroups);
+    assert.deepEqual(
+      episodeCandidates.map((episode) => [episode.featureKey, episode.memoryHitId]),
+      result.memoryGroups.flatMap((group) =>
+        group.hits.map((hit) => [group.feature.key, hit.memoryHitId]),
+      ),
+    );
+    assert.equal(Object.prototype.hasOwnProperty.call(result, "episodeCandidates"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(result.trace, "episodeCandidates"), false);
+    assert.deepEqual(result.trace.episodes, []);
     assert.deepEqual(
       result.trace.events.map((event) => [event.featureKey, event.status]),
       [
@@ -296,7 +357,7 @@ test("not_visible observations are not retrieved but remain available to final a
     const client = new FakeClient();
     const memory = new FakeReader();
 
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-1b", imagePath },
       {
         memory,
@@ -342,13 +403,13 @@ test("final analyze sees the original image and stable feature groups without st
   await withImage(async (imagePath) => {
     const client = new FakeClient();
     const imagePaths: string[] = [];
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-2", imagePath },
       {
         memory: new FakeReader(),
         run,
         client,
-        imageDataUri: async (path) => {
+        imageDataUri: async (path: string) => {
           imagePaths.push(path);
           return "data:image/jpeg;base64,AA==";
         },
@@ -387,7 +448,7 @@ test("final analyze receives one failed group after two missing retrieval calls 
     client.missingAlwaysFor.add("plates");
     memory.emptyQueries.add("vegetation visual cue");
 
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-2b", imagePath },
       {
         memory,
@@ -447,7 +508,7 @@ test("runtime caps retrieval attempts at two per feature and twenty-four model c
     const client = new FakeClient();
     for (const key of FEATURE_KEYS) client.missingAlwaysFor.add(key);
 
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-2c", imagePath },
       {
         memory: new FakeReader(),
@@ -488,7 +549,7 @@ test("retrieve loop retries malformed, wrong-feature, multiple and invalid-args 
     client.invalidArgsFirstFor.add("vegetation");
     client.multipleFirstFor.add("road_markings");
 
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-2d", imagePath },
       {
         memory,
@@ -551,7 +612,7 @@ test("locate rethrows control-plane memory validation errors instead of recordin
 
     await assert.rejects(
       () =>
-        locate(
+        locateWithRuntime(
           { attemptId: "attempt-2e", imagePath },
           {
             memory,
@@ -583,13 +644,13 @@ test("observation failure still reaches analyze with the original image", async 
     const memory = new FakeReader();
     const imagePaths: string[] = [];
 
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-3", imagePath },
       {
         memory,
         run,
         client,
-        imageDataUri: async (path) => {
+        imageDataUri: async (path: string) => {
           imagePaths.push(path);
           return "data:image/jpeg;base64,AA==";
         },
@@ -604,6 +665,62 @@ test("observation failure still reaches analyze with the original image", async 
     assert.ok(analyze);
     assert.ok(analyze.messages.some(hasImageUrl));
     assert.deepEqual(imagePaths, [imagePath]);
+  });
+});
+
+test("locate rethrows the original final analyze error when partial result cannot be attached", async () => {
+  await withImage(async (imagePath) => {
+    const client = new FakeClient();
+    const memory = new FakeReader();
+    const analyzeError = new Error("final analyze failed");
+    Object.preventExtensions(analyzeError);
+    client.analyzeErrors.push(analyzeError);
+
+    let caught: unknown;
+    try {
+      await locateWithRuntime(
+        { attemptId: "attempt-non-extensible-error", imagePath },
+        {
+          memory,
+          run,
+          client,
+          imageDataUri: async () => "data:image/jpeg;base64,AA==",
+          observe: async () =>
+            observed({
+              poles: { state: "visible", text: "wooden pole" },
+            }),
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    assert.equal(caught, analyzeError);
+    assert.deepEqual(memory.calls, [{ query: "poles visual cue", limit: 5 }]);
+    assert.deepEqual(
+      client.requests
+        .filter((request) => request.tools !== undefined)
+        .map((request) => {
+          const tool = request.tools?.[0] as unknown as {
+            function: { parameters: { properties: { feature_key: { enum: string[] } } } };
+          };
+          return tool.function.parameters.properties.feature_key.enum[0];
+        }),
+      ["poles"],
+    );
+    const partial = readLocatePartialResult(caught);
+    assert.ok(partial);
+    assert.deepEqual(
+      partial.memoryGroups.map((group) => [group.feature.key, group.status, group.hits.length]),
+      [["poles", "hits", 1]],
+    );
+    assert.deepEqual(
+      episodeCandidatesFromGroups(partial.attemptId, partial.memoryGroups).map((candidate) => [
+        candidate.featureKey,
+        candidate.memoryHitId,
+      ]),
+      partial.memoryGroups[0]?.hits.map((hit) => ["poles", hit.memoryHitId]),
+    );
+    assert.equal(Object.prototype.hasOwnProperty.call(partial.trace, "episodeCandidates"), false);
   });
 });
 
@@ -635,7 +752,7 @@ test("FileMemory all mode is bounded to top recall in the feature-scoped path", 
       "utf8",
     );
 
-    const result = await locate(
+    const result = await locateWithRuntime(
       { attemptId: "attempt-4", imagePath },
       {
         memory: new FileMemory(memoryPath, "all"),

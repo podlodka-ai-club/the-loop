@@ -160,10 +160,6 @@ export type MemoryToolContext = {
   run: MemoryRunConfig;
   activeFeature: FeatureObservation;
   activeMemoryHit?: MemoryHit;
-  budget?: {
-    retrievalCallsRemaining?: number;
-    memoryHitsRemaining?: number;
-  };
 };
 
 export type RetrievalMetric = {
@@ -212,7 +208,6 @@ const REFLECTION_EFFECTS: readonly ReflectionEffect[] = [
   "misleading",
   "insufficient",
 ];
-
 function stableHash(...parts: readonly string[]): string {
   return createHash("sha256").update(parts.join("\0"), "utf8").digest("hex");
 }
@@ -416,13 +411,6 @@ function isTimeoutFailure(error: unknown): boolean {
   return name === "TimeoutError" || name === "AbortError";
 }
 
-function memoryHitsRemaining(context: MemoryToolContext): number {
-  const remaining = context.budget?.memoryHitsRemaining;
-  if (remaining === undefined) return context.run.recallLimit;
-  if (!Number.isFinite(remaining)) return 0;
-  return Math.floor(remaining);
-}
-
 export function makeMemoryHitId(
   attemptId: string,
   featureKey: FeatureKey,
@@ -460,13 +448,12 @@ export async function executeMemoryRetrieve(
   context: MemoryToolContext,
   args: unknown,
 ): Promise<FeatureMemoryGroup> {
+  validateMemoryRunConfig(context.run);
   if (context.phase !== "retrieve") return failedGroup(context, "skipped");
   if (context.activeFeature.state !== "visible") return failedGroup(context, "skipped");
-  if ((context.budget?.retrievalCallsRemaining ?? 1) <= 0) return failedGroup(context, "budget_exhausted");
   if (context.reader.featureScope === "global") {
     return failedGroup(context, "invalid_tool_arguments");
   }
-  validateMemoryRunConfig(context.run);
 
   let parsed: MemoryRetrieveArgs;
   try {
@@ -481,9 +468,6 @@ export async function executeMemoryRetrieve(
     return failedGroup(context, "wrong_feature", parsed.query);
   }
 
-  const remainingHits = memoryHitsRemaining(context);
-  if (remainingHits <= 0) return failedGroup(context, "budget_exhausted", parsed.query);
-
   let hints: Hint[];
   try {
     const output = await context.reader.recall(parsed.query, context.run.recallLimit);
@@ -495,7 +479,7 @@ export async function executeMemoryRetrieve(
     return failedGroup(context, isTimeoutFailure(error) ? "timeout" : "memory_error", parsed.query);
   }
 
-  const hits = hints.slice(0, Math.min(context.run.recallLimit, 5, remainingHits)).map((hint, index) => {
+  const hits = hints.slice(0, Math.min(context.run.recallLimit, 5)).map((hint, index) => {
     const text = hintText(hint);
     const providerId = hintProviderId(hint);
     return {
