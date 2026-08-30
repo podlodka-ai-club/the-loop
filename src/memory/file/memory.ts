@@ -17,6 +17,8 @@ import type {
   Lesson,
   LessonInput,
   Memory,
+  MemoryReader,
+  MemoryReaderFeatureScope,
   MemoryWriteResult,
 } from "../memory.ts";
 
@@ -81,12 +83,16 @@ export class FileMemory implements Memory, LegacyMemory {
   readonly path: string;
   readonly mode: RecallMode;
   /** A read-only store never writes back, not even usage counters. */
-  protected readonly readOnly: boolean;
+  readonly readOnly: boolean;
 
   constructor(path = join(MEMORY_DIR, "live.jsonl"), mode: RecallMode = "all", readOnly = false) {
     this.path = path;
     this.mode = mode;
     this.readOnly = readOnly;
+  }
+
+  get featureScope(): MemoryReaderFeatureScope {
+    return this.mode === "all" ? "global" : "feature";
   }
 
   private async load(): Promise<StoredLesson[]> {
@@ -227,4 +233,9 @@ export class FrozenMemory extends FileMemory {
   override async remember(): Promise<MemoryWriteResult> {
     throw new Error("FrozenMemory is read-only: evaluation must not write lessons");
   }
+}
+
+export function featureScopedFileMemoryReader(memory: FileMemory): MemoryReader {
+  if (memory.mode === "all") return new FileMemory(memory.path, "top", memory.readOnly);
+  return memory;
 }

@@ -329,7 +329,7 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
   };
 }
 
-function validateRunConfig(run: MemoryRunConfig): void {
+export function validateMemoryRunConfig(run: MemoryRunConfig): void {
   if (run.mode !== "training" && run.mode !== "evaluation" && run.mode !== "production") {
     throw new MemoryToolValidationError("invalid_tool_arguments", "unknown memory mode");
   }
@@ -463,10 +463,10 @@ export async function executeMemoryRetrieve(
   if (context.phase !== "retrieve") return failedGroup(context, "skipped");
   if (context.activeFeature.state !== "visible") return failedGroup(context, "skipped");
   if ((context.budget?.retrievalCallsRemaining ?? 1) <= 0) return failedGroup(context, "budget_exhausted");
-  if ((context.reader as { mode?: unknown }).mode === "all") {
+  if (context.reader.featureScope === "global") {
     return failedGroup(context, "invalid_tool_arguments");
   }
-  validateRunConfig(context.run);
+  validateMemoryRunConfig(context.run);
 
   let parsed: MemoryRetrieveArgs;
   try {
@@ -491,6 +491,7 @@ export async function executeMemoryRetrieve(
     if (validated === null) return failedGroup(context, "memory_error", parsed.query);
     hints = validated;
   } catch (error) {
+    if (error instanceof MemoryToolValidationError) throw error;
     return failedGroup(context, isTimeoutFailure(error) ? "timeout" : "memory_error", parsed.query);
   }
 
@@ -529,7 +530,7 @@ export async function executeMemoryStore(
       failure: "write_failed" | "write_outcome_unknown";
     }
 > {
-  validateRunConfig(context.run);
+  validateMemoryRunConfig(context.run);
   if (
     context.phase !== "reflect" ||
     context.run.mode !== "training" ||

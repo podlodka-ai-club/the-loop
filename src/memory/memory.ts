@@ -90,6 +90,8 @@ export type Hint = {
   effect?: ReflectionEffect;
 };
 
+export type MemoryReaderFeatureScope = "feature" | "global";
+
 /**
  * How a lesson is rendered into the prompt.
  *
@@ -114,6 +116,12 @@ export function renderHint(lesson: Lesson | LegacyLesson): Hint {
 }
 
 export interface MemoryReader {
+  /**
+   * `global` readers return an unbounded/global prior and are not valid inside
+   * the feature-scoped tool dispatcher. Most providers are feature-scoped by
+   * contract and can leave this undefined.
+   */
+  readonly featureScope?: MemoryReaderFeatureScope;
   /** Feature-scoped dispatcher path: one query for one active feature. */
   recall(query: string, limit: number): Promise<Hint[]>;
 }

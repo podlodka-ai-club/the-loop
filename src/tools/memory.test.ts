@@ -40,7 +40,7 @@ class FakeReader implements MemoryReader {
   calls: Array<{ query: string; limit: number }> = [];
   hints: Hint[] = [];
   output?: unknown;
-  mode?: "all" | "top";
+  featureScope?: MemoryReader["featureScope"];
   error?: Error;
 
   async recall(query: string, limit: number): Promise<Hint[]> {
@@ -279,7 +279,7 @@ test("retrieval calls Memory once with a bounded query and returns stable applic
 
 test("all recall mode is rejected and grouped retrieval is not globally merged", async () => {
   const reader = new FakeReader();
-  reader.mode = "all";
+  reader.featureScope = "global";
   const rejected = await executeMemoryRetrieve(context(reader), {
     feature_key: "poles",
     query: "wooden poles",
