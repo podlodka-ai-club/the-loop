@@ -70,6 +70,24 @@ export type Hint = {
   text: string;
 };
 
+/**
+ * How a lesson is rendered into the prompt.
+ *
+ * The region is stated explicitly rather than left to the prose. Lessons routinely
+ * describe places by sub-national names - "the Eastern Cape", "the South Island" -
+ * and a control that rewrites country names in the text would leave those untouched,
+ * producing a "shuffled" run whose prompt is identical to the real one. Prefixing
+ * the region makes the attribution part of the text, so swapping it always changes
+ * what the model reads. Both the real and the shuffled run use this same format.
+ */
+export function renderHint(lesson: Lesson): Hint {
+  const region = lesson.region.trim();
+  return {
+    lessonId: lesson.id,
+    text: region === "" ? lesson.content : `${region}: ${lesson.content}`,
+  };
+}
+
 export interface Memory {
   /** Lessons worth showing, most relevant first. Never throws on an empty store. */
   recall(features: string[], limit: number): Promise<Hint[]>;
@@ -154,7 +172,7 @@ export class FileMemory implements Memory {
     if (this.mode === "all") {
       const every = lessons.slice().sort((a, b) => (a.id < b.id ? -1 : 1));
       await this.countHits(every.map((lesson) => lesson.id));
-      return every.map((lesson) => ({ lessonId: lesson.id, text: lesson.content }));
+      return every.map(renderHint);
     }
 
     const query = tokenize(features);
@@ -171,7 +189,7 @@ export class FileMemory implements Memory {
         .sort((a, b) => b.hits - a.hits || (a.id < b.id ? -1 : 1))
         .slice(0, limit);
       await this.countHits(prior.map((lesson) => lesson.id));
-      return prior.map((lesson) => ({ lessonId: lesson.id, text: lesson.content }));
+      return prior.map(renderHint);
     }
 
     const ranked = lessons
@@ -189,7 +207,7 @@ export class FileMemory implements Memory {
     if (ranked.length > 0) {
       await this.countHits(ranked.map((entry) => entry.lesson.id));
     }
-    return ranked.map(({ lesson }) => ({ lessonId: lesson.id, text: lesson.content }));
+    return ranked.map(({ lesson }) => renderHint(lesson));
   }
 
   async remember(input: LessonInput): Promise<void> {

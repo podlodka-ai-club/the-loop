@@ -11,7 +11,8 @@
     "sample": "node --env-file-if-exists=.env src/sample.ts",
     "experiment": "node --env-file-if-exists=.env src/experiment.ts",
     "typecheck": "tsc --noEmit",
-    "train": "node --env-file-if-exists=.env src/train.ts"
+    "train": "node --env-file-if-exists=.env src/train.ts",
+    "shuffle-memory": "node --env-file-if-exists=.env src/shuffle-memory.ts"
   },
   "dependencies": {
     "@arizeai/openinference-instrumentation-openai": "4.1.9",

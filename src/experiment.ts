@@ -17,7 +17,7 @@ import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
 import { FrozenMemory, NullMemory, RECALL_LIMIT, parseRecallMode } from "./memory.ts";
 import type { Memory } from "./memory.ts";
-import { loadRows } from "./osv5m.ts";
+import { fingerprintOf, loadRows } from "./osv5m.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
 
@@ -43,9 +43,34 @@ const memory: Memory =
 // sees only the image shards this machine holds, so a fresh draw would silently
 // score a different set of images here than it did on the machine that reported the
 // baseline. Freeze a new sample with `node src/sample.ts --freeze`.
+/**
+ * Score only the first N ids of the manifest instead of all of them.
+ *
+ * A full 200-image pass costs ~45 minutes of provider quota once rate-limit backoff
+ * is counted. A 100-image prefix is enough to read the sign and the order of a
+ * delta, which is what decides whether the full pass is worth running at all. The
+ * prefix is the manifest's own sorted order, so it is the same 100 images every
+ * time, and it gets its own fingerprint - a partial run is a different benchmark and
+ * must never be filed under the full one's numbers.
+ */
+const head = Number(flag("head", "0"));
+
 const { rows: pool, csvRowCount } = await loadRows();
-const sample = await loadFrozenSample(pool, manifestPath);
+const full = await loadFrozenSample(pool, manifestPath);
+const sample =
+  head > 0 && head < full.rows.length
+    ? {
+        ...full,
+        rows: full.rows.slice(0, head),
+        fingerprint: fingerprintOf(full.rows.slice(0, head).map((row) => row.id)),
+        strata: new Set(full.rows.slice(0, head).map((row) => row.cell)).size,
+      }
+    : full;
 const seed = sample.seed;
+
+if (sample !== full) {
+  console.log(`head    first ${sample.rows.length} of ${full.rows.length} manifest ids`);
+}
 
 console.log(
   `pool ${pool.length}/${csvRowCount} on disk | sample n=${sample.rows.length} ` +
