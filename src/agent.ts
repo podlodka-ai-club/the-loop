@@ -49,7 +49,7 @@ const PROMPT =
  * one request per image; a model that decides for itself whether to search turns the
  * comparison into a measurement of that decision.
  */
-function withHints(hints: readonly Hint[]): string {
+export function withHints(hints: readonly Hint[]): string {
   if (hints.length === 0) return PROMPT;
   const lines = hints.map((hint) => `- ${hint.text}`).join("\n");
   return (

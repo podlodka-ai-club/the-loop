@@ -105,8 +105,8 @@ test("recall all returns every lesson in id order and increments every hit", asy
   const hints = await sut.recall(["ignored"], 1);
 
   assert.deepEqual(hints, [
-    { lessonId: "lesson-0001", text: "earlier" },
-    { lessonId: "lesson-0002", text: "later" },
+    { lessonId: "lesson-0001", text: "XX: earlier" },
+    { lessonId: "lesson-0002", text: "XX: later" },
   ]);
   assert.deepEqual(await readLessons(path), [
     { ...later, hits: 5 },
@@ -124,8 +124,8 @@ test("recall top without features uses hit count and stable id ordering", async 
   const hints = await sut.recall([], 2);
 
   assert.deepEqual(hints, [
-    { lessonId: "lesson-0001", text: "earlier" },
-    { lessonId: "lesson-0002", text: "later" },
+    { lessonId: "lesson-0001", text: "XX: earlier" },
+    { lessonId: "lesson-0002", text: "XX: later" },
   ]);
   assert.deepEqual(await readLessons(path), [
     { ...later, hits: 5 },
@@ -152,8 +152,8 @@ test("recall top ranks normalized trigger overlap and breaks ties by id", async 
   const hints = await sut.recall(["YELLOW, roadside; dry!"], 2);
 
   assert.deepEqual(hints, [
-    { lessonId: "lesson-0001", text: "first" },
-    { lessonId: "lesson-0002", text: "second" },
+    { lessonId: "lesson-0001", text: "XX: first" },
+    { lessonId: "lesson-0002", text: "XX: second" },
   ]);
   assert.deepEqual(await readLessons(path), [
     { ...second, hits: 1 },
@@ -219,7 +219,7 @@ test("FrozenMemory recalls without changing the snapshot and rejects remember", 
   const before = await readFile(snapshotPath, "utf8");
   const frozen = new FrozenMemory(snapshotId, "all");
 
-  assert.deepEqual(await frozen.recall([]), [{ lessonId: "lesson-0001", text: input.content }]);
+  assert.deepEqual(await frozen.recall([]), [{ lessonId: "lesson-0001", text: `XX: ${input.content}` }]);
   assert.equal(await readFile(snapshotPath, "utf8"), before);
   await assert.rejects(frozen.remember(), /FrozenMemory is read-only/);
 });
