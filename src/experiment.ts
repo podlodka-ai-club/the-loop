@@ -15,10 +15,9 @@ import { runExperiment } from "@arizeai/phoenix-client/experiments";
 import { MODEL } from "./agent.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
-import { NullMemory } from "./memory/null/memory.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
-import { FrozenMemory, parseRecallMode } from "./memory/file/memory.ts";
-import type { Memory } from "./memory/memory.ts";
+import { parseRecallMode } from "./memory/file/memory.ts";
+import { parseBackend, selectMemory } from "./memory/select.ts";
 import { fingerprintOf, loadRows } from "./osv5m.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
@@ -43,8 +42,9 @@ const recallMode = parseRecallMode(flag("recall", "all"));
 // mandatory with a ranked or query-based backend, which has nothing to rank on
 // otherwise.
 const twoStep = process.argv.includes("--two-step");
-const memory: Memory =
-  snapshotId === "" ? new NullMemory() : new FrozenMemory(snapshotId, recallMode);
+const backend = parseBackend(flag("backend", "file"));
+const selection = selectMemory({ backend, snapshotId, recall: flag("recall", "all") });
+const memory = selection.memory;
 
 // The sample is read from a file in the repository, never drawn afresh. `loadRows`
 // sees only the image shards this machine holds, so a fresh draw would silently
@@ -84,8 +84,8 @@ console.log(
     `strata=${sample.strata} seed=${sample.seed} fp=${sample.fingerprint}`,
 );
 console.log(
-  `memory  ${snapshotId === "" ? "off (baseline)" : `snapshot ${snapshotId}, recall ${recallMode}`}` +
-    `${twoStep ? ", two-step (observe then guess)" : ""}`,
+  `memory  ${selection.describe}${twoStep ? ", two-step (observe then guess)" : ""}` +
+    `${selection.frozen ? "" : " [not frozen: reproducible only by convention]"}`,
 );
 
 const datasetName = `osv5m-${seed}-n${sample.rows.length}-${sample.fingerprint}`;
@@ -136,7 +136,9 @@ const experiment = await runExperiment({
     seed,
     fingerprint: sample.fingerprint,
     sampleSize: sample.rows.length,
+    memoryBackend: backend,
     memorySnapshot: snapshotId === "" ? "none" : snapshotId,
+    memoryFrozen: selection.frozen,
     recallMode: snapshotId === "" ? "off" : recallMode,
     twoStep,
     recallLimit: RECALL_LIMIT,
