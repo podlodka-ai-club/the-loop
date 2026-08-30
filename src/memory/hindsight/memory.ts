@@ -1,4 +1,15 @@
-import type { Hint, LessonInput, Memory } from "../memory.ts";
+import { FEATURE_KEYS } from "../../observe.ts";
+import type { FeatureKey } from "../../observe.ts";
+import {
+  MemoryWriteError,
+  type Hint,
+  type LegacyLessonInput,
+  type LegacyMemory,
+  type LessonInput,
+  type Memory,
+  type MemoryWriteResult,
+  type ReflectionEffect,
+} from "../memory.ts";
 import {
   HINDSIGHT_CLOUD_BASE_URL,
   HINDSIGHT_RETAIN_CONTEXT,
@@ -53,9 +64,9 @@ export type HindsightMemoryDependencies = {
   onInstanceQuarantined?: (result: HindsightQuarantineResult) => void | Promise<void>;
 };
 
-export interface HindsightMemory extends Memory {
-  recall(features: string[], limit: number): Promise<Hint[]>;
-  remember(lesson: LessonInput): Promise<void>;
+export interface HindsightMemory extends Memory, LegacyMemory {
+  recall(queryOrFeatures: string | string[], limit: number): Promise<Hint[]>;
+  remember(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult>;
   snapshot(): Promise<string>;
   restore(id: string): Promise<void>;
 }
@@ -66,6 +77,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   } catch {
     return false;
   }
+}
+
+const REFLECTION_EFFECTS: readonly ReflectionEffect[] = [
+  "helped",
+  "irrelevant",
+  "misleading",
+  "insufficient",
+];
+
+function readFeatureKey(value: unknown): FeatureKey | undefined {
+  return typeof value === "string" && (FEATURE_KEYS as readonly string[]).includes(value)
+    ? (value as FeatureKey)
+    : undefined;
+}
+
+function readEffect(value: unknown): ReflectionEffect | undefined {
+  return typeof value === "string" && (REFLECTION_EFFECTS as readonly string[]).includes(value)
+    ? (value as ReflectionEffect)
+    : undefined;
 }
 
 function isPositiveInteger(value: unknown): value is number {
@@ -197,11 +227,15 @@ function validateRequirements(requirements: unknown): void {
   }
 }
 
-function validateLesson(lesson: unknown): LessonInput {
+function validateLesson(lesson: unknown): LessonInput | LegacyLessonInput {
   try {
     if (!isRecord(lesson)) return invalidInput("write");
     const content = lesson.content;
     const sourceAttemptId = lesson.sourceAttemptId;
+    const featureKey = lesson.featureKey;
+    const memoryHitId = lesson.memoryHitId;
+    const effect = lesson.effect;
+    const idempotencyKey = lesson.idempotencyKey;
     const region = lesson.region;
     const triggers = lesson.triggers;
     if (
@@ -217,6 +251,16 @@ function validateLesson(lesson: unknown): LessonInput {
     ) {
       return invalidInput("write");
     }
+    const normalizedFeatureKey = featureKey === undefined ? undefined : readFeatureKey(featureKey);
+    const normalizedEffect = effect === undefined ? undefined : readEffect(effect);
+    if (
+      (featureKey !== undefined && normalizedFeatureKey === undefined) ||
+      (memoryHitId !== undefined && (typeof memoryHitId !== "string" || memoryHitId.trim() === "")) ||
+      (effect !== undefined && normalizedEffect === undefined) ||
+      (idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || idempotencyKey.trim() === ""))
+    ) {
+      return invalidInput("write");
+    }
 
     const normalizedTriggers: string[] = [];
     for (const trigger of triggers) {
@@ -226,6 +270,10 @@ function validateLesson(lesson: unknown): LessonInput {
     return {
       content,
       sourceAttemptId: sourceAttemptId.trim(),
+      ...(normalizedFeatureKey === undefined ? {} : { featureKey: normalizedFeatureKey }),
+      ...(memoryHitId === undefined ? {} : { memoryHitId: memoryHitId.trim() }),
+      ...(normalizedEffect === undefined ? {} : { effect: normalizedEffect }),
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey: idempotencyKey.trim() }),
       triggers: normalizedTriggers,
       region,
     };
@@ -255,7 +303,7 @@ function normalizeFeatures(features: unknown): string[] {
 
 export function buildHindsightRetainRequest(
   bankId: string,
-  lesson: LessonInput,
+  lesson: LessonInput | LegacyLessonInput,
   timeoutMs: number,
 ): HindsightRetainRequest {
   if (!isNonEmptyString(bankId) || !isTimeout(timeoutMs)) invalidInput("write");
@@ -269,6 +317,10 @@ export function buildHindsightRetainRequest(
       loci_source_attempt_id: normalizedLesson.sourceAttemptId,
       loci_region: normalizedLesson.region,
       loci_triggers_json: JSON.stringify(normalizedLesson.triggers),
+      ...(normalizedLesson.featureKey === undefined ? {} : { loci_feature_key: normalizedLesson.featureKey }),
+      ...(normalizedLesson.memoryHitId === undefined ? {} : { loci_memory_hit_id: normalizedLesson.memoryHitId }),
+      ...(normalizedLesson.effect === undefined ? {} : { loci_effect: normalizedLesson.effect }),
+      ...(normalizedLesson.idempotencyKey === undefined ? {} : { loci_idempotency_key: normalizedLesson.idempotencyKey }),
     },
     async: false,
     timeoutMs,
@@ -277,10 +329,10 @@ export function buildHindsightRetainRequest(
 }
 
 export function buildHindsightRecallQuery(
-  features: readonly string[],
+  features: readonly string[] | string,
   priorQuery: string,
 ): string {
-  const normalized = normalizeFeatures(features);
+  const normalized = normalizeFeatures(Array.isArray(features) ? features : [features]);
   if (typeof priorQuery !== "string") invalidInput("read");
   if (normalized.length === 0) return priorQuery;
   return `Relevant visual geolocation features:\n${normalized.map((feature) => `- ${feature}`).join("\n")}`;
@@ -373,7 +425,15 @@ function projectRecallResponse(response: unknown, limit: number): Hint[] {
         throw new Error("invalid recall result");
       }
       ids.add(result.id);
-      hints.push({ lessonId: result.id, text: result.text });
+      const metadata = isRecord(result.metadata) ? result.metadata : {};
+      const featureKey = readFeatureKey(metadata.loci_feature_key);
+      const effect = readEffect(metadata.loci_effect);
+      hints.push({
+        lessonId: result.id,
+        text: result.text,
+        ...(featureKey === undefined ? {} : { featureKey }),
+        ...(effect === undefined ? {} : { effect }),
+      });
     }
     return hints.slice(0, limit);
   } catch {
@@ -410,8 +470,12 @@ class HindsightMemoryImplementation implements HindsightMemory {
     if (this.#quarantined) throw hindsightError("instance_quarantined", operation);
   }
 
-  remember(lesson: LessonInput): Promise<void> {
-    const operation = this.#rememberTail.then(() => this.#rememberOne(lesson));
+  remember(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
+    const operation = this.#rememberTail
+      .then(() => this.#rememberOne(lesson))
+      .catch((error: unknown) => {
+        throw this.#toMemoryWriteError(error);
+      });
     this.#rememberTail = operation.then(
       () => undefined,
       () => undefined,
@@ -419,7 +483,7 @@ class HindsightMemoryImplementation implements HindsightMemory {
     return operation;
   }
 
-  async #rememberOne(lesson: LessonInput): Promise<void> {
+  async #rememberOne(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
     this.#assertUsable("write");
     const request = buildHindsightRetainRequest(
       this.#config.source.bankId,
@@ -440,26 +504,28 @@ class HindsightMemoryImplementation implements HindsightMemory {
 
     const accepted = validateRetainResponse(response, this.#config.source.bankId);
     const observer = this.#dependencies.onRememberCompleted;
-    if (observer === undefined) return;
-    try {
-      await observer({
-        sourceAttemptId: request.documentId,
-        documentId: request.documentId,
-        itemsCount: 1,
-        usage: accepted.usage,
-      });
-    } catch {
-      throw hindsightError("observer_failed", "write");
+    if (observer !== undefined) {
+      try {
+        await observer({
+          sourceAttemptId: request.documentId,
+          documentId: request.documentId,
+          itemsCount: 1,
+          usage: accepted.usage,
+        });
+      } catch {
+        throw hindsightError("observer_failed", "write");
+      }
     }
+    return { status: "stored", lessonId: request.documentId };
   }
 
-  async recall(features: string[], limit: number): Promise<Hint[]> {
+  async recall(queryOrFeatures: string | string[], limit: number): Promise<Hint[]> {
     this.#assertUsable("read");
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) invalidInput("read");
 
     const request: HindsightRecallRequest = {
       bankId: this.#config.source.bankId,
-      query: buildHindsightRecallQuery(features, this.#config.priorQuery),
+      query: buildHindsightRecallQuery(queryOrFeatures, this.#config.priorQuery),
       maxTokens: this.#config.maxTokens,
       budget: this.#config.recallBudget,
       types: ["world", "experience", "observation"],
@@ -509,6 +575,14 @@ class HindsightMemoryImplementation implements HindsightMemory {
     } finally {
       if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  #toMemoryWriteError(error: unknown): MemoryWriteError {
+    if (error instanceof MemoryWriteError) return error;
+    if (error instanceof HindsightMemoryError && error.code === "write_outcome_unknown") {
+      return new MemoryWriteError("write_outcome_unknown");
+    }
+    return new MemoryWriteError("write_failed");
   }
 
   async #quarantine(): Promise<void> {

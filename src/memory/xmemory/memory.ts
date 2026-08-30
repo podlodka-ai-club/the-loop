@@ -1,5 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { Hint, LessonInput, Memory } from "../memory.ts";
+import { FEATURE_KEYS } from "../../observe.ts";
+import type { FeatureKey } from "../../observe.ts";
+import {
+  MemoryWriteError,
+  type Hint,
+  type LegacyLessonInput,
+  type LegacyMemory,
+  type LessonInput,
+  type Memory,
+  type MemoryWriteResult,
+  type ReflectionEffect,
+} from "../memory.ts";
 import {
   XmemoryMemoryError,
   isXmemoryUnavailableCause,
@@ -49,9 +60,9 @@ export type XmemoryMemoryDependencies = {
   onInstanceQuarantined?: (result: XmemoryQuarantineResult) => void;
 };
 
-export interface XmemoryMemory extends Memory {
-  recall(features: string[], limit: number): Promise<Hint[]>;
-  remember(lesson: LessonInput): Promise<void>;
+export interface XmemoryMemory extends Memory, LegacyMemory {
+  recall(queryOrFeatures: string | string[], limit: number): Promise<Hint[]>;
+  remember(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult>;
   snapshot(): Promise<string>;
   restore(id: string): Promise<void>;
 }
@@ -196,6 +207,10 @@ function sanitizeSchemaError(error: unknown): XmemoryMemoryError {
 type NormalizedLesson = {
   content: string;
   sourceAttemptId: string;
+  featureKey?: FeatureKey;
+  memoryHitId?: string;
+  effect?: ReflectionEffect;
+  idempotencyKey?: string;
   triggers: string[];
   region: string;
 };
@@ -209,6 +224,12 @@ type XmemoryBehaviorDependencies = {
 const SENTINEL = /<\/?loci_/i;
 const SOURCE_ATTEMPT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const LOWERCASE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const REFLECTION_EFFECTS: readonly ReflectionEffect[] = [
+  "helped",
+  "irrelevant",
+  "misleading",
+  "insufficient",
+];
 
 const DEFINITE_WRITE_CODES: ReadonlySet<XmemoryMemoryErrorCode> = new Set([
   "invalid_input",
@@ -257,11 +278,15 @@ function quarantinedError(operation: "write" | "read"): XmemoryMemoryError {
   );
 }
 
-function normalizeLesson(value: LessonInput): NormalizedLesson {
+function normalizeLesson(value: LessonInput | LegacyLessonInput): NormalizedLesson {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalidInput("write");
     const content = value.content;
     const rawSourceAttemptId = value.sourceAttemptId;
+    const rawFeatureKey = value.featureKey;
+    const rawMemoryHitId = value.memoryHitId;
+    const rawEffect = value.effect;
+    const rawIdempotencyKey = value.idempotencyKey;
     const rawRegion = value.region;
     const rawTriggers = value.triggers;
     if (
@@ -285,6 +310,18 @@ function normalizeLesson(value: LessonInput): NormalizedLesson {
     ) {
       throw invalidInput("write");
     }
+    if (
+      (rawFeatureKey !== undefined &&
+        (typeof rawFeatureKey !== "string" ||
+          SENTINEL.test(rawFeatureKey) ||
+          !(FEATURE_KEYS as readonly string[]).includes(rawFeatureKey))) ||
+      (rawMemoryHitId !== undefined && (typeof rawMemoryHitId !== "string" || rawMemoryHitId.trim() === "" || SENTINEL.test(rawMemoryHitId))) ||
+      (rawEffect !== undefined &&
+        (typeof rawEffect !== "string" || !(REFLECTION_EFFECTS as readonly string[]).includes(rawEffect))) ||
+      (rawIdempotencyKey !== undefined && (typeof rawIdempotencyKey !== "string" || rawIdempotencyKey.trim() === "" || SENTINEL.test(rawIdempotencyKey)))
+    ) {
+      throw invalidInput("write");
+    }
 
     const triggers: string[] = [];
     const seen = new Set<string>();
@@ -299,17 +336,37 @@ function normalizeLesson(value: LessonInput): NormalizedLesson {
         triggers.push(trigger);
       }
     }
-    return { content, sourceAttemptId, triggers, region };
+    return {
+      content,
+      sourceAttemptId,
+      ...(rawFeatureKey === undefined ? {} : { featureKey: rawFeatureKey as FeatureKey }),
+      ...(rawMemoryHitId === undefined ? {} : { memoryHitId: rawMemoryHitId.trim() }),
+      ...(rawEffect === undefined ? {} : { effect: rawEffect }),
+      ...(rawIdempotencyKey === undefined ? {} : { idempotencyKey: rawIdempotencyKey.trim() }),
+      triggers,
+      region,
+    };
   } catch {
     throw invalidInput("write");
   }
 }
 
 function buildLessonEnvelope(lesson: NormalizedLesson): string {
+  const episodeProvenance =
+    lesson.featureKey === undefined &&
+    lesson.memoryHitId === undefined &&
+    lesson.effect === undefined &&
+    lesson.idempotencyKey === undefined
+      ? ""
+      : `feature_key: ${lesson.featureKey ?? ""}\n` +
+        `memory_hit_id: ${lesson.memoryHitId ?? ""}\n` +
+        `effect: ${lesson.effect ?? ""}\n` +
+        `idempotency_key: ${lesson.idempotencyKey ?? ""}\n`;
   return (
     "<loci_training_experience_v1>\n" +
     "<loci_provenance_v1>\n" +
     `source_attempt_id: ${lesson.sourceAttemptId}\n` +
+    episodeProvenance +
     `region_json: ${JSON.stringify(lesson.region)}\n` +
     `observed_triggers_json: ${JSON.stringify(lesson.triggers)}\n` +
     "</loci_provenance_v1>\n" +
@@ -320,12 +377,13 @@ function buildLessonEnvelope(lesson: NormalizedLesson): string {
   );
 }
 
-function normalizeFeatures(value: string[]): string[] {
+function normalizeFeatures(value: string | string[]): string[] {
   try {
-    if (!Array.isArray(value) || value.length > 64) throw invalidInput("read");
+    const values = Array.isArray(value) ? value : [value];
+    if (values.length > 64) throw invalidInput("read");
     const features: string[] = [];
     const seen = new Set<string>();
-    for (const raw of value) {
+    for (const raw of values) {
       if (typeof raw !== "string") throw invalidInput("read");
       const feature = raw.trim().replace(/\s+/g, " ");
       if (feature.length > 256 || SENTINEL.test(feature)) throw invalidInput("read");
@@ -356,6 +414,16 @@ function priorQuery(limit: number): string {
     "features are available. Preserve conditions, counter-signals, comparisons and caveats. Do not\n" +
     "invent observations or claim a final location."
   );
+}
+
+function projectXmemoryAnswer(text: string): Pick<Hint, "text" | "effect"> {
+  const effectMatch = /^effect:\s*(helped|irrelevant|misleading|insufficient)\s*$/im.exec(text);
+  const effect = effectMatch?.[1] as ReflectionEffect | undefined;
+  const lessonMatch = /<loci_lesson_v1>\s*([\s\S]*?)\s*<\/loci_lesson_v1>/i.exec(text);
+  const content = (lessonMatch?.[1] ?? text).trim();
+  return effect === undefined
+    ? { text: content }
+    : { text: `[effect=${effect}] ${content}`, effect };
 }
 
 function safeProviderMessage(code: XmemoryMemoryErrorCode, operation: "write" | "read"): string {
@@ -480,7 +548,7 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
     return error;
   }
 
-  private async performRemember(input: LessonInput): Promise<void> {
+  private async performRemember(input: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
     this.assertUsable("write");
     const lesson = normalizeLesson(input);
 
@@ -534,12 +602,13 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
         "The xmemory remember observer failed",
       );
     }
+    return { status: "stored", lessonId: result.writeId };
   }
 
-  async recall(features: string[], limit: number): Promise<Hint[]> {
+  async recall(queryOrFeatures: string | string[], limit: number): Promise<Hint[]> {
     this.assertUsable("read");
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) throw invalidInput("read");
-    const normalized = normalizeFeatures(features);
+    const normalized = normalizeFeatures(queryOrFeatures);
 
     let traceId: string;
     try {
@@ -580,14 +649,18 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
       const answer = (readerResult as Record<string, unknown>).answer;
       if (typeof answer !== "string") throw new Error("invalid answer");
       const text = answer.trim();
-      return text === "" ? [] : [{ lessonId: `xmemory-read:${traceId}`, text }];
+      return text === "" ? [] : [{ lessonId: `xmemory-read:${traceId}`, ...projectXmemoryAnswer(text) }];
     } catch {
       throw protocolError("read");
     }
   }
 
-  remember(lesson: LessonInput): Promise<void> {
-    const operation = this.writeTail.then(() => this.performRemember(lesson));
+  remember(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
+    const operation = this.writeTail
+      .then(() => this.performRemember(lesson))
+      .catch((error: unknown) => {
+        throw this.toMemoryWriteError(error);
+      });
     this.writeTail = operation.then(
       () => undefined,
       () => undefined,
@@ -609,6 +682,14 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
       "restore",
       "XmemoryMemory does not support restore",
     );
+  }
+
+  private toMemoryWriteError(error: unknown): MemoryWriteError {
+    if (error instanceof MemoryWriteError) return error;
+    if (error instanceof XmemoryMemoryError && error.code === "write_outcome_unknown") {
+      return new MemoryWriteError("write_outcome_unknown");
+    }
+    return new MemoryWriteError("write_failed");
   }
 }
 

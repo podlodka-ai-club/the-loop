@@ -10,7 +10,7 @@
 import { FrozenMemory, parseRecallMode } from "./file/memory.ts";
 import { createMem0Memory, loadMem0MemoryConfig } from "./mem0/memory.ts";
 import { NullMemory } from "./null/memory.ts";
-import type { Memory } from "./memory.ts";
+import type { LegacyMemory } from "./memory.ts";
 
 export type Backend = "file" | "mem0";
 
@@ -22,7 +22,7 @@ export function parseBackend(value: string): Backend {
 }
 
 export type MemorySelection = {
-  memory: Memory;
+  memory: LegacyMemory;
   /** One line for the run header, so the log says what was actually read. */
   describe: string;
   /** False when the backend cannot freeze state; the run is then reproducible only by convention. */

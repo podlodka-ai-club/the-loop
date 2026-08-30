@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import type { LessonInput, Memory } from "../memory.ts";
+import { MemoryWriteError } from "../memory.ts";
+import type { LegacyMemory, LessonInput, MemoryWriteErrorCode } from "../memory.ts";
 import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import {
   MEM0_CAPABILITIES,
@@ -130,8 +131,12 @@ test("capabilities and Phase-1 error retry policy are closed by default", () => 
 const lesson: LessonInput = {
   content: "Yellow roadside posts can support an Iceland hypothesis.",
   sourceAttemptId: "attempt-1",
+  featureKey: "bollards_and_barriers",
+  memoryHitId: "attempt-1/bollards_and_barriers/hit",
+  effect: "helped",
   triggers: ["yellow roadside posts"],
   region: "Iceland",
+  idempotencyKey: "attempt-1:bollards_and_barriers:hit",
 };
 
 function unexpected(name: string): never {
@@ -182,6 +187,12 @@ async function rejectsCode(
   options: { retryable?: boolean; eventId?: string; forbidden?: string[] } = {},
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (error instanceof MemoryWriteError) {
+      const expected: MemoryWriteErrorCode =
+        code === "ingestion_outcome_unknown" ? "write_outcome_unknown" : "write_failed";
+      assert.equal(error.code, expected);
+      return true;
+    }
     assert.ok(error instanceof Mem0MemoryError);
     assert.equal(error.code, code);
     assert.equal(error.retryable, options.retryable ?? false);
@@ -221,6 +232,10 @@ test("remember validates before calls and sends the exact scoped add payload", a
         loci_source_attempt_id: lesson.sourceAttemptId,
         loci_triggers: [],
         loci_region: "",
+        loci_feature_key: lesson.featureKey,
+        loci_memory_hit_id: lesson.memoryHitId,
+        loci_effect: lesson.effect,
+        loci_idempotency_key: lesson.idempotencyKey,
       },
     },
   ]);
@@ -1017,7 +1032,6 @@ test("recall rejects malformed feature containers after valid limit without sear
   const malformedFeatures: unknown[] = [
     null,
     {},
-    "feature",
     [null],
     ["valid", 1],
     ["valid", {}],
@@ -1077,7 +1091,7 @@ test("recall normalizes query, sends exact search policy, preserves order and sl
       },
     }),
   );
-  const asMemory: Memory = memory;
+  const asMemory: LegacyMemory = memory;
 
   assert.deepEqual(await asMemory.recall(["  yellow posts ", "", " lava terrain  "], 2), [
     { lessonId: "memory-2", text: "second" },

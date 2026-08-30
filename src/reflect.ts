@@ -9,7 +9,7 @@
 import { trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
-import type { LessonInput } from "./memory/memory.ts";
+import type { LegacyLessonInput } from "./memory/memory.ts";
 
 const MODEL = process.env.REFLECT_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
@@ -72,7 +72,7 @@ export type Attempt = {
 };
 
 /** Returns null when the model gives nothing usable: a bad lesson is worse than none. */
-export async function reflect(attempt: Attempt): Promise<LessonInput | null> {
+export async function reflect(attempt: Attempt): Promise<LegacyLessonInput | null> {
   return tracer.startActiveSpan("reflect", async (span) => {
     try {
       const facts =
@@ -107,7 +107,7 @@ export async function reflect(attempt: Attempt): Promise<LessonInput | null> {
 
       const raw = response.choices[0]?.message.content;
       if (!raw) return null;
-      const parsed = JSON.parse(raw) as Partial<LessonInput>;
+      const parsed = JSON.parse(raw) as Partial<LegacyLessonInput>;
       const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
       if (content === "") return null;
 

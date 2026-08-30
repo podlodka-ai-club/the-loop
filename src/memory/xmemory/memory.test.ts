@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { MemoryWriteError } from "../memory.ts";
 import {
   XMEMORY_CAPABILITIES,
   XmemoryMemoryError,
@@ -474,6 +475,12 @@ async function rejectsMemoryCode(
   retryable = false,
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (operation === "write" && error instanceof MemoryWriteError) {
+      assert.equal(error.code, code === "write_outcome_unknown" ? "write_outcome_unknown" : "write_failed");
+      assert.equal("cause" in error, false);
+      assert.equal(`${error.message} ${String(error)} ${error.stack ?? ""} ${JSON.stringify(error)}`.includes("raw-secret"), false);
+      return true;
+    }
     assert.ok(error instanceof XmemoryMemoryError);
     assert.equal(error.code, code);
     assert.equal(error.operation, operation);
@@ -880,9 +887,8 @@ test("quarantine notification absorbs sync, async and hostile failures without d
         },
       );
       await assert.rejects(memory.remember(lesson), (error) => {
-        assert.ok(error instanceof XmemoryMemoryError);
+        assert.ok(error instanceof MemoryWriteError);
         assert.equal(error.code, "write_outcome_unknown");
-        assert.equal(error.message, "The xmemory write outcome is unknown");
         assert.equal("cause" in error, false);
         return true;
       });
@@ -1085,6 +1091,29 @@ test("recall accepts provider trace metadata and maps blank or non-empty answer 
     {
       response: { traceId: "provider-generated-trace", readerResult: { answer: "fact" } },
       expected: [{ lessonId: `xmemory-read:${traceId}`, text: "fact" }],
+    },
+    {
+      response: {
+        traceId: null,
+        readerResult: {
+          answer:
+            "<loci_training_experience_v1>\n" +
+            "<loci_provenance_v1>\n" +
+            "effect: misleading\n" +
+            "</loci_provenance_v1>\n" +
+            "<loci_lesson_v1>\n" +
+            "The road marking cue was too broad.\n" +
+            "</loci_lesson_v1>\n" +
+            "</loci_training_experience_v1>",
+        },
+      },
+      expected: [
+        {
+          lessonId: `xmemory-read:${traceId}`,
+          text: "[effect=misleading] The road marking cue was too broad.",
+          effect: "misleading",
+        },
+      ],
     },
   ]) {
     const memory = await behaviorMemory({ read: async () => scenario.response });

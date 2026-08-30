@@ -1,7 +1,18 @@
 export { Mem0MemoryError, type Mem0MemoryErrorCode } from "./error.ts";
 import { setTimeout as scheduleTimeout } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Hint, LessonInput, Memory } from "../memory.ts";
+import { FEATURE_KEYS } from "../../observe.ts";
+import type { FeatureKey } from "../../observe.ts";
+import {
+  MemoryWriteError,
+  type Hint,
+  type LegacyLessonInput,
+  type LegacyMemory,
+  type LessonInput,
+  type Memory,
+  type MemoryWriteResult,
+  type ReflectionEffect,
+} from "../memory.ts";
 import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import { Mem0MemoryError } from "./error.ts";
 import { createMem0PlatformPort } from "./platform.ts";
@@ -45,6 +56,12 @@ const ERROR_MESSAGES = {
 } as const;
 
 const DEADLINE_EXPIRED = Symbol("mem0-deadline-expired");
+const REFLECTION_EFFECTS: readonly ReflectionEffect[] = [
+  "helped",
+  "irrelevant",
+  "misleading",
+  "insufficient",
+];
 
 type ResolvedDependencies = {
   platform: Mem0PlatformPort;
@@ -55,6 +72,18 @@ type ResolvedDependencies = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readFeatureKey(value: unknown): FeatureKey | undefined {
+  return typeof value === "string" && (FEATURE_KEYS as readonly string[]).includes(value)
+    ? (value as FeatureKey)
+    : undefined;
+}
+
+function readEffect(value: unknown): ReflectionEffect | undefined {
+  return typeof value === "string" && (REFLECTION_EFFECTS as readonly string[]).includes(value)
+    ? (value as ReflectionEffect)
+    : undefined;
 }
 
 function sanitizedError(
@@ -159,7 +188,7 @@ export function createMem0Memory(
   return new Mem0Memory(config, dependencies);
 }
 
-export class Mem0Memory implements Memory {
+export class Mem0Memory implements Memory, LegacyMemory {
   private readonly config: Mem0MemoryConfig;
   private readonly dependencies: ResolvedDependencies;
   private quarantined = false;
@@ -177,8 +206,12 @@ export class Mem0Memory implements Memory {
     };
   }
 
-  remember(lesson: LessonInput): Promise<void> {
-    const operation = this.rememberTail.then(() => this.rememberOne(lesson));
+  remember(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
+    const operation = this.rememberTail
+      .then(() => this.rememberOne(lesson))
+      .catch((error: unknown) => {
+        throw this.toMemoryWriteError(error);
+      });
     this.rememberTail = operation.then(
       () => undefined,
       () => undefined,
@@ -186,15 +219,19 @@ export class Mem0Memory implements Memory {
     return operation;
   }
 
-  async recall(features: string[], limit: number): Promise<Hint[]> {
+  async recall(queryOrFeatures: string | string[], limit: number): Promise<Hint[]> {
     this.assertUsable();
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
       throw sanitizedError("invalid_input");
     }
-    if (!Array.isArray(features) || features.some((value) => typeof value !== "string")) {
+    if (
+      typeof queryOrFeatures !== "string" &&
+      (!Array.isArray(queryOrFeatures) || queryOrFeatures.some((value) => typeof value !== "string"))
+    ) {
       throw sanitizedError("invalid_input");
     }
 
+    const features = Array.isArray(queryOrFeatures) ? queryOrFeatures : [queryOrFeatures];
     const query = features
       .map((value) => value.trim())
       .filter(Boolean)
@@ -222,11 +259,19 @@ export class Mem0Memory implements Memory {
         typeof record.id !== "string" ||
         record.id.trim() === "" ||
         typeof record.memory !== "string" ||
-        record.memory.trim() === ""
+        record.memory.trim() === "" ||
+        !isRecord(record.metadata)
       ) {
         throw sanitizedError("protocol_error");
       }
-      return { lessonId: record.id, text: record.memory };
+      const featureKey = readFeatureKey(record.metadata.loci_feature_key);
+      const effect = readEffect(record.metadata.loci_effect);
+      return {
+        lessonId: record.id,
+        text: record.memory,
+        ...(featureKey === undefined ? {} : { featureKey }),
+        ...(effect === undefined ? {} : { effect }),
+      };
     });
     return hints.slice(0, limit);
   }
@@ -245,7 +290,7 @@ export class Mem0Memory implements Memory {
     );
   }
 
-  private async rememberOne(lesson: LessonInput): Promise<void> {
+  private async rememberOne(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
     this.assertUsable();
     this.validateLesson(lesson);
 
@@ -259,6 +304,10 @@ export class Mem0Memory implements Memory {
         loci_source_attempt_id: lesson.sourceAttemptId,
         loci_triggers: [...lesson.triggers],
         loci_region: lesson.region,
+        ...(lesson.featureKey === undefined ? {} : { loci_feature_key: lesson.featureKey }),
+        ...(lesson.memoryHitId === undefined ? {} : { loci_memory_hit_id: lesson.memoryHitId }),
+        ...(lesson.effect === undefined ? {} : { loci_effect: lesson.effect }),
+        ...(lesson.idempotencyKey === undefined ? {} : { loci_idempotency_key: lesson.idempotencyKey }),
       },
     };
 
@@ -278,9 +327,10 @@ export class Mem0Memory implements Memory {
     const memoryIds = await this.waitForTerminalEvent(eventId, deadline);
     await this.waitForVisibility(memoryIds, eventId, deadline);
     this.notifyRememberCompleted(lesson.sourceAttemptId, memoryIds);
+    return { status: "stored", lessonId: memoryIds[0] ?? `mem0-event:${eventId}` };
   }
 
-  private validateLesson(lesson: LessonInput): void {
+  private validateLesson(lesson: LessonInput | LegacyLessonInput): void {
     if (
       !isRecord(lesson) ||
       typeof lesson.content !== "string" ||
@@ -493,5 +543,13 @@ export class Mem0Memory implements Memory {
   private failAndQuarantine(error: Mem0MemoryError): never {
     this.quarantined = true;
     throw error;
+  }
+
+  private toMemoryWriteError(error: unknown): MemoryWriteError {
+    if (error instanceof MemoryWriteError) return error;
+    if (error instanceof Mem0MemoryError && error.code === "ingestion_outcome_unknown") {
+      return new MemoryWriteError("write_outcome_unknown");
+    }
+    return new MemoryWriteError("write_failed");
   }
 }

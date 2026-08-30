@@ -4,7 +4,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath, dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { Hint, LessonInput } from "../memory.ts";
+import { MemoryWriteError } from "../memory.ts";
+import type { Hint, LegacyLessonInput } from "../memory.ts";
 import {
   buildHindsightRecallQuery,
   createHindsightMemory,
@@ -35,7 +36,7 @@ export const HINDSIGHT_PILOT_SUMMARY_PATH = "tmp/hindsight-pilot-v1-summary.json
 export type HindsightPilotLessonCase = {
   caseId: string;
   stratum: "positive" | "negative" | "comparison" | "ambiguous" | "incomplete";
-  lesson: LessonInput;
+  lesson: LegacyLessonInput;
   expectedDocumentId: string;
   expectedFactTerms: string[];
   forbiddenSubstrings: string[];
@@ -720,8 +721,11 @@ export async function runHindsightPilot(options: HindsightPilotRunOptions): Prom
     } catch (error) {
       activeSourceAttemptId = undefined;
       summary.writeFailures += 1;
-      if (error instanceof HindsightMemoryError &&
-        (error.code === "write_outcome_unknown" || error.code === "instance_quarantined")) {
+      if (
+        (error instanceof HindsightMemoryError &&
+          (error.code === "write_outcome_unknown" || error.code === "instance_quarantined")) ||
+        (error instanceof MemoryWriteError && error.code === "write_outcome_unknown")
+      ) {
         summary.quarantined = true;
         await notifyRetirement(options.onBankRetirementRequired, "unknown_write_outcome");
         break;

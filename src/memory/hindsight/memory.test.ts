@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { MemoryWriteError } from "../memory.ts";
 import {
   HINDSIGHT_CAPABILITIES,
   HINDSIGHT_DEFAULT_MAX_TOKENS,
@@ -72,6 +73,11 @@ async function assertAsyncMemoryError(
   retryable = false,
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (operation === "write" && error instanceof MemoryWriteError) {
+      assert.equal(error.code, code === "write_outcome_unknown" ? "write_outcome_unknown" : "write_failed");
+      assert.equal("cause" in error, false);
+      return true;
+    }
     assert.ok(error instanceof HindsightMemoryError);
     assert.equal(error.code, code);
     assert.equal(error.operation, operation);

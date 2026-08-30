@@ -9,7 +9,16 @@ import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { RECALL_LIMIT, renderHint } from "../memory.ts";
-import type { Hint, Lesson, LessonInput, Memory } from "../memory.ts";
+import type {
+  Hint,
+  LegacyLesson,
+  LegacyLessonInput,
+  LegacyMemory,
+  Lesson,
+  LessonInput,
+  Memory,
+  MemoryWriteResult,
+} from "../memory.ts";
 
 export const MEMORY_DIR = process.env.MEMORY_DIR ?? join("data", "memory");
 
@@ -46,11 +55,17 @@ function tokenize(values: readonly string[]): Set<string> {
   return tokens;
 }
 
-function parseLessons(text: string): Lesson[] {
-  const lessons: Lesson[] = [];
+function normalizeRecallInput(value: string | string[]): string[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+type StoredLesson = Lesson | LegacyLesson;
+
+function parseLessons(text: string): StoredLesson[] {
+  const lessons: StoredLesson[] = [];
   for (const line of text.split("\n")) {
     if (line.trim() === "") continue;
-    lessons.push(JSON.parse(line) as Lesson);
+    lessons.push(JSON.parse(line) as StoredLesson);
   }
   return lessons;
 }
@@ -62,7 +77,7 @@ function parseLessons(text: string): Lesson[] {
  * comparing memory-on against memory-off requires that the same features pull the
  * same lessons every time.
  */
-export class FileMemory implements Memory {
+export class FileMemory implements Memory, LegacyMemory {
   readonly path: string;
   readonly mode: RecallMode;
   /** A read-only store never writes back, not even usage counters. */
@@ -74,7 +89,7 @@ export class FileMemory implements Memory {
     this.readOnly = readOnly;
   }
 
-  private async load(): Promise<Lesson[]> {
+  private async load(): Promise<StoredLesson[]> {
     try {
       return parseLessons(await readFile(this.path, "utf8"));
     } catch (error) {
@@ -83,9 +98,10 @@ export class FileMemory implements Memory {
     }
   }
 
-  async recall(features: string[], limit = RECALL_LIMIT): Promise<Hint[]> {
+  async recall(queryOrFeatures: string | string[], limit = RECALL_LIMIT): Promise<Hint[]> {
     if (this.mode === "off") return [];
 
+    const features = normalizeRecallInput(queryOrFeatures);
     const lessons = await this.load();
     if (lessons.length === 0) return [];
 
@@ -131,19 +147,30 @@ export class FileMemory implements Memory {
     return ranked.map(({ lesson }) => renderHint(lesson));
   }
 
-  async remember(input: LessonInput): Promise<void> {
+  async remember(input: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
     const existing = await this.load();
-    const lesson: Lesson = {
+    if (input.idempotencyKey !== undefined) {
+      const duplicate = existing.find((lesson) => lesson.idempotencyKey === input.idempotencyKey);
+      if (duplicate !== undefined) {
+        return { status: "already_stored", lessonId: duplicate.id };
+      }
+    }
+    const lesson: StoredLesson = {
       id: `lesson-${String(existing.length + 1).padStart(4, "0")}`,
       content: input.content,
       sourceAttemptId: input.sourceAttemptId,
+      ...(input.featureKey === undefined ? {} : { featureKey: input.featureKey }),
+      ...(input.memoryHitId === undefined ? {} : { memoryHitId: input.memoryHitId }),
+      ...(input.effect === undefined ? {} : { effect: input.effect }),
       triggers: input.triggers,
       region: input.region,
+      ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
       hits: 0,
       wins: 0,
     };
     await mkdir(dirname(this.path), { recursive: true });
     await appendFile(this.path, `${JSON.stringify(lesson)}\n`, "utf8");
+    return { status: "stored", lessonId: lesson.id };
   }
 
   /**
@@ -162,7 +189,7 @@ export class FileMemory implements Memory {
     await this.write(lessons);
   }
 
-  private async write(lessons: readonly Lesson[]): Promise<void> {
+  private async write(lessons: readonly StoredLesson[]): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
     const body = lessons.map((lesson) => JSON.stringify(lesson)).join("\n");
     await writeFile(this.path, lessons.length > 0 ? `${body}\n` : "", "utf8");
@@ -197,7 +224,7 @@ export class FrozenMemory extends FileMemory {
   constructor(snapshotId: string, mode: RecallMode = "all") {
     super(join(MEMORY_DIR, `${snapshotId}.jsonl`), mode, true);
   }
-  override async remember(): Promise<void> {
+  override async remember(): Promise<MemoryWriteResult> {
     throw new Error("FrozenMemory is read-only: evaluation must not write lessons");
   }
 }

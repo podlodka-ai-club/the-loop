@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { Lesson, LessonInput } from "../memory.ts";
+import type { LegacyLesson, LegacyLessonInput, LessonInput } from "../memory.ts";
 import type { RecallMode } from "./memory.ts";
 
 const memoryDir = await mkdtemp(join(tmpdir(), "loci-file-memory-"));
@@ -18,7 +18,7 @@ function makePath(): string {
   return join(memoryDir, `${randomUUID()}.jsonl`);
 }
 
-function makeLesson(overrides: Partial<Lesson> = {}): Lesson {
+function makeLesson(overrides: Partial<LegacyLesson> = {}): LegacyLesson {
   return {
     id: `lesson-${randomUUID()}`,
     content: `lesson-${randomUUID()}`,
@@ -31,7 +31,7 @@ function makeLesson(overrides: Partial<Lesson> = {}): Lesson {
   };
 }
 
-function makeInput(overrides: Partial<LessonInput> = {}): LessonInput {
+function makeInput(overrides: Partial<LegacyLessonInput> = {}): LegacyLessonInput {
   return {
     content: `lesson-${randomUUID()}`,
     sourceAttemptId: `attempt-${randomUUID()}`,
@@ -50,17 +50,17 @@ function makeSUT({
   return { sut, path };
 }
 
-async function writeLessons(path: string, lessons: readonly Lesson[]): Promise<void> {
+async function writeLessons(path: string, lessons: readonly LegacyLesson[]): Promise<void> {
   const body = lessons.map((lesson) => JSON.stringify(lesson)).join("\n");
   await writeFile(path, body === "" ? "" : `${body}\n`, "utf8");
 }
 
-async function readLessons(path: string): Promise<Lesson[]> {
+async function readLessons(path: string): Promise<LegacyLesson[]> {
   const body = await readFile(path, "utf8");
   return body
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as Lesson);
+    .map((line) => JSON.parse(line) as LegacyLesson);
 }
 
 test("remember creates the directory and appends lessons with sequential ids", async () => {
@@ -77,6 +77,32 @@ test("remember creates the directory and appends lessons with sequential ids", a
     { id: "lesson-0002", ...second, hits: 0, wins: 0 },
   ]);
   assert.equal(await sut.size(), 2);
+});
+
+test("remember stores episode provenance and duplicate idempotency returns existing lesson", async () => {
+  const { sut, path } = makeSUT();
+  const input: LessonInput = {
+    content: "Wooden crossarms helped separate the region.",
+    sourceAttemptId: "attempt-episode",
+    featureKey: "poles",
+    memoryHitId: "attempt-episode/poles/hit",
+    effect: "helped",
+    triggers: ["wooden crossarms"],
+    region: "BR",
+    idempotencyKey: "attempt-episode:poles:hit",
+  };
+
+  assert.deepEqual(await sut.remember(input), { status: "stored", lessonId: "lesson-0001" });
+  assert.deepEqual(await sut.remember(input), { status: "already_stored", lessonId: "lesson-0001" });
+  assert.deepEqual(await readLessons(path), [{ id: "lesson-0001", ...input, hits: 0, wins: 0 }]);
+  assert.deepEqual(await sut.recall(["wooden crossarms"], 1), [
+    {
+      lessonId: "lesson-0001",
+      text: "BR: Wooden crossarms helped separate the region.",
+      featureKey: "poles",
+      effect: "helped",
+    },
+  ]);
 });
 
 test("recall and size treat a missing store as empty", async () => {

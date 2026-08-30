@@ -9,7 +9,7 @@ import type { Guess } from "./agent.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import { observe } from "./observe.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
-import type { Hint, Memory } from "./memory/memory.ts";
+import type { Hint, LegacyMemory } from "./memory/memory.ts";
 
 export type FailureKind = "unparseable" | "api_error" | "missing_image";
 
@@ -47,7 +47,7 @@ export type ExampleInput = {
  * reads lessons and never writes one. Training passes both.
  */
 export type TaskDeps = {
-  memory?: Memory;
+  memory?: LegacyMemory;
   recallLimit?: number;
   /**
    * Look at the image first and use what it sees as the recall query.
@@ -107,7 +107,12 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
   // for search only: the solver below still receives the image, so anything this
   // step misses is not lost to the answer.
   const features =
-    input.features ?? (deps.twoStep === true ? await observe(input.imagePath) : []);
+    input.features ??
+    (deps.twoStep === true
+      ? (await observe(input.imagePath)).features
+          .filter((item) => item.state === "visible" && item.text.trim() !== "")
+          .map((item) => item.text)
+      : []);
 
   const hints = await memory.recall(features, deps.recallLimit ?? RECALL_LIMIT);
   const use: MemoryUse = {

@@ -3,13 +3,13 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Hint, LessonInput } from "../memory.ts";
+import { MemoryWriteError } from "../memory.ts";
+import type { Hint, LegacyLessonInput, MemoryWriteResult } from "../memory.ts";
 import { xmemoryIntegrationEnabled, loadXmemoryIntegrationConfig } from "./integration.ts";
 import {
   XmemoryMemoryError,
   createXmemoryMemory,
   loadXmemoryMemoryConfig,
-  type XmemoryMemory,
   type XmemoryMemoryConfig,
   type XmemoryQuarantineResult,
   type XmemoryRememberResult,
@@ -37,7 +37,7 @@ export const XMEMORY_PILOT_EMPTY_QUERY =
 
 export type XmemoryPilotLessonCase = {
   caseId: string;
-  lesson: LessonInput;
+  lesson: LegacyLessonInput;
   expectedInsights: Array<{ kind: XmemoryInsightKind; allOf: string[] }>;
   forbiddenSubstrings: string[];
 };
@@ -442,6 +442,13 @@ function countForbidden(texts: readonly string[], forbidden: readonly string[]):
   return count;
 }
 
+export type XmemoryPilotMemory = {
+  remember(lesson: LegacyLessonInput): Promise<void | MemoryWriteResult>;
+  recall(features: string[], limit: number): Promise<Hint[]>;
+  snapshot(): Promise<string>;
+  restore(id: string): Promise<void>;
+};
+
 export type XmemoryPilotMemoryFactory = (
   config: XmemoryMemoryConfig,
   platform: XmemoryPlatformPort,
@@ -449,7 +456,7 @@ export type XmemoryPilotMemoryFactory = (
     onRememberCompleted: (result: XmemoryRememberResult) => void;
     onInstanceQuarantined: (result: XmemoryQuarantineResult) => void;
   },
-) => Promise<XmemoryMemory>;
+) => Promise<XmemoryPilotMemory>;
 
 export async function runXmemoryPilot(options: {
   manifests: XmemoryPilotManifests;
@@ -496,7 +503,7 @@ export async function runXmemoryPilot(options: {
 
   let activeSourceAttemptId: string | undefined;
   let observerCalls = 0;
-  let memory: XmemoryMemory;
+  let memory: XmemoryPilotMemory;
   try {
     memory = await options.createMemory(options.config, options.platform, {
       onRememberCompleted: (result) => {
@@ -536,8 +543,9 @@ export async function runXmemoryPilot(options: {
         summary.writeFailures += 1;
       }
       if (
-        error instanceof XmemoryMemoryError &&
-        (error.code === "write_outcome_unknown" || error.code === "instance_quarantined")
+        (error instanceof XmemoryMemoryError &&
+          (error.code === "write_outcome_unknown" || error.code === "instance_quarantined")) ||
+        (error instanceof MemoryWriteError && error.code === "write_outcome_unknown")
       ) {
         summary.aborted = true;
         summary.instanceQuarantined = true;

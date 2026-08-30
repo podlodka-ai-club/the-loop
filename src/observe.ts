@@ -12,21 +12,45 @@
  * kept the image. Whatever this step fails to notice is not lost, because the solver
  * still sees the frame itself. The output is a search query, not a summary.
  *
- * Features are cached on disk by prompt version and by the frame's own bytes: a memory-on
- * and a memory-off run over the same corpus must issue the same observation, and paying
+ * Features are cached on disk by image and prompt version: a memory-on and a
+ * memory-off run over the same corpus must issue the same observation, and paying
  * for it twice would double the quota cost of every comparison.
- *
- * The key is the content, not the path. A frame the reviewer turns upright keeps its name
- * and changes its pixels, so a path-keyed entry would answer a question about the new
- * picture with features observed from the old one. Hashing what was actually sent makes
- * that impossible to get wrong, and it costs one read of a 40 KB file.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { trace } from "@opentelemetry/api";
 import OpenAI from "openai";
-import { readFrame } from "./image.ts";
+import { toDataUri } from "./image.ts";
+
+export const FEATURE_KEYS = [
+  "traffic_side",
+  "script_and_language",
+  "visible_text",
+  "plates",
+  "poles",
+  "bollards_and_barriers",
+  "road_markings",
+  "road_surface",
+  "vegetation",
+  "terrain_and_soil",
+  "built_environment",
+  "vehicles",
+] as const;
+
+export type FeatureKey = (typeof FEATURE_KEYS)[number];
+export type FeatureState = "visible" | "not_visible";
+
+export type FeatureObservation = {
+  key: FeatureKey;
+  state: FeatureState;
+  text: string;
+};
+
+export type ObserveResult = {
+  features: FeatureObservation[];
+  error: string | null;
+};
 
 const MODEL = process.env.OBSERVE_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
@@ -98,34 +122,91 @@ function client(): OpenAI {
 
 const tracer = trace.getTracer("observe");
 
-/**
- * Where one frame's features are cached. Exported so the parent can unit-check it.
- *
- * Keyed on the bytes that were sent, so the entry cannot outlive the picture it describes.
- * A pure function of the payload: nothing about the file's name or location enters the key,
- * because neither is what the model was asked about.
- */
-export function observeCachePath(bytes: Buffer): string {
-  const key = createHash("sha256")
-    .update(PROMPT_VERSION)
-    .update(":")
-    .update(bytes)
-    .digest("hex")
-    .slice(0, 16);
+function cachePath(imagePath: string): string {
+  const key = createHash("sha256").update(`${PROMPT_VERSION}:${imagePath}`).digest("hex").slice(0, 16);
   return join(CACHE_DIR, `${key}.json`);
 }
 
+const FEATURE_LABELS = [
+  "traffic side",
+  "script and language",
+  "visible text",
+  "plates",
+  "poles",
+  "bollards and barriers",
+  "road markings",
+  "road surface",
+  "vegetation",
+  "terrain and soil",
+  "built environment",
+  "vehicles",
+] as const;
+
+function isFeatureObservation(value: unknown): value is FeatureObservation {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    FEATURE_KEYS.includes((value as { key?: FeatureKey }).key as FeatureKey) &&
+    (((value as { state?: string }).state) === "visible" ||
+      ((value as { state?: string }).state) === "not_visible") &&
+    typeof (value as { text?: unknown }).text === "string"
+  );
+}
+
+function normalizeCachedObservation(value: unknown): ObserveResult | null {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Array.isArray((value as { features?: unknown }).features)
+  ) {
+    const features = (value as { features: unknown[] }).features;
+    const error = (value as { error?: unknown }).error;
+    if (
+      features.length === FEATURE_KEYS.length &&
+      features.every(isFeatureObservation) &&
+      features.every((item, index) => item.key === FEATURE_KEYS[index])
+    ) {
+      return { features, error: typeof error === "string" ? error : null };
+    }
+  }
+  if (Array.isArray(value)) return legacyStringsToObservation(value);
+  return null;
+}
+
+function legacyStringsToObservation(values: readonly unknown[]): ObserveResult {
+  if (values.length !== FEATURE_KEYS.length || values.some((value) => typeof value !== "string")) {
+    return { features: [], error: "malformed observation response" };
+  }
+  const features = values.map((raw, index): FeatureObservation => {
+    const key = FEATURE_KEYS[index] as FeatureKey;
+    const label = FEATURE_LABELS[index] as string;
+    const text = (raw as string).trim();
+    const prefix = `${label}:`;
+    const body = text.toLowerCase().startsWith(prefix)
+      ? text.slice(prefix.length).trim()
+      : text;
+    return {
+      key,
+      state: body.toLowerCase() === "not visible" || body === "" ? "not_visible" : "visible",
+      text: body.toLowerCase() === "not visible" ? "" : body,
+    };
+  });
+  return { features, error: null };
+}
+
 /**
- * Returns the observed features, or an empty list when the call fails.
+ * Returns the observed feature registry, or an error result when the call fails.
  *
  * A failure here must not fail the task. Losing the search query costs relevance;
  * losing the row costs the denominator, which is worse and harder to notice.
  */
-export async function observe(imagePath: string): Promise<string[]> {
-  const { bytes, dataUri } = await readFrame(imagePath);
-  const path = observeCachePath(bytes);
+export async function observe(imagePath: string): Promise<ObserveResult> {
+  const path = cachePath(imagePath);
   try {
-    return JSON.parse(await readFile(path, "utf8")) as string[];
+    const cachedResult = normalizeCachedObservation(JSON.parse(await readFile(path, "utf8")));
+    if (cachedResult !== null) return cachedResult;
   } catch {
     // Not cached yet.
   }
@@ -142,7 +223,7 @@ export async function observe(imagePath: string): Promise<string[]> {
             role: "user",
             content: [
               { type: "text", text: PROMPT },
-              { type: "image_url", image_url: { url: dataUri } },
+              { type: "image_url", image_url: { url: await toDataUri(imagePath) } },
             ],
           },
         ],
@@ -154,23 +235,21 @@ export async function observe(imagePath: string): Promise<string[]> {
 
       const raw = response.choices[0]?.message.content;
       const parsed = raw ? (JSON.parse(raw) as { features?: unknown }) : {};
-      const features = Array.isArray(parsed.features)
-        ? parsed.features
-            .filter((f): f is string => typeof f === "string" && f.trim() !== "")
-            .map((f) => f.trim().toLowerCase())
-        : [];
+      const result = Array.isArray(parsed.features)
+        ? legacyStringsToObservation(parsed.features)
+        : { features: [], error: "malformed observation response" };
 
       span.setAttributes({
-        "observe.feature_count": features.length,
+        "observe.feature_count": result.features.length,
         "observe.prompt_version": PROMPT_VERSION,
       });
 
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, JSON.stringify(features), "utf8");
-      return features;
+      await writeFile(path, JSON.stringify(result), "utf8");
+      return result;
     } catch (error) {
       span.recordException(error as Error);
-      return [];
+      return { features: [], error: error instanceof Error ? error.message : String(error) };
     } finally {
       span.end();
     }
