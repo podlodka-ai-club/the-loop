@@ -265,6 +265,76 @@ test("reflectEpisode keeps reflection failure distinct from write failure and en
   }
 });
 
+test("reflectEpisode preflights writable training runtime before image/model access", async () => {
+  const writer = new WriterSpy();
+  const client = new ReflectClientSpy();
+
+  const result = await reflectEpisodeWithRuntime(makeInput(), {
+    writer,
+    run: { mode: "evaluation", snapshotId: "snapshot-1", readOnly: true, recallLimit: 5 },
+    client,
+    imageDataUri: async () => assert.fail("image must not be loaded for read-only reflection"),
+  });
+
+  assert.deepEqual(result, {
+    status: "reflection_failed",
+    effect: null,
+    lessonId: null,
+    failure: "invalid_tool_arguments",
+  });
+  assert.deepEqual(client.invocations, []);
+  assert.deepEqual(writer.invocations, []);
+
+  const missingWriter = await reflectEpisodeWithRuntime(makeInput(), {
+    run,
+    client,
+    imageDataUri: async () => assert.fail("image must not be loaded without a writer"),
+  } as unknown as Parameters<typeof reflectEpisodeWithRuntime>[1]);
+
+  assert.deepEqual(missingWriter, {
+    status: "reflection_failed",
+    effect: null,
+    lessonId: null,
+    failure: "invalid_tool_arguments",
+  });
+  assert.deepEqual(client.invocations, []);
+});
+
+test("reflectEpisode rejects a store region unrelated to revealed truth before writing", async () => {
+  const writer = new WriterSpy();
+  const client = new ReflectClientSpy();
+  client.toolCalls = [toolCall({ region: "US" })];
+
+  const result = await reflectEpisodeWithRuntime(makeInput(), {
+    writer,
+    run,
+    client,
+    imageDataUri: async () => "data:image/jpeg;base64,AA==",
+  });
+
+  assert.deepEqual(result, {
+    status: "reflection_failed",
+    effect: null,
+    lessonId: null,
+    failure: "invalid_tool_arguments",
+  });
+  assert.equal(client.invocations.length, 1);
+  assert.deepEqual(writer.invocations, []);
+
+  client.toolCalls = [toolCall({ region: "BR" })];
+  const validWriter = new WriterSpy();
+  assert.deepEqual(
+    await reflectEpisodeWithRuntime(makeInput({ truth: { latitude: -30.03, longitude: -51.23, country: " br " } }), {
+      writer: validWriter,
+      run,
+      client,
+      imageDataUri: async () => "data:image/jpeg;base64,AA==",
+    }),
+    { status: "stored", effect: "helped", lessonId: "lesson-written", failure: null },
+  );
+  assert.equal(validWriter.invocations.at(-1)?.lesson.region, "BR");
+});
+
 test("reflectEpisode rejects foreign hits before model and returns writer outcomes without blind retry", async () => {
   const foreignClient = new ReflectClientSpy();
   const foreignWriter = new WriterSpy();

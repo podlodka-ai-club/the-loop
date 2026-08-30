@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import OpenAI from "openai";
 import {
@@ -699,6 +702,23 @@ test("runTask feature-scoped path skips reflection for no-hit, not-visible and f
 });
 
 test("runTask feature-scoped reflection is training-only and memory bindings expose reader-only evaluation and production", async () => {
+  const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-memory-"));
+  process.env.MEMORY_DIR = memoryDir;
+  const frozenLesson: LessonInput & { id: string; hits: number; wins: number } = {
+    id: "lesson-0001",
+    content: "Wooden crossarms match the frozen snapshot.",
+    sourceAttemptId: "attempt-frozen",
+    featureKey: "poles",
+    memoryHitId: "attempt-frozen/poles/hit",
+    effect: "helped",
+    triggers: ["wooden crossarms"],
+    region: "BR",
+    idempotencyKey: "attempt-frozen:poles:hit",
+    hits: 0,
+    wins: 0,
+  };
+  const frozenSnapshotPath = join(memoryDir, "frozen-snapshot.jsonl");
+  await writeFile(frozenSnapshotPath, `${JSON.stringify(frozenLesson)}\n`, "utf8");
   const locateResult = (input: { attemptId: string; imagePath: string }): LocateResult => {
     const polesFeature: FeatureObservation = { key: "poles", state: "visible", text: "wooden poles" };
     const hit = {
@@ -804,6 +824,17 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
     resolveMemoryBinding({ mode: "training", snapshotId: "snapshot", readOnly: false, recallLimit: 5 }),
     /training memory requires/,
   );
+
+  assert.deepEqual(await evaluation.reader.recall("wooden crossarms", 5), [
+    {
+      lessonId: "lesson-0001",
+      text: "BR: Wooden crossarms match the frozen snapshot.",
+      featureKey: "poles",
+      effect: "helped",
+    },
+  ]);
+  assert.equal(await readFile(frozenSnapshotPath, "utf8"), `${JSON.stringify(frozenLesson)}\n`);
+  await rm(memoryDir, { recursive: true, force: true });
 });
 
 test("runTask legacy path rejects a feature-scoped MemoryReader when deps.run is absent", async () => {

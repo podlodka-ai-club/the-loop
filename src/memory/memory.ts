@@ -251,18 +251,21 @@ export async function resolveMemoryBinding(config: {
     if (typeof config.snapshotId !== "string" || config.snapshotId.trim() === "" || config.readOnly !== true) {
       throw new Error("evaluation memory requires a non-empty snapshotId and readOnly=true");
     }
+    const snapshotId = config.snapshotId.trim();
+    const { FrozenMemory } = await import("./file/memory.ts");
     return {
       mode: "evaluation",
-      reader: readerOnly(new InMemoryMemory()),
-      snapshotId: config.snapshotId,
+      reader: readerOnly(new FrozenMemory(snapshotId, "top")),
+      snapshotId,
       readOnly: true,
     };
   }
   if (config.mode === "production") {
     if (config.readOnly !== true) throw new Error("production memory requires readOnly=true");
+    const { FileMemory } = await import("./file/memory.ts");
     return {
       mode: "production",
-      reader: readerOnly(new InMemoryMemory()),
+      reader: readerOnly(new FileMemory(undefined, "top", true)),
       snapshotId: config.snapshotId,
       readOnly: true,
     };

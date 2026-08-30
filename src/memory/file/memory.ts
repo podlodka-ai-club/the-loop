@@ -159,6 +159,9 @@ export class FileMemory implements Memory, LegacyMemory {
   }
 
   async remember(input: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
+    if (this.readOnly) {
+      throw new Error("FileMemory is read-only: evaluation and production must not write lessons");
+    }
     const existing = await this.load();
     if (input.idempotencyKey !== undefined) {
       const duplicate = existing.find((lesson) => lesson.idempotencyKey === input.idempotencyKey);

@@ -148,7 +148,7 @@ function memoryPort(overrides: Partial<Mem0PlatformPort> = {}): Mem0PlatformPort
     add: async () => unexpected("add"),
     getEvent: async () => unexpected("getEvent"),
     get: async () => unexpected("get"),
-    list: async () => unexpected("list"),
+    list: async () => [],
     search: async () => unexpected("search"),
     ...overrides,
   };
@@ -300,6 +300,36 @@ test("remember prefixes non-helped content and duplicate idempotency returns exi
       },
     },
   ]);
+});
+
+test("remember duplicate idempotency survives a new adapter instance through provider metadata", async () => {
+  const requests: unknown[] = [];
+  const records: Array<{ id: string; memory: string; metadata: Record<string, unknown> }> = [];
+  const platform = memoryPort({
+    list: async () => records,
+    add: async (request) => {
+      requests.push(request);
+      records.push({
+        id: "memory-cross-instance",
+        memory: request.messages[0]?.content ?? "",
+        metadata: request.metadata,
+      });
+      return { eventId: "event-cross-instance", status: "PENDING" };
+    },
+    getEvent: async (eventId) => ({ eventId, status: "SUCCEEDED", memoryIds: ["memory-cross-instance"] }),
+    get: async (memoryId) => records.find((record) => record.id === memoryId) ?? null,
+  });
+
+  assert.deepEqual(await adapter(platform).remember(lesson), {
+    status: "stored",
+    lessonId: "memory-cross-instance",
+  });
+  assert.deepEqual(await adapter(platform).remember(lesson), {
+    status: "already_stored",
+    lessonId: "memory-cross-instance",
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(records[0]?.metadata.loci_idempotency_key, lesson.idempotencyKey);
 });
 
 test("remember rejects every malformed lesson before any platform call", async () => {

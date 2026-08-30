@@ -7,6 +7,7 @@ import {
   MEMORY_STORE_TOOL,
   MemoryToolValidationError,
   executeMemoryStore,
+  validateMemoryRunConfig,
   type MemoryRunConfig,
   type ReflectionEffect,
 } from "./tools/memory.ts";
@@ -186,8 +187,36 @@ function effectFromToolCalls(toolCalls: readonly unknown[]): ReflectionEffect | 
 
 function isActiveEpisode(input: ReflectionEpisodeInput): boolean {
   return (
+    input.feature.state === "visible" &&
     input.memoryHit.attemptId === input.attemptId &&
     input.memoryHit.featureKey === input.feature.key
+  );
+}
+
+function normalizedCountry(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(normalized) ? normalized : null;
+}
+
+function regionFromToolCalls(toolCalls: readonly unknown[]): string | null {
+  const parsed = parsedToolArguments(toolCalls);
+  if (!isRecord(parsed) || typeof parsed.region !== "string") return null;
+  return normalizedCountry(parsed.region);
+}
+
+function isWritableTrainingRuntime(deps: ReflectRuntimeDeps): boolean {
+  if (!isRecord(deps.run)) return false;
+  try {
+    validateMemoryRunConfig(deps.run);
+  } catch {
+    return false;
+  }
+  return (
+    deps.run.mode === "training" &&
+    deps.run.readOnly === false &&
+    deps.run.snapshotId === null &&
+    typeof deps.writer?.remember === "function"
   );
 }
 
@@ -197,6 +226,9 @@ export async function reflectEpisodeWithRuntime(
 ): Promise<ReflectionEpisodeResult> {
   return tracer.startActiveSpan("reflect.episode", async (span) => {
     try {
+      if (!isWritableTrainingRuntime(deps)) return failureResult("invalid_tool_arguments");
+      const truthCountry = normalizedCountry(input.truth.country);
+      if (truthCountry === null) return failureResult("invalid_tool_arguments");
       if (!isActiveEpisode(input)) return failureResult("foreign_hit");
 
       const response = await (deps.client ?? defaultClient()).chat.completions.create({
@@ -223,6 +255,8 @@ export async function reflectEpisodeWithRuntime(
 
       const toolCalls = response.choices[0]?.message.tool_calls ?? [];
       const effect = effectFromToolCalls(toolCalls);
+      const region = regionFromToolCalls(toolCalls);
+      if (region === null || region !== truthCountry) return failureResult("invalid_tool_arguments");
       const store = await executeMemoryStore(
         {
           attemptId: input.attemptId,

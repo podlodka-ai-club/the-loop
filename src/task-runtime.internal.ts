@@ -1,3 +1,8 @@
+/**
+ * Internal training composition point used by train.ts. It can receive a writer and
+ * run post-reveal episode reflection, while public runTask stays reader-only for
+ * feature-scoped callers.
+ */
 export {
   runFeatureScopedTask as runTaskWithRuntime,
   type FeatureScopedTaskRuntimeDeps,
