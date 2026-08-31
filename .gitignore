@@ -6,10 +6,15 @@
 data/snapshot/
 data/raw/
 tmp/
+.scratch/
 *.jpg
 *.jpeg
 *.png
 *.webp
+
+# The two frozen corpora are committed on purpose. See benchmark/images/ATTRIBUTION.md.
+!benchmark/images/eval/*.jpg
+!benchmark/images/train/*.jpg
 
 runs/
 checkpoints/

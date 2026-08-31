@@ -12,7 +12,7 @@ import {
 } from "@arizeai/openinference-semantic-conventions";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import OpenAI from "openai";
-import { CROP_BOTTOM_FRACTION, toDataUri } from "./image.ts";
+import { toDataUri } from "./image.ts";
 import type { Hint } from "./memory.ts";
 
 export { provider };
@@ -163,6 +163,9 @@ const tracer = trace.getTracer("geolocate");
  *
  * `hints` is the seam for memory. With none it behaves exactly as before, so a
  * memory-off run is unchanged by this parameter existing.
+ *
+ * Frames are sent whole. The corpus screen rejects any frame with a burned-in
+ * overlay, so there is nothing to crop here.
  */
 export function geolocate(imagePath: string, hints: readonly Hint[] = []): Promise<Guess> {
   return tracer.startActiveSpan("geolocate", async (span) => {
@@ -172,7 +175,6 @@ export function geolocate(imagePath: string, hints: readonly Hint[] = []): Promi
       [SemanticConventions.INPUT_MIME_TYPE]: "text/plain",
       "geolocate.image.id": basename(imagePath, extname(imagePath)),
       "geolocate.model": MODEL,
-      "geolocate.crop_bottom": CROP_BOTTOM_FRACTION,
       "geolocate.temperature": TEMPERATURE,
       "geolocate.seed": SEED,
       "geolocate.hint_count": hints.length,

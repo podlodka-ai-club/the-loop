@@ -1,8 +1,13 @@
-# OSV-5M frozen evaluation sample.
+# OSV-5M frozen corpus.
 # Regenerate with: node src/sample.ts --freeze
+# Retired. Scored with a flat 5% bottom crop, which no current code path applies.
+# Kept for the three published A/A runs in docs/benchmark/osv5m-eval.md.
 # seed: osv5m-v1
+# role: superseded
 # size: 200
 # fingerprint: 90cb7d6da5f7
+# counterpart: none
+# rejected: 0
 1010727379674208
 1050081342225017
 1087514528410124

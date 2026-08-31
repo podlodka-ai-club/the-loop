@@ -7,9 +7,11 @@
     "node": ">=22.18"
   },
   "scripts": {
+    "collect": "node --env-file-if-exists=.env src/collect.ts",
     "geolocate": "node --env-file-if-exists=.env src/cli.ts",
     "sample": "node --env-file-if-exists=.env src/sample.ts",
     "experiment": "node --env-file-if-exists=.env src/experiment.ts",
+    "review": "node --env-file-if-exists=.env src/review.ts",
     "typecheck": "tsc --noEmit",
     "train": "node --env-file-if-exists=.env src/train.ts"
   },
@@ -20,7 +22,8 @@
     "@arizeai/phoenix-otel": "2.2.0",
     "csv-parse": "^6.1.0",
     "openai": "^6.49.0",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "26.2.0",

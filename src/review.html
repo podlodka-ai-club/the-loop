@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>frame review</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --eval: #7fd4ff;
+        --train: #ffd27f;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        background: #101010;
+        color: #d8d8d8;
+        font: 13px/1.5 ui-monospace, monospace;
+        /* Without this a downward swipe is a pull-to-refresh on a phone, and the
+           browser takes the gesture before the page sees it end. */
+        touch-action: none;
+        overscroll-behavior: none;
+      }
+      header,
+      footer {
+        display: flex;
+        gap: 18px;
+        align-items: center;
+        padding: 8px 14px;
+        background: #181818;
+      }
+      header b {
+        font-weight: 600;
+        color: #fff;
+      }
+      .role-eval {
+        color: var(--eval);
+      }
+      .role-train {
+        color: var(--train);
+      }
+      .spacer {
+        flex: 1;
+      }
+      main {
+        position: relative;
+        overflow: hidden;
+        display: grid;
+        place-items: center;
+        /* A swipe must move the frame, not the page. The panel puts panning back for
+           its own list below. */
+        touch-action: none;
+      }
+      img {
+        max-width: 100%;
+        max-height: 100%;
+        display: block;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+      /* `display: block` above outranks the browser rule for [hidden], so say it here. */
+      [hidden] {
+        display: none !important;
+      }
+      /* Colour only. The fade itself is one animation per verdict, driven from script,
+         so no timer has to clear it and a second verdict flashes as loud as the first. */
+      #flash {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
+      #flash.keep {
+        background: #2f7f3f;
+      }
+      #flash.drop {
+        background: #a03030;
+      }
+      #error {
+        padding: 8px 14px;
+        background: #5a1d1d;
+        color: #ffe4e4;
+      }
+      #error:empty {
+        display: none;
+      }
+      #panel {
+        padding: 24px;
+        overflow: auto;
+        touch-action: pan-y;
+        max-height: 100%;
+      }
+      #panel h1 {
+        font-size: 15px;
+        margin: 0 0 12px;
+      }
+      #panel pre {
+        margin: 0;
+        white-space: pre-wrap;
+        user-select: all;
+      }
+      kbd {
+        background: #262626;
+        border-radius: 3px;
+        padding: 1px 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span id="pos"></span>
+      <b id="id"></b>
+      <span id="role"></span>
+      <span id="angle"></span>
+      <span class="spacer"></span>
+      <span id="dropped"></span>
+    </header>
+
+    <main>
+      <img id="frame" hidden draggable="false" alt="frame under review" />
+      <section id="panel" hidden></section>
+      <div id="flash"></div>
+    </main>
+
+    <footer>
+      <span><kbd>&uarr;</kbd> keep</span>
+      <span><kbd>&darr;</kbd> drop</span>
+      <span><kbd>&larr;</kbd> turn left</span>
+      <span><kbd>&rarr;</kbd> turn right</span>
+      <span><kbd>L</kbd> drop list</span>
+      <span>swipe = same arrow</span>
+      <span class="spacer"></span>
+      <span id="error"></span>
+    </footer>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let state = null;
+      let showList = false;
+      let busy = false;
+
+      const url = (item, tick) =>
+        `/api/image?role=${item.role}&id=${item.id}&v=${item.angle}.${tick}`;
+
+      function render() {
+        if (state === null) return;
+        const item = state.item;
+        $("pos").textContent = `${state.settled} / ${state.total}`;
+        $("dropped").textContent = `dropped ${state.drops.length}`;
+        $("id").textContent = item ? item.id : "";
+        $("role").textContent = item ? item.role : "";
+        $("role").className = item ? `role-${item.role}` : "";
+        $("angle").textContent = item && item.angle ? `turned ${item.angle}\u00b0` : "";
+
+        const done = item === null;
+        const panel = showList || done;
+        $("panel").hidden = !panel;
+        $("frame").hidden = panel;
+
+        if (panel) {
+          const lines = state.drops.map((d) => `${d.id} ${d.role}`).join("\n");
+          $("panel").innerHTML =
+            `<h1>${done ? "Nothing left to review." : "Dropped in this session:"} ` +
+            `${state.drops.length} frame(s) to drop</h1>` +
+            `<pre>${lines || "(none)"}</pre>` +
+            `<p>Written to benchmark/samples/rejected.txt with the reason <code>drop</code>.` +
+            (done ? "" : ` Press <kbd>L</kbd> to go back.`) +
+            `</p>`;
+          return;
+        }
+
+        $("frame").src = url(item, state.tick);
+        for (const ahead of state.next) new Image().src = url(ahead, state.tick);
+      }
+
+      function apply(next) {
+        state = next;
+        render();
+      }
+
+      // A keypress arriving while a request is in flight is dropped, not queued: two
+      // verdicts from one intent would be worse than a lost press, and the press that
+      // was lost leaves no green flash to claim otherwise.
+      async function call(path, body, kind) {
+        if (busy) return;
+        busy = true;
+        try {
+          const res = await fetch(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            $("error").textContent = "";
+            if (kind !== undefined) flash(kind);
+            apply(data);
+          } else {
+            $("error").textContent = data.error ?? res.statusText;
+            if (data.state) apply(data.state);
+          }
+        } catch (error) {
+          $("error").textContent = String(error);
+        } finally {
+          busy = false;
+        }
+      }
+
+      function flash(kind) {
+        const node = $("flash");
+        node.className = kind;
+        node.animate([{ opacity: 0.35 }, { opacity: 0 }], 180);
+      }
+
+      // One place decides what a direction means, so a swipe and an arrow key cannot
+      // drift apart. Returns whether the direction was acted on.
+      function act(dir) {
+        const item = state?.item;
+        if (item === null || item === undefined || showList) return false;
+        if (dir === "up") call("/api/verdict", { id: item.id, verdict: "keep" }, "keep");
+        else if (dir === "down") call("/api/verdict", { id: item.id, verdict: "drop" }, "drop");
+        else if (dir === "left") call("/api/rotate", { id: item.id, dir: "ccw" });
+        else if (dir === "right") call("/api/rotate", { id: item.id, dir: "cw" });
+        else return false;
+        return true;
+      }
+
+      const DIR_BY_KEY = {
+        ArrowUp: "up",
+        ArrowDown: "down",
+        ArrowLeft: "left",
+        ArrowRight: "right",
+      };
+
+      addEventListener("keydown", (event) => {
+        if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+
+        if (event.key === "l" || event.key === "L") {
+          showList = !showList;
+          render();
+          return;
+        }
+        if (act(DIR_BY_KEY[event.key])) event.preventDefault();
+      });
+
+      // A swipe is the same four decisions by hand. The threshold is what separates a
+      // decision from a tap or from the small drag a finger makes while looking; below
+      // it nothing happens at all.
+      const SWIPE_MIN = 48;
+      let gesture = null;
+      const surface = document.querySelector("main");
+
+      surface.addEventListener("pointerdown", (event) => {
+        if (!event.isPrimary) return;
+        gesture = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
+      });
+
+      surface.addEventListener("pointerup", (event) => {
+        if (gesture === null || event.pointerId !== gesture.pointer) return;
+        const dx = event.clientX - gesture.x;
+        const dy = event.clientY - gesture.y;
+        gesture = null;
+        if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) return;
+        // The longer axis wins, so a swipe that drifts still means one thing.
+        act(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : dy > 0 ? "down" : "up");
+      });
+
+      surface.addEventListener("pointercancel", () => (gesture = null));
+
+      fetch("/api/state")
+        .then((res) => res.json())
+        .then(apply);
+    </script>
+  </body>
+</html>

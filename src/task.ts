@@ -67,10 +67,7 @@ function isRateLimit(error: unknown): boolean {
   return message.includes("429") || message.toLowerCase().includes("rate limit");
 }
 
-async function geolocateWithBackoff(
-  imagePath: string,
-  hints: readonly Hint[],
-): Promise<Guess> {
+async function geolocateWithBackoff(imagePath: string, hints: readonly Hint[]): Promise<Guess> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {

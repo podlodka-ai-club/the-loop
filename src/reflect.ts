@@ -92,7 +92,10 @@ export async function reflect(attempt: Attempt): Promise<LessonInput | null> {
             role: "user",
             content: [
               { type: "text", text: `${PROMPT}\n\n${facts}` },
-              { type: "image_url", image_url: { url: await toDataUri(attempt.imagePath) } },
+              {
+                type: "image_url",
+                image_url: { url: await toDataUri(attempt.imagePath) },
+              },
             ],
           },
         ],

@@ -35,13 +35,16 @@ OSV-5M. Он даёт baseline, с которым сравнивается лю�
 ```bash
 npm ci
 cp .env.example .env      # впишите CEREBRAS_API_KEY
-npm run sample            # проверка выборки, без вызовов API
+npm run sample            # проверка корпусов, без вызовов API
 npm run experiment -- --name my-run-1
 ```
 
-Выборка заморожена файлом `benchmark/samples/osv5m-v1-n200.txt`, поэтому чужая копия
-репозитория оценивает те же 200 кадров. Загрузка датасета, запуск Phoenix и сверка с
-baseline описаны в [docs/benchmark/reproduce.md](docs/benchmark/reproduce.md).
+Корпусов два, оба заморожены в репозитории: `osv5m-v4-eval.txt` на 863 кадра для замера и
+`osv5m-v4-train.txt` на 862 кадра для дистилляции памяти. Каждый кадр посмотрел человек.
+Части не делят ни кадр, ни проезд, ни автора, ни ячейку сетки 25 км и сходятся по странам,
+поэтому чужая копия репозитория оценивает те же кадры. Сами кадры лежат в
+`benchmark/images/`. Загрузка датасета, запуск Phoenix и сверка описаны в
+[docs/benchmark/reproduce.md](docs/benchmark/reproduce.md).
 
 ## Документация
 

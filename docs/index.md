@@ -13,7 +13,7 @@ okf_version: "0.1"
 
 # Subdirectories
 
-* [benchmark](benchmark/index.md) - Замороженная выборка OSV-5M, метрики и порядок воспроизведения прогона.
+* [benchmark](benchmark/index.md) - Замороженные корпуса OSV-5M, метрики и порядок воспроизведения прогона.
 * [data](data/index.md) - Источники изображений с координатами и план выгрузки снапшота.
 * [research](research/index.md) - Исследования геолокации, агентской памяти, memory backends и xmemory.
 * [tools](tools/index.md) - Контракты инструментов Loci для геокодинга и внешней памяти.

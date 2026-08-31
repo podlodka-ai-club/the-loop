@@ -44,7 +44,7 @@ const memory: Memory =
 // score a different set of images here than it did on the machine that reported the
 // baseline. Freeze a new sample with `node src/sample.ts --freeze`.
 const { rows: pool, csvRowCount } = await loadRows();
-const sample = await loadFrozenSample(pool, manifestPath);
+const sample = await loadFrozenSample(pool, manifestPath, "eval");
 const seed = sample.seed;
 
 console.log(
@@ -67,14 +67,18 @@ try {
     await createDataset({
       name: datasetName,
       description:
-        `OSV-5M test sample. seed=${seed} n=${sample.rows.length} ` +
-        `fingerprint=${sample.fingerprint}. Frozen id list from ${manifestPath}, drawn as a ` +
-        `simple random sample over rows whose image is on disk, after keeping one row per ` +
-        `sequence and at most 3 per creator. Dataset-weighted, so country shares track the ` +
-        `full split.`,
+        `OSV-5M test corpus. seed=${seed} n=${sample.rows.length} ` +
+        `fingerprint=${sample.fingerprint}. Frozen id list from ${manifestPath}. Every ` +
+        `frame was approved by a person and passed the burned-in coordinate screen. The ` +
+        `pool of approved frames is cut into this corpus and its train counterpart so ` +
+        `that the two match country by country and share no sequence, uploader or 25 km ` +
+        `grid cell. Frames are used whole: nothing is cropped.`,
       examples: sample.rows.map((row) => ({
         id: row.id,
-        input: { imageId: row.id, imagePath: row.imagePath } satisfies ExampleInput,
+        input: {
+          imageId: row.id,
+          imagePath: row.imagePath,
+        } satisfies ExampleInput,
         output: {
           latitude: row.latitude,
           longitude: row.longitude,
