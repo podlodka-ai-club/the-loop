@@ -12,9 +12,14 @@
 // per-run storage. Set it before any OpenTelemetry module reads span limits.
 process.env.OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT ??= "2000";
 
+import { createClient } from "@arizeai/phoenix-client";
 import { createDataset, getDatasetInfo } from "@arizeai/phoenix-client/datasets";
-import { runExperiment } from "@arizeai/phoenix-client/experiments";
-import { MODEL } from "./agent.ts";
+import {
+  resumeEvaluation,
+  resumeExperiment,
+  runExperiment,
+} from "@arizeai/phoenix-client/experiments";
+import { MODEL, provider } from "./agent.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
@@ -25,6 +30,21 @@ import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
 
 const PHOENIX_URL = process.env.PHOENIX_BASE_URL ?? "http://localhost:6006";
+
+// `phoenix-client` uploads each evaluation score without awaiting the POST and
+// without catching it ("We log this without awaiting", runExperiment.js). A refused
+// connection therefore arrives as an unhandled rejection and ends the process after
+// every model call is paid for. Count those instead. The summary below reports what
+// the server is missing, and the next run under the same name writes it. A rejection
+// from this script's own top-level await does not pass through here: Node reports
+// that one itself.
+let droppedUploads = 0;
+process.on("unhandledRejection", (reason) => {
+  droppedUploads += 1;
+  if (droppedUploads <= 3) {
+    console.warn(`upload dropped: ${reason instanceof Error ? reason.message : String(reason)}`);
+  }
+});
 
 function flag(name: string, fallback: string): string {
   const index = process.argv.indexOf(`--${name}`);
@@ -139,35 +159,118 @@ try {
   console.log(`dataset created: ${datasetName}`);
 }
 
-const experiment = await runExperiment({
-  dataset: { datasetId },
-  experimentName: label,
-  experimentMetadata: {
-    model: MODEL,
-    seed,
-    fingerprint: sample.fingerprint,
-    sampleSize: sample.rows.length,
-    memoryBackend: backend,
-    memorySnapshot: snapshotId === "" ? "none" : snapshotId,
-    memoryFrozen: selection.frozen,
-    recallMode: snapshotId === "" ? "off" : recallMode,
-    twoStep,
-    recallLimit: RECALL_LIMIT,
-  },
-  task: (example) => runTask(example.input as ExampleInput, { memory, twoStep }),
-  evaluators: geoEvaluators,
-  concurrency,
-});
+const client = createClient();
+
+const experimentMetadata = {
+  model: MODEL,
+  seed,
+  fingerprint: sample.fingerprint,
+  sampleSize: sample.rows.length,
+  memoryBackend: backend,
+  memorySnapshot: snapshotId === "" ? "none" : snapshotId,
+  memoryFrozen: selection.frozen,
+  recallMode: snapshotId === "" ? "off" : recallMode,
+  twoStep,
+  recallLimit: RECALL_LIMIT,
+};
+
+const task = (example: { input: unknown }) =>
+  runTask(example.input as ExampleInput, { memory, twoStep });
+
+/** The experiment of this dataset that carries this name, or null. */
+async function findExperiment(
+  name: string,
+): Promise<{ id: string; metadata: Record<string, unknown> } | null> {
+  let cursor: string | undefined;
+  do {
+    const page = await client.GET("/v1/datasets/{dataset_id}/experiments", {
+      params: { path: { dataset_id: datasetId }, query: { cursor, limit: 50 } },
+    });
+    const entries = page.data?.data;
+    if (!entries) throw new Error(`cannot list the experiments of dataset ${datasetId}`);
+    const hit = entries.find((entry) => entry.name === name);
+    if (hit) return { id: hit.id, metadata: hit.metadata };
+    cursor = page.data?.next_cursor ?? undefined;
+  } while (cursor !== undefined);
+  return null;
+}
+
+// A run that dies half way leaves its finished items on the server, and those items
+// are the part that cost provider quota. Reusing the name continues that experiment:
+// only missing runs are executed, and only missing scores are written. A name this
+// dataset has not seen starts a new experiment.
+const existing = await findExperiment(label);
+let experimentId: string;
+
+if (existing === null) {
+  experimentId = (
+    await runExperiment({
+      client,
+      dataset: { datasetId },
+      experimentName: label,
+      experimentMetadata,
+      task,
+      evaluators: geoEvaluators,
+      concurrency,
+    })
+  ).id;
+} else {
+  // One name, two configurations would put both under a single experiment, and no
+  // reader could tell which half produced which number.
+  const changed = Object.keys(experimentMetadata).filter((key) => {
+    const wanted = experimentMetadata[key as keyof typeof experimentMetadata];
+    return JSON.stringify(existing.metadata[key]) !== JSON.stringify(wanted);
+  });
+  if (changed.length > 0) {
+    const differences = changed
+      .map((key) => {
+        const wanted = experimentMetadata[key as keyof typeof experimentMetadata];
+        return `${key} ${JSON.stringify(existing.metadata[key])} -> ${JSON.stringify(wanted)}`;
+      })
+      .join(", ");
+    throw new Error(
+      `experiment "${label}" exists with other settings: ${differences}. Repeat the ` +
+        `original flags to resume it, or pass another --name.`,
+    );
+  }
+  experimentId = existing.id;
+  console.log(`experiment resumed: ${label} (${experimentId})`);
+  await resumeExperiment({ client, experimentId, task, concurrency });
+  await resumeEvaluation({ client, experimentId, evaluators: geoEvaluators, concurrency });
+}
 
 // ---- aggregate ----------------------------------------------------------------
 
+/**
+ * One run as the server stores it. The summary is read back from Phoenix instead of
+ * taken from what this process holds: scores are uploaded one at a time, so a dropped
+ * upload leaves a gap that only the server can report, and that gap is what the next
+ * run under the same name repairs.
+ */
+type ExportedRun = {
+  output: unknown;
+  error: string | null;
+  annotations?: { name: string; score?: number | null }[] | null;
+};
+
+const exported = await client.GET("/v1/experiments/{experiment_id}/json", {
+  params: { path: { experiment_id: experimentId } },
+});
+// The OpenAPI document declares this endpoint `text/plain` and the server answers
+// with `application/json`, so the parsed body does not match the generated type.
+const report = exported.data as unknown as ExportedRun[] | undefined;
+if (!report) throw new Error(`cannot read the runs of experiment ${experimentId}`);
+
 const scoresByMetric = new Map<string, number[]>();
-for (const run of experiment.evaluationRuns ?? []) {
-  const value = run.result?.score;
-  if (typeof value !== "number") continue;
-  const bucket = scoresByMetric.get(run.name);
-  if (bucket) bucket.push(value);
-  else scoresByMetric.set(run.name, [value]);
+let scored = 0;
+for (const run of report) {
+  for (const annotation of run.annotations ?? []) {
+    scored += 1;
+    if (typeof annotation.score !== "number") continue;
+    const bucket = scoresByMetric.get(annotation.name);
+    if (bucket) bucket.push(annotation.score);
+    else scoresByMetric.set(annotation.name, [annotation.score]);
+  }
 }
 
 function quantile(sorted: number[], q: number): number {
@@ -176,16 +279,23 @@ function quantile(sorted: number[], q: number): number {
   return sorted[index] ?? Number.NaN;
 }
 
-const runCount = Object.keys(experiment.runs).length;
-const errored = Object.values(experiment.runs).filter((run) => run.error !== null).length;
+const errored = report.filter((run) => run.error !== null).length;
 
-console.log(`\nexperiment ${experiment.id} | ${runCount} runs | ${errored} task errors`);
+console.log(`\nexperiment ${experimentId} | ${report.length} runs | ${errored} task errors`);
 console.log(`${PHOENIX_URL}/datasets/${datasetId}/experiments\n`);
+
+if (droppedUploads > 0) {
+  console.log(`dropped  ${droppedUploads} uploads to Phoenix`);
+}
+const expected = report.length * geoEvaluators.length;
+if (scored < expected) {
+  console.log(`scores   ${scored}/${expected} on the server, run --name ${label} again\n`);
+}
 
 // Which provider actually served each item. With a fallback list this is no longer
 // a constant, and a run split across providers is a run split across queues.
 const providers = new Map<string, number>();
-for (const run of Object.values(experiment.runs)) {
+for (const run of report) {
   const output = run.output as { ok?: boolean; guess?: { provider?: string } } | null;
   const name = output?.ok === true ? (output.guess?.provider ?? "unknown") : "failed";
   providers.set(name, (providers.get(name) ?? 0) + 1);
@@ -227,3 +337,6 @@ for (const name of [
 console.log(`${"distance_km mean".padEnd(21)} ${String(distances.length).padStart(4)}   ${mean(distances).toFixed(1)} km`);
 console.log(`${"distance_km median".padEnd(21)} ${String(distances.length).padStart(4)}   ${quantile(distances, 0.5).toFixed(1)} km`);
 console.log(`${"distance_km p90".padEnd(21)} ${String(distances.length).padStart(4)}   ${quantile(distances, 0.9).toFixed(1)} km`);
+
+// Spans are batched, so the last of them reach Phoenix only on shutdown.
+await provider.shutdown();

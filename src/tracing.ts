@@ -11,8 +11,12 @@ import OpenAI from "openai";
 export const provider = register({
   projectName: process.env.PHOENIX_PROJECT ?? "geolocate",
   url: process.env.PHOENIX_COLLECTOR_ENDPOINT ?? "http://localhost:6006",
-  // One-shot CLI: export every span as it ends instead of on a batch timer.
-  batch: false,
+  // One export per span is one HTTP request per span. A corpus run ends with
+  // thousands of them in flight, the server stops accepting connections, and the
+  // run dies on a refused upload after every model call is paid for. Batch them,
+  // and flush with `provider.shutdown()` before the process exits - without that
+  // call the last batch never leaves.
+  batch: true,
   global: true,
 });
 

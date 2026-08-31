@@ -20,6 +20,7 @@
  * next to the smallest gap the pool allows, so the property is checked rather than
  * re-approximated per run.
  */
+import { provider } from "./agent.ts";
 import { DEFAULT_TRAIN_MANIFEST, loadFrozenSample } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
@@ -117,3 +118,6 @@ console.log(`lessons written   ${learned}, reflection produced nothing ${refused
 console.log(`memory size       ${await memory.size()} lessons`);
 console.log(`final snapshot    ${finalSnapshot}`);
 console.log(`evaluate it with  npm run experiment -- --snapshot ${finalSnapshot} --concurrency 1`);
+
+// Spans are batched, so the last of them reach Phoenix only on shutdown.
+await provider.shutdown();
