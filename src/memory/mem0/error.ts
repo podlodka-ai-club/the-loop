@@ -4,6 +4,7 @@ export type Mem0MemoryErrorCode =
   | "invalid_input"
   | "authentication"
   | "authorization"
+  | "agent_not_found"
   | "rate_limited"
   | "quota_exceeded"
   | "unavailable"

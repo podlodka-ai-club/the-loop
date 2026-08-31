@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { Guess } from "./agent.ts";
-import { FEATURE_KEYS, type FeatureKey, type FeatureObservation } from "./observe.ts";
+import { isNormalizedFeatureKey, MAX_FEATURES, type FeatureKey, type FeatureObservation } from "./observe.ts";
 import { geoScore, haversineKm } from "./geo.ts";
 import type {
   AttemptMetrics,
@@ -216,7 +216,7 @@ export function buildAttemptMetrics(input: AttemptMetricsInput): AttemptMetrics 
       : null;
   return {
     attemptId: input.attemptId,
-    visibleFeatures: input.observations.filter((feature) => feature.state === "visible").length,
+    visibleFeatures: input.observations.length,
     retrievalOutcomes: input.memoryGroups.length,
     memoryHits: input.memoryGroups.reduce((sum, group) => sum + group.hits.length, 0),
     episodesByEffect,
@@ -268,8 +268,8 @@ function parseRetrievalFixtureCase(value: unknown, source: string): RetrievalFix
   const featureKey = record.featureKey;
   const cueClass = record.class;
   const expectedProviderIds = record.expectedProviderIds;
-  if (typeof featureKey !== "string" || !(FEATURE_KEYS as readonly string[]).includes(featureKey)) {
-    throw new Error(`${source}.featureKey must be one of FEATURE_KEYS`);
+  if (!isNormalizedFeatureKey(featureKey)) {
+    throw new Error(`${source}.featureKey must be a normalized dynamic feature key`);
   }
   if (cueClass !== "rare" && cueClass !== "broad") {
     throw new Error(`${source}.class must be rare|broad`);
@@ -297,4 +297,4 @@ function isNumber(value: number | null): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-export const MAX_FEATURE_SCOPED_FEATURES = FEATURE_KEYS.length;
+export const MAX_FEATURE_SCOPED_FEATURES = MAX_FEATURES;

@@ -13,8 +13,16 @@ import { NullMemory } from "./memory/null/memory.ts";
 import { observe } from "./observe.ts";
 import type { FeatureObservation } from "./observe.ts";
 import { RECALL_LIMIT, parseRecallLimit } from "./memory/memory.ts";
-import type { Hint, LegacyMemory, MemoryReader } from "./memory/memory.ts";
+import type {
+  Hint,
+  LegacyMemory,
+  MemoryBinding,
+  MemoryReader,
+  MemorySourceResolver,
+} from "./memory/memory.ts";
 import { runFeatureScopedTask } from "./task-feature-scoped.internal.ts";
+import type { SampleRetryPolicy } from "./retry-policy.ts";
+import { RETRY_DELAYS_MS } from "./retry-policy.ts";
 import type {
   AttemptTrace,
   AttemptMetrics,
@@ -23,7 +31,14 @@ import type {
   MemoryRunConfig,
 } from "./tools/memory.ts";
 
-export type FailureKind = "unparseable" | "api_error" | "missing_image";
+export type FailureKind =
+  | "unparseable"
+  | "api_error"
+  | "missing_image"
+  | "memory_not_found"
+  | "memory_mismatch"
+  | "unavailable"
+  | "timeout";
 
 /**
  * Every result carries what memory put into the prompt: how many lessons, which ones
@@ -64,7 +79,6 @@ export type ExampleInput = {
 export type BenchmarkTaskMetricsConfig = {
   retrievalFixture: readonly RetrievalFixtureCase[];
   legacyGlobalProviderIds?: readonly string[];
-  legacyGlobalMemory?: LegacyMemory;
 };
 
 /**
@@ -77,9 +91,13 @@ export type FeatureScopedTaskDeps = {
    * to locate and keeps flattened hints only as a telemetry projection.
    */
   run: MemoryRunConfig;
+  /** The single resolved source of reader, writer, prompt port and snapshot policy. */
+  memoryBinding?: MemoryBinding;
   memory?: MemoryReader;
+  memorySourceResolver?: MemorySourceResolver;
   locateDeps?: Partial<Pick<LocateDeps, "maxToolAttemptsPerFeature">>;
   benchmark?: BenchmarkTaskMetricsConfig;
+  sampleRetryPolicy?: SampleRetryPolicy;
   recallLimit?: never;
   twoStep?: never;
   learn?: never;
@@ -114,8 +132,6 @@ export type TaskDeps = FeatureScopedTaskDeps | LegacyTaskDeps;
  * not optional here - `allow_fallbacks: false` means a 429 cannot be answered by
  * routing elsewhere, which is the trade we accepted to keep the quantization pinned.
  */
-const RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 60_000];
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function isRateLimit(error: unknown): boolean {
@@ -148,9 +164,12 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
   const startedAt = Date.now();
   if (deps.run !== undefined) {
     const featureScopedDeps: FeatureScopedTaskDeps = { run: deps.run };
+    if (deps.memoryBinding !== undefined) featureScopedDeps.memoryBinding = deps.memoryBinding;
     if (deps.memory !== undefined) featureScopedDeps.memory = deps.memory;
+    if (deps.memorySourceResolver !== undefined) featureScopedDeps.memorySourceResolver = deps.memorySourceResolver;
     if (deps.locateDeps !== undefined) featureScopedDeps.locateDeps = deps.locateDeps;
     if (deps.benchmark !== undefined) featureScopedDeps.benchmark = deps.benchmark;
+    if (deps.sampleRetryPolicy !== undefined) featureScopedDeps.sampleRetryPolicy = deps.sampleRetryPolicy;
     return runFeatureScopedTask(input, featureScopedDeps);
   }
 
@@ -168,7 +187,7 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
     input.features ??
     (deps.twoStep === true
       ? (await observe(input.imagePath)).features
-          .filter((item) => item.state === "visible" && item.text.trim() !== "")
+          .filter((item) => item.text.trim() !== "")
           .map((item) => item.text)
       : []);
 

@@ -38,6 +38,8 @@ export type Mem0SearchRequest = {
 };
 
 export interface Mem0PlatformPort {
+  /** Mem0's list-then-add API is not atomic unless a port explicitly proves it. */
+  readonly supportsAtomicIdempotency?: true;
   add(request: Mem0AddRequest): Promise<{ eventId: string; status: "PENDING" }>;
   getEvent(eventId: string): Promise<{
     eventId: string;

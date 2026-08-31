@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { MemoryWriteError } from "../memory.ts";
+import { MemoryWriteError, encodeMemoryRetrieveQuery, normalizeMemoryQuery, sharedMemoryPrompt, sharedMemoryPromptMetadata } from "../memory.ts";
 import type { LegacyLessonInput, LegacyMemory, LessonInput, MemoryWriteErrorCode } from "../memory.ts";
-import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
+import { loadPrompt } from "../../promts.ts";
 import {
   MEM0_CAPABILITIES,
   Mem0MemoryError,
@@ -128,6 +128,17 @@ test("capabilities and Phase-1 error retry policy are closed by default", () => 
   }
 });
 
+test("configured Mem0 memory exposes the application-owned common prompt metadata", () => {
+  const memory = createMem0Memory(
+    { snapshots: false },
+    { apiKey: "test-api-key", agentId: "test-agent", ingestionTimeoutMs: 100, pollIntervalMs: 1 },
+    { platform: memoryPort() },
+  );
+  assert.deepEqual(memory.promptMetadata, sharedMemoryPromptMetadata());
+  assert.equal(memory.promptMetadata?.retrieve.text, loadPrompt("memory-retrieve"));
+  assert.equal(memory.promptMetadata?.store.text, loadPrompt("memory-store"));
+});
+
 const lesson: LessonInput = {
   content: "Yellow roadside posts can support an Iceland hypothesis.",
   sourceAttemptId: "attempt-1",
@@ -234,7 +245,7 @@ test("remember validates before calls and sends the exact scoped add payload", a
       agentId: "agent-1",
       infer: true,
       temporalReasoning: false,
-      agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
+      agentCustomInstructions: loadPrompt("memory-store"),
       metadata: {
         loci_source_attempt_id: legacyLesson.sourceAttemptId,
         loci_triggers: [],
@@ -291,7 +302,7 @@ test("remember prefixes non-helped content and duplicate idempotency returns exi
       agentId: "agent-1",
       infer: true,
       temporalReasoning: false,
-      agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
+      agentCustomInstructions: loadPrompt("memory-store"),
       metadata: {
         loci_source_attempt_id: negative.sourceAttemptId,
         loci_triggers: negative.triggers,
@@ -1170,7 +1181,7 @@ test("recall accepts inclusive limit boundaries and valid empty provider results
   assert.deepEqual(await memory.recall(["feature"], 1_000), []);
   assert.deepEqual(requests, [
     {
-      query: "feature",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "feature"),
       filters: { agent_id: "agent-1" },
       topK: 1,
       threshold: 0.1,
@@ -1178,7 +1189,7 @@ test("recall accepts inclusive limit boundaries and valid empty provider results
       keywordSearch: true,
     },
     {
-      query: "feature",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "feature"),
       filters: { agent_id: "agent-1" },
       topK: 1_000,
       threshold: 0.1,
@@ -1210,7 +1221,7 @@ test("recall normalizes query, sends exact search policy, preserves order and sl
   ]);
   assert.deepEqual(requests, [
     {
-      query: "yellow posts\nlava terrain",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), normalizeMemoryQuery(["yellow posts", "lava terrain"])),
       filters: { agent_id: "agent-1" },
       topK: 2,
       threshold: 0.1,
@@ -1352,7 +1363,7 @@ test("recall runs during ingestion and returns only provider-visible records", a
     {
       type: "search",
       request: {
-        query: "visible cue",
+        query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "visible cue"),
         filters: { agent_id: "agent-1" },
         topK: 5,
         threshold: 0.1,
@@ -1368,7 +1379,7 @@ test("recall runs during ingestion and returns only provider-visible records", a
     {
       type: "search",
       request: {
-        query: "visible cue",
+        query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "visible cue"),
         filters: { agent_id: "agent-1" },
         topK: 5,
         threshold: 0.1,

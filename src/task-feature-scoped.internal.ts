@@ -3,13 +3,19 @@ import type { Guess } from "./agent.ts";
 import { buildAttemptMetrics } from "./benchmark-metrics.ts";
 import type { RetrievalFixtureCase } from "./benchmark-metrics.ts";
 import { haversineKm } from "./geo.ts";
-import { locate } from "./locate.ts";
+import { locateWithRuntime, resolveBindingWithPolicy } from "./locate-runtime.internal.ts";
 import type { LocateDeps } from "./locate.ts";
 import { readLocatePartialResult } from "./locate-partial.internal.ts";
-import { readerOnly } from "./memory/memory.ts";
-import { NullMemory } from "./memory/null/memory.ts";
-import type { Hint, MemoryReader, MemoryWriter } from "./memory/memory.ts";
-import type { LegacyMemory } from "./memory/memory.ts";
+import {
+  createMemorySourceBinding,
+  createMemorySourceResolver,
+  createFrozenMemorySnapshotBinding,
+  MemoryBindingError,
+  sharedMemoryPrompt,
+  validateMemoryBinding,
+  type MemoryBinding,
+} from "./memory/memory.ts";
+import type { Hint, MemoryWriter } from "./memory/memory.ts";
 import { ReflectRuntimeError } from "./reflect-runtime.internal.ts";
 import { reflectEpisode } from "./reflect.ts";
 import type {
@@ -30,6 +36,7 @@ import type {
   ToolEvent,
 } from "./tools/memory.ts";
 import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
+import { MAX_SAMPLE_ATTEMPTS, RETRY_DELAYS_MS, type SampleRetryPolicy } from "./retry-policy.ts";
 
 export type LocateFunction = (
   input: { attemptId: string; imagePath: string },
@@ -42,13 +49,17 @@ export type FeatureScopedTaskRuntimeInput = ExampleInput & {
 
 export type ReflectEpisodeFunction = (
   input: ReflectionEpisodeInput,
-  deps: { writer: MemoryWriter; run: FeatureScopedTaskDeps["run"] },
+  deps: {
+    memoryBinding: MemoryBinding;
+    run: FeatureScopedTaskDeps["run"];
+  },
 ) => Promise<ReflectionEpisodeResult>;
 
 export type FeatureScopedTaskRuntimeDeps = FeatureScopedTaskDeps & {
   locate?: LocateFunction;
   writer?: MemoryWriter;
   reflectEpisode?: ReflectEpisodeFunction;
+  sampleRetryPolicy?: SampleRetryPolicy;
 };
 
 export type FeatureScopedTrainingRunConfig = FeatureScopedTaskDeps["run"] & {
@@ -66,7 +77,8 @@ export type FeatureScopedTrainingTaskRuntimeDeps = Omit<
   "run" | "writer"
 > & {
   run: FeatureScopedTrainingRunConfig;
-  writer: MemoryWriter;
+  /** Writer is resolved from the unified memory binding. */
+  writer?: never;
 };
 
 function estimateHintTokens(hints: readonly Hint[]): number {
@@ -145,57 +157,82 @@ function memoryUseFromLocate(
       legacyGlobalProviderIds: options.legacyGlobalProviderIds,
     }),
     features: result.observations
-      .filter((item) => item.state === "visible")
       .map((item) => item.text)
       .filter((text) => text.trim() !== ""),
   };
 }
 
-async function legacyGlobalProviderIdsForMetrics(input: {
-  memory: LegacyMemory | undefined;
-  explicitProviderIds: readonly string[] | undefined;
-  features: readonly string[];
-  limit: FeatureScopedTaskDeps["run"]["recallLimit"];
-}): Promise<string[] | undefined> {
-  if (input.explicitProviderIds !== undefined) return [...input.explicitProviderIds];
-  if (input.memory === undefined) return undefined;
-  const hints = await input.memory.recall([...input.features], input.limit);
-  return hints.map((hint) => hint.lessonId);
-}
-
 function shouldReflect(
   input: FeatureScopedTaskRuntimeInput,
-  deps: FeatureScopedTaskRuntimeDeps,
+  run: FeatureScopedTaskDeps["run"],
+  binding: MemoryBinding,
 ): input is FeatureScopedTaskRuntimeInput & {
   truth: { latitude: number; longitude: number; country: string };
 } {
   return (
-    deps.run.mode === "training" &&
-    deps.run.readOnly === false &&
-    deps.writer !== undefined &&
+    run.mode === "training" &&
+    run.memoryRef !== null &&
+    run.readOnly === false &&
+    binding.mode === "training" &&
     input.truth !== undefined
   );
 }
 
-function isMemoryWriter(value: unknown): value is MemoryWriter {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.remember === "function" &&
-    typeof candidate.snapshot === "function" &&
-    typeof candidate.restore === "function"
-  );
-}
-
-function memoryReaderForRun(deps: FeatureScopedTaskRuntimeDeps): MemoryReader {
-  const memory: MemoryReader = deps.memory ?? new NullMemory();
-  if (deps.run.mode === "training") return memory;
-  const readOnlyReader = memory.asReadOnlyReader?.();
-  if (readOnlyReader !== undefined) return readerOnly(readOnlyReader);
-  if (isMemoryWriter(memory)) {
-    throw new Error("feature-scoped evaluation/production memory must be reader-only");
+async function resolveTaskBinding(deps: FeatureScopedTaskRuntimeDeps): Promise<MemoryBinding> {
+  if (deps.memoryBinding !== undefined) {
+    validateMemoryBinding(deps.memoryBinding, deps.run);
+    if (
+      deps.memory !== undefined ||
+      deps.writer !== undefined ||
+      deps.memorySourceResolver !== undefined
+    ) {
+      throw new MemoryBindingError(
+        "memory_mismatch",
+        "memoryBinding is the only memory source for the feature-scoped task",
+      );
+    }
+    return deps.memoryBinding;
   }
-  return readerOnly(memory);
+  if (deps.memorySourceResolver !== undefined && (deps.memory !== undefined || deps.writer !== undefined)) {
+    throw new MemoryBindingError(
+      "memory_mismatch",
+      "task accepts either memorySourceResolver or direct memory, not both",
+    );
+  }
+
+  let resolver = deps.memorySourceResolver;
+  if (resolver === undefined && deps.run.memoryRef !== null) {
+    const memory = deps.memory ?? deps.writer;
+    if (memory === undefined) {
+      throw new MemoryBindingError("memory_not_found", `no memory binding for ${deps.run.memoryRef}`);
+    }
+    if (deps.memory !== undefined && deps.writer !== undefined && deps.memory !== deps.writer) {
+      throw new MemoryBindingError("memory_mismatch", "task reader and writer are not one memory binding");
+    }
+    resolver = createMemorySourceResolver(createMemorySourceBinding({
+      memoryRef: deps.run.memoryRef,
+      memory,
+      provider: null,
+      ...(memory.loadSnapshot === undefined
+        ? {}
+        : {
+            loadSnapshot: async (snapshotId: string) => createFrozenMemorySnapshotBinding({
+              memoryRef: deps.run.memoryRef!,
+              snapshotId,
+              reader: await memory.loadSnapshot!(snapshotId),
+            }),
+          }),
+    }));
+  }
+  if (resolver === undefined) {
+    // resolveMemoryBinding handles the null-memory no-op without consulting a provider.
+    resolver = {
+      async resolve(): Promise<never> {
+        throw new MemoryBindingError("memory_not_found", "memoryRef=null has no provider binding");
+      },
+    };
+  }
+  return resolveBindingWithPolicy(deps.run, resolver);
 }
 
 function reflectionEvent(
@@ -203,7 +240,9 @@ function reflectionEvent(
   hit: MemoryHit,
   result: ReflectionEpisodeResult,
   sequence: number,
+  memoryRef: string | null,
 ): ToolEvent {
+  const prompt = memoryRef === null ? null : sharedMemoryPrompt("store");
   return {
     attemptId,
     phase: "reflect",
@@ -212,6 +251,8 @@ function reflectionEvent(
     memoryHitId: hit.memoryHitId,
     status: result.status === "reflection_failed" ? result.failure : result.status,
     sequence,
+    memoryRef,
+    ...(prompt === null ? {} : { promptVersion: prompt.version, promptDigest: prompt.digest }),
   };
 }
 
@@ -220,7 +261,9 @@ function failedReflectionEvent(
   hit: MemoryHit,
   sequence: number,
   status: string,
+  memoryRef: string | null,
 ): ToolEvent {
+  const prompt = memoryRef === null ? null : sharedMemoryPrompt("store");
   return {
     attemptId,
     phase: "reflect",
@@ -229,6 +272,8 @@ function failedReflectionEvent(
     memoryHitId: hit.memoryHitId,
     status,
     sequence,
+    memoryRef,
+    ...(prompt === null ? {} : { promptVersion: prompt.version, promptDigest: prompt.digest }),
   };
 }
 
@@ -238,6 +283,7 @@ async function reflectEpisodesAfterReveal(
   },
   result: LocateResult,
   deps: FeatureScopedTaskRuntimeDeps & { writer: MemoryWriter },
+  binding: MemoryBinding & { mode: "training" },
 ): Promise<void> {
   const reflect = deps.reflectEpisode ?? reflectEpisode;
   let sequence = result.trace.events.length;
@@ -270,7 +316,7 @@ async function reflectEpisodesAfterReveal(
             truth: input.truth,
             distanceKm,
           },
-          { writer: deps.writer, run: deps.run },
+          { memoryBinding: binding, run: deps.run },
         );
         const episode: EpisodeTrace = {
           attemptId: result.attemptId,
@@ -279,58 +325,65 @@ async function reflectEpisodesAfterReveal(
           effect: reflection.effect,
           reflectionStatus: reflection.status,
           lessonId: reflection.lessonId,
+          ...(reflection.failure === null ? {} : { failure: reflection.failure }),
         };
         result.episodes.push(episode);
         if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
         sequence += 1;
-        result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence));
+        result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence, deps.run.memoryRef));
       } catch (error) {
+        const bindingFailure = error instanceof MemoryBindingError ? error.code : null;
         const episode: EpisodeTrace = {
           attemptId: result.attemptId,
           featureKey: hit.featureKey,
           memoryHitId: hit.memoryHitId,
           effect: null,
-          reflectionStatus: "reflection_failed",
+          reflectionStatus: bindingFailure ?? "reflection_failed",
           lessonId: null,
+          ...(bindingFailure === null ? {} : { failure: bindingFailure }),
         };
         result.episodes.push(episode);
         if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
         sequence += 1;
-        const eventStatus = error instanceof ReflectRuntimeError ? error.code : "reflection_failed";
-        result.trace.events.push(failedReflectionEvent(result.attemptId, hit, sequence, eventStatus));
+        const eventStatus = error instanceof MemoryBindingError
+          ? error.code
+          : error instanceof ReflectRuntimeError
+            ? error.code
+            : "reflection_failed";
+        result.trace.events.push(failedReflectionEvent(result.attemptId, hit, sequence, eventStatus, deps.run.memoryRef));
       }
     }
   }
 }
 
-export async function runFeatureScopedTask(
+async function runFeatureScopedTaskAttempt(
   input: FeatureScopedTaskRuntimeInput,
   deps: FeatureScopedTaskRuntimeDeps,
 ): Promise<TaskResult> {
   const startedAt = Date.now();
   const attemptId = input.attemptId ?? input.imageId;
   try {
-    const result = await (deps.locate ?? locate)(
-      { attemptId, imagePath: input.imagePath },
-      {
-        ...deps.locateDeps,
-        memory: memoryReaderForRun(deps),
-        run: deps.run,
-      },
-    );
-    if (shouldReflect(input, deps)) {
-      await reflectEpisodesAfterReveal(input, result, deps as FeatureScopedTaskRuntimeDeps & { writer: MemoryWriter });
+    const binding = await resolveTaskBinding(deps);
+    const locateDeps = {
+      ...deps.locateDeps,
+      run: deps.run,
+      memoryBinding: binding,
+    };
+    const result = deps.locate === undefined
+      ? await locateWithRuntime(
+          { attemptId, imagePath: input.imagePath },
+          { ...locateDeps, memoryBinding: binding },
+        )
+      : await deps.locate({ attemptId, imagePath: input.imagePath }, locateDeps);
+    if (binding.mode === "training" && shouldReflect(input, deps.run, binding)) {
+      await reflectEpisodesAfterReveal(
+        input,
+        result,
+        { ...deps, writer: binding.writer } as FeatureScopedTaskRuntimeDeps & { writer: MemoryWriter },
+        binding,
+      );
     }
-    const features = result.observations
-      .filter((item) => item.state === "visible")
-      .map((item) => item.text)
-      .filter((text) => text.trim() !== "");
-    const legacyGlobalProviderIds = await legacyGlobalProviderIdsForMetrics({
-      memory: deps.benchmark?.legacyGlobalMemory,
-      explicitProviderIds: deps.benchmark?.legacyGlobalProviderIds,
-      features,
-      limit: deps.run.recallLimit,
-    });
+    const legacyGlobalProviderIds = deps.benchmark?.legacyGlobalProviderIds;
     const use = memoryUseFromLocate(result, {
       attemptId: result.attemptId,
       validOutput: true,
@@ -344,16 +397,7 @@ export async function runFeatureScopedTask(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const partial = readLocatePartialResult(error);
-    const partialFeatures = partial?.observations
-      .filter((item) => item.state === "visible")
-      .map((item) => item.text)
-      .filter((text) => text.trim() !== "") ?? [];
-    const legacyGlobalProviderIds = await legacyGlobalProviderIdsForMetrics({
-      memory: deps.benchmark?.legacyGlobalMemory,
-      explicitProviderIds: deps.benchmark?.legacyGlobalProviderIds,
-      features: partialFeatures,
-      limit: deps.run.recallLimit,
-    });
+    const legacyGlobalProviderIds = deps.benchmark?.legacyGlobalProviderIds;
     const use = partial === null
       ? {
           ...emptyMemoryUse(),
@@ -382,8 +426,56 @@ export async function runFeatureScopedTask(
     if (message.includes("ENOENT")) {
       return { ok: false, failure: "missing_image", message, ...use };
     }
+    if (error instanceof MemoryBindingError) {
+      return { ok: false, failure: error.code, message, ...use };
+    }
     return { ok: false, failure: "api_error", message, ...use };
   }
+}
+
+function retryableSampleMemoryFailure(result: TaskResult): boolean {
+  return !result.ok && (result.failure === "unavailable" || result.failure === "timeout");
+}
+
+function sampleAttemptId(baseAttemptId: string, retryIndex: number): string {
+  return retryIndex === 0 ? baseAttemptId : `${baseAttemptId}:sample-retry-${retryIndex}`;
+}
+
+function sampleRetryAttemptLimit(policy: SampleRetryPolicy | undefined): number {
+  const value = policy?.maxSampleAttempts ?? MAX_SAMPLE_ATTEMPTS;
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_SAMPLE_ATTEMPTS) {
+    throw new Error(`maxSampleAttempts must be an integer from 1 to ${MAX_SAMPLE_ATTEMPTS}`);
+  }
+  return value;
+}
+
+export async function runFeatureScopedTask(
+  input: FeatureScopedTaskRuntimeInput,
+  deps: FeatureScopedTaskRuntimeDeps,
+): Promise<TaskResult> {
+  const baseAttemptId = input.attemptId ?? input.imageId;
+  const maxAttempts = sampleRetryAttemptLimit(deps.sampleRetryPolicy);
+  const wait = deps.sampleRetryPolicy?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let result: TaskResult = await runFeatureScopedTaskAttempt(
+    { ...input, attemptId: sampleAttemptId(baseAttemptId, 0) },
+    deps,
+  );
+
+  for (let retryIndex = 1; retryableSampleMemoryFailure(result) && retryIndex < maxAttempts; retryIndex += 1) {
+    await wait(RETRY_DELAYS_MS[retryIndex - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1] ?? 0);
+    result = await runFeatureScopedTaskAttempt(
+      { ...input, attemptId: sampleAttemptId(baseAttemptId, retryIndex) },
+      deps,
+    );
+  }
+
+  if (!result.ok && retryableSampleMemoryFailure(result)) {
+    return {
+      ...result,
+      message: `${result.message}; sample retry exhausted after ${maxAttempts} attempts`,
+    };
+  }
+  return result;
 }
 
 export function runFeatureScopedTrainingTask(

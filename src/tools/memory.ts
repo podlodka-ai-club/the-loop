@@ -1,17 +1,27 @@
 import { createHash } from "node:crypto";
 import type { Guess } from "../agent.ts";
-import { FEATURE_KEYS } from "../observe.ts";
+import { isNormalizedFeatureKey, unicodeCodePointLength } from "../observe.ts";
 import type { FeatureKey, FeatureObservation } from "../observe.ts";
 import {
   MemoryWriteError,
+  MemoryBindingError,
+  memoryBindingFailureCodeOrNull,
   type Hint,
   type LessonInput,
+  type MemoryAdapterPromptPort,
   type MemoryReader,
+  recallWithMemoryPrompt,
+  rememberWithMemoryPrompt,
   type MemoryWriteErrorCode,
   type MemoryWriter,
   type ReflectionEffect,
 } from "../memory/memory.ts";
-export { resolveMemoryBinding } from "../memory/memory.ts";
+import { loadPrompt } from "../promts.ts";
+export {
+  resolveMemoryBinding,
+  type MemorySourceBinding,
+  type MemorySourceResolver,
+} from "../memory/memory.ts";
 export type { MemoryBinding } from "../memory/memory.ts";
 
 export type { ReflectionEffect };
@@ -34,6 +44,7 @@ export type RetrievalFailure =
   | "multiple_tool_calls"
   | "malformed_tool_json"
   | "memory_error"
+  | "unavailable"
   | "timeout"
   | "budget_exhausted"
   | "skipped";
@@ -45,6 +56,8 @@ export type FeatureMemoryGroup = {
   status: RetrievalStatus;
   hits: MemoryHit[];
   failure: RetrievalFailure | null;
+  /** Number of retries after the first model/provider attempt. */
+  retryCount: number;
 };
 
 export type EpisodeTrace = {
@@ -57,7 +70,25 @@ export type EpisodeTrace = {
     | "already_stored"
     | "write_failed"
     | "write_outcome_unknown"
+    | "unsupported"
+    | "memory_not_found"
+    | "memory_mismatch"
+    | "unavailable"
+    | "timeout"
     | "reflection_failed";
+  failure?:
+    | "write_failed"
+    | "write_outcome_unknown"
+    | "unsupported"
+    | "memory_not_found"
+    | "memory_mismatch"
+    | "unavailable"
+    | "timeout"
+    | "missing_tool_call"
+    | "multiple_tool_calls"
+    | "malformed_tool_json"
+    | "invalid_tool_arguments"
+    | "foreign_hit";
   lessonId: string | null;
 };
 
@@ -69,6 +100,10 @@ export type ToolEvent = {
   memoryHitId: string | null;
   status: string;
   sequence: number;
+  /** Binding provenance for provider calls; null means the no-memory path. */
+  memoryRef?: string | null;
+  promptVersion?: string;
+  promptDigest?: string;
 };
 
 export type AttemptTrace = {
@@ -87,6 +122,40 @@ export type LocateResult = {
   trace: AttemptTrace;
 };
 
+export type MemoryRetrieveToolResult = {
+  attempt_id: string;
+  feature_key: FeatureKey;
+  status: RetrievalStatus;
+  hits: Array<{
+    memory_hit_id: string;
+    provider_id: string | null;
+    text: string;
+    score: number | null;
+    effect: ReflectionEffect | null;
+  }>;
+  failure: RetrievalFailure | null;
+};
+
+export type MemoryStoreToolResult =
+  | { status: "stored" | "already_stored"; lesson_id: string; failure: null }
+  | {
+      status: "write_failed" | "write_outcome_unknown" | "unsupported" | WorkflowMemoryFailure;
+      lesson_id: null;
+      failure: "write_failed" | "write_outcome_unknown" | "unsupported" | WorkflowMemoryFailure;
+    };
+
+export type WorkflowMemoryFailure =
+  | "memory_not_found"
+  | "memory_mismatch"
+  | "unavailable"
+  | "timeout";
+
+export type DynamicFailureMapping = {
+  providerError: WorkflowMemoryFailure;
+  featureGroup: RetrievalFailure;
+  workflowOutcome: "degraded" | "sample_failed" | "run_aborted";
+};
+
 export type MemoryRetrieveArgs = {
   feature_key: FeatureKey;
   query: string;
@@ -96,13 +165,18 @@ export const MEMORY_RETRIEVE_TOOL = {
   type: "function",
   function: {
     name: "memory_retrieve",
-    description: "Retrieve lessons relevant to the currently assigned visual feature.",
+    description: loadPrompt("memory-retrieve"),
     strict: true,
     parameters: {
-      type: "object",
-      properties: {
-        feature_key: { type: "string", enum: FEATURE_KEYS },
-        query: { type: "string" },
+        type: "object",
+        properties: {
+        feature_key: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          pattern: "^[a-z][a-z0-9_]{0,63}$",
+        },
+        query: { type: "string", minLength: 1, maxLength: 512 },
       },
       required: ["feature_key", "query"],
       additionalProperties: false,
@@ -123,12 +197,17 @@ export const MEMORY_STORE_TOOL = {
   type: "function",
   function: {
     name: "memory_store",
-    description: "Store one grounded lesson for one feature and one memory hit after reveal.",
+    description: loadPrompt("memory-store"),
     strict: true,
     parameters: {
-      type: "object",
-      properties: {
-        feature_key: { type: "string", enum: FEATURE_KEYS },
+        type: "object",
+        properties: {
+        feature_key: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          pattern: "^[a-z][a-z0-9_]{0,63}$",
+        },
         memory_hit_id: { type: "string", minLength: 1 },
         effect: {
           type: "string",
@@ -153,6 +232,8 @@ export type MemoryToolPhase = "retrieve" | "reflect";
 export type WorkflowMode = "training" | "evaluation" | "production";
 
 export type MemoryRunConfig = {
+  /** Null disables provider access and writes. This field is intentionally mandatory. */
+  memoryRef: string | null;
   mode: WorkflowMode;
   snapshotId: string | null;
   readOnly: boolean;
@@ -163,6 +244,8 @@ export type MemoryToolContext = {
   attemptId: string;
   reader: MemoryReader;
   writer?: MemoryWriter;
+  /** Resolver-owned prompt boundary; provider calls must go through this port. */
+  promptPort?: MemoryAdapterPromptPort;
   phase: MemoryToolPhase;
   run: MemoryRunConfig;
   activeFeature: FeatureObservation;
@@ -224,7 +307,7 @@ function normalizeText(value: string): string {
 }
 
 function isFeatureKey(value: unknown): value is FeatureKey {
-  return typeof value === "string" && (FEATURE_KEYS as readonly string[]).includes(value);
+  return isNormalizedFeatureKey(value);
 }
 
 function isReflectionEffect(value: unknown): value is ReflectionEffect {
@@ -247,6 +330,7 @@ function failedGroup(
     status: "failed",
     hits: [],
     failure,
+    retryCount: 0,
   };
 }
 
@@ -288,7 +372,7 @@ function validateRetrieveArgs(input: unknown): MemoryRetrieveArgs {
   if (!isFeatureKey(value.feature_key)) throw new MemoryToolValidationError("invalid_tool_arguments");
   if (typeof value.query !== "string") throw new MemoryToolValidationError("invalid_tool_arguments");
   const query = value.query.trim().replace(/\s+/g, " ");
-  if (query === "" || query.length > 512) throw new MemoryToolValidationError("invalid_tool_arguments");
+  if (query === "" || unicodeCodePointLength(query) > 512) throw new MemoryToolValidationError("invalid_tool_arguments");
   return { feature_key: value.feature_key, query };
 }
 
@@ -304,7 +388,7 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
   if (!isReflectionEffect(value.effect)) throw new MemoryToolValidationError("invalid_tool_arguments");
   if (typeof value.content !== "string") throw new MemoryToolValidationError("invalid_tool_arguments");
   const content = value.content.trim().replace(/\s+/g, " ");
-  if (content === "" || content.length > 2_000 || sentenceCount(content) > 2) {
+  if (content === "" || unicodeCodePointLength(content) > 2_000 || sentenceCount(content) > 2) {
     throw new MemoryToolValidationError("invalid_tool_arguments");
   }
   if (!Array.isArray(value.triggers) || value.triggers.length < 1 || value.triggers.length > 8) {
@@ -313,7 +397,7 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
   const triggers = value.triggers.map((trigger) => {
     if (typeof trigger !== "string") throw new MemoryToolValidationError("invalid_tool_arguments");
     const normalized = trigger.trim().replace(/\s+/g, " ");
-    if (normalized === "" || normalized.length > 128) {
+    if (normalized === "" || unicodeCodePointLength(normalized) > 128) {
       throw new MemoryToolValidationError("invalid_tool_arguments");
     }
     return normalized;
@@ -342,6 +426,9 @@ export function validateMemoryRunConfig(run: MemoryRunConfig): void {
   }
   if (!Number.isInteger(run.recallLimit) || run.recallLimit < 1 || run.recallLimit > 5) {
     throw new MemoryToolValidationError("invalid_tool_arguments", "recallLimit must be 1..5");
+  }
+  if (run.memoryRef === undefined || (run.memoryRef !== null && (typeof run.memoryRef !== "string" || run.memoryRef.trim() === ""))) {
+    throw new MemoryToolValidationError("invalid_tool_arguments", "memoryRef must be null or non-empty");
   }
   if (run.mode === "evaluation" && (run.readOnly !== true || run.snapshotId === null || run.snapshotId.trim() === "")) {
     throw new MemoryToolValidationError("invalid_tool_arguments", "evaluation memory must be frozen");
@@ -423,6 +510,39 @@ function isTimeoutFailure(error: unknown): boolean {
   return name === "TimeoutError" || name === "AbortError";
 }
 
+function requirePromptPort(context: MemoryToolContext): MemoryAdapterPromptPort {
+  const readerPromptPort = context.reader.promptPort;
+  const contextPromptPort = context.promptPort;
+  if (readerPromptPort !== undefined && contextPromptPort !== undefined && readerPromptPort !== contextPromptPort) {
+    throw new MemoryBindingError(
+      "memory_mismatch",
+      "memory tool prompt boundary must belong to the active reader",
+    );
+  }
+  const promptPort = readerPromptPort ?? contextPromptPort ?? {
+    retrieve: async (request) => {
+      if (request.query === undefined) throw new Error("memory retrieve query is required");
+      return context.reader.recall(request.query, request.limit ?? context.run.recallLimit, request.prompt);
+    },
+    store: async (request) => {
+      if (context.writer === undefined || request.lesson === undefined) {
+        throw new MemoryWriteError("write_failed", "memory binding is not writable");
+      }
+      return context.writer.remember(request.lesson, request.prompt);
+    },
+  } satisfies MemoryAdapterPromptPort;
+  if (
+    typeof promptPort.retrieve !== "function" ||
+    typeof promptPort.store !== "function"
+  ) {
+    throw new MemoryToolValidationError(
+      "invalid_tool_arguments",
+      "memory binding prompt boundary is missing",
+    );
+  }
+  return promptPort;
+}
+
 export function makeMemoryHitId(
   attemptId: string,
   featureKey: FeatureKey,
@@ -462,10 +582,21 @@ export async function executeMemoryRetrieve(
 ): Promise<FeatureMemoryGroup> {
   validateMemoryRunConfig(context.run);
   if (context.phase !== "retrieve") return failedGroup(context, "skipped");
-  if (context.activeFeature.state !== "visible") return failedGroup(context, "skipped");
+  if (context.run.memoryRef === null) {
+    return {
+      attemptId: context.attemptId,
+      feature: { key: context.activeFeature.key, text: context.activeFeature.text },
+      query: null,
+      status: "no_hit",
+      hits: [],
+      failure: null,
+      retryCount: 0,
+    };
+  }
   if (context.reader.featureScope === "global") {
     return failedGroup(context, "invalid_tool_arguments");
   }
+  const promptPort = requirePromptPort(context);
 
   let parsed: MemoryRetrieveArgs;
   try {
@@ -482,13 +613,30 @@ export async function executeMemoryRetrieve(
 
   let hints: Hint[];
   try {
-    const output = await context.reader.recall(parsed.query, context.run.recallLimit);
+    const output = await recallWithMemoryPrompt(context.reader, {
+      memoryRef: context.run.memoryRef,
+      featureKey: context.activeFeature.key,
+      query: parsed.query,
+      limit: context.run.recallLimit,
+    }, promptPort);
     const validated = validateRecallOutput(output);
     if (validated === null) return failedGroup(context, "memory_error", parsed.query);
     hints = validated;
   } catch (error) {
     if (error instanceof MemoryToolValidationError) throw error;
-    return failedGroup(context, isTimeoutFailure(error) ? "timeout" : "memory_error", parsed.query);
+    const providerFailure = memoryBindingFailureCodeOrNull(error);
+    if (providerFailure !== null) {
+      throw new MemoryBindingError(providerFailure, `memory provider failed during recall: ${providerFailure}`, { cause: error });
+    }
+    return failedGroup(
+      context,
+      providerFailure === "timeout" || isTimeoutFailure(error)
+        ? "timeout"
+        : providerFailure === "unavailable"
+          ? "unavailable"
+          : "memory_error",
+      parsed.query,
+    );
   }
 
   const hits = hints.slice(0, Math.min(context.run.recallLimit, 5)).map((hint, index) => {
@@ -512,6 +660,7 @@ export async function executeMemoryRetrieve(
     status: hits.length === 0 ? "no_hit" : "hits",
     hits,
     failure: null,
+    retryCount: 0,
   };
 }
 
@@ -521,12 +670,20 @@ export async function executeMemoryStore(
 ): Promise<
   | { status: "stored" | "already_stored"; lessonId: string; failure: null }
   | {
-      status: "write_failed" | "write_outcome_unknown";
+      status: "write_failed" | "write_outcome_unknown" | "unsupported";
       lessonId: null;
-      failure: "write_failed" | "write_outcome_unknown";
+      failure: "write_failed" | "write_outcome_unknown" | "unsupported";
+    }
+  | {
+      status: WorkflowMemoryFailure;
+      lessonId: null;
+      failure: WorkflowMemoryFailure;
     }
 > {
   validateMemoryRunConfig(context.run);
+  if (context.run.memoryRef === null) {
+    throw new MemoryToolValidationError("invalid_tool_arguments", "memory_store is disabled when memoryRef=null");
+  }
   if (
     context.phase !== "reflect" ||
     context.run.mode !== "training" ||
@@ -536,6 +693,7 @@ export async function executeMemoryStore(
   ) {
     throw new MemoryToolValidationError("invalid_tool_arguments", "memory_store is not enabled");
   }
+  const promptPort = requirePromptPort(context);
 
   const parsed = validateStoreArgs(args);
   const hit = context.activeMemoryHit;
@@ -560,7 +718,11 @@ export async function executeMemoryStore(
   };
 
   try {
-    const result = await context.writer.remember(lesson);
+    const result = await rememberWithMemoryPrompt(context.writer, {
+      memoryRef: context.run.memoryRef,
+      featureKey: context.activeFeature.key,
+      lesson,
+    }, promptPort);
     if (!isMemoryWriteResult(result)) {
       return { status: "write_outcome_unknown", lessonId: null, failure: "write_outcome_unknown" };
     }
@@ -569,6 +731,35 @@ export async function executeMemoryStore(
     if (error instanceof MemoryWriteError) {
       return { status: error.code, lessonId: null, failure: error.code };
     }
+    const bindingFailure = memoryBindingFailureCodeOrNull(error);
+    if (bindingFailure !== null) {
+      return { status: bindingFailure, lessonId: null, failure: bindingFailure };
+    }
     return { status: "write_outcome_unknown", lessonId: null, failure: "write_outcome_unknown" };
   }
+}
+
+export function serializeMemoryRetrieveResult(group: FeatureMemoryGroup): MemoryRetrieveToolResult {
+  return {
+    attempt_id: group.attemptId,
+    feature_key: group.feature.key,
+    status: group.status,
+    hits: group.hits.map((hit) => ({
+      memory_hit_id: hit.memoryHitId,
+      provider_id: hit.providerId,
+      text: hit.text,
+      score: hit.score,
+      effect: hit.effect,
+    })),
+    failure: group.failure,
+  };
+}
+
+export function serializeMemoryStoreResult(
+  result: Awaited<ReturnType<typeof executeMemoryStore>>,
+): MemoryStoreToolResult {
+  if (result.failure === null) {
+    return { status: result.status, lesson_id: result.lessonId, failure: null };
+  }
+  return { status: result.status, lesson_id: null, failure: result.failure };
 }

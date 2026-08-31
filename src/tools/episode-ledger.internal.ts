@@ -1,4 +1,4 @@
-import { FEATURE_KEYS } from "../observe.ts";
+import { isNormalizedFeatureKey, MAX_FEATURES, MAX_FEATURE_TEXT_LENGTH, unicodeCodePointLength } from "../observe.ts";
 import type { FeatureKey } from "../observe.ts";
 import type { ReflectionEffect } from "../memory/memory.ts";
 import {
@@ -33,7 +33,7 @@ const RETRIEVAL_FAILURES: readonly RetrievalFailure[] = [
 ];
 
 function isFeatureKey(value: unknown): value is FeatureKey {
-  return typeof value === "string" && (FEATURE_KEYS as readonly string[]).includes(value);
+  return isNormalizedFeatureKey(value);
 }
 
 function isReflectionEffect(value: unknown): value is ReflectionEffect {
@@ -60,45 +60,67 @@ function validateExactKeys(value: Record<string, unknown>, expected: readonly st
   }
 }
 
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+}
+
+function validateGroupKeys(value: Record<string, unknown>): void {
+  const required = ["attemptId", "feature", "query", "status", "hits", "failure", "retryCount"] as const;
+  const actual = Object.keys(value);
+  if (actual.length !== required.length) rejectForeignHit();
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) rejectForeignHit();
+  }
+  if (!Number.isSafeInteger(value.retryCount) || (value.retryCount as number) < 0) {
+    rejectForeignHit();
+  }
+}
+
 function validateQueryForStatus(status: unknown, query: unknown): void {
-  if (status === "hits" || status === "no_hit") {
-    if (typeof query !== "string" || query.trim() === "" || query.length > 512) rejectForeignHit();
+  if (status === "no_hit") {
+    if (query !== null && (typeof query !== "string" || query.trim() === "" || unicodeCodePointLength(query) > 512)) {
+      rejectForeignHit();
+    }
     return;
   }
-  if (query !== null && (typeof query !== "string" || query.trim() === "" || query.length > 512)) {
+  if (status === "hits") {
+    if (typeof query !== "string" || query.trim() === "" || unicodeCodePointLength(query) > 512) rejectForeignHit();
+    return;
+  }
+  if (query !== null && (typeof query !== "string" || query.trim() === "" || unicodeCodePointLength(query) > 512)) {
     rejectForeignHit();
   }
 }
 
 export function episodeCandidatesFromGroups(
   attemptId: string,
-  groups: readonly FeatureMemoryGroup[],
+  groups: readonly unknown[],
 ): EpisodeCandidate[] {
-  if (!Array.isArray(groups) || groups.length > FEATURE_KEYS.length) rejectForeignHit();
+  if (!Array.isArray(groups) || groups.length > MAX_FEATURES) rejectForeignHit();
 
   const candidates: EpisodeCandidate[] = [];
   const seenHits = new Set<string>();
   const seenFeatures = new Set<FeatureKey>();
-  let previousFeatureIndex = -1;
   let totalHits = 0;
 
   for (const rawGroup of groups) {
     if (!isRecord(rawGroup)) rejectForeignHit();
-    validateExactKeys(rawGroup, ["attemptId", "feature", "query", "status", "hits", "failure"]);
+    validateGroupKeys(rawGroup);
     if (rawGroup.attemptId !== attemptId) rejectForeignHit();
     validateQueryForStatus(rawGroup.status, rawGroup.query);
 
     const rawFeature = rawGroup.feature;
     if (!isRecord(rawFeature)) rejectForeignHit();
-    validateExactKeys(rawFeature, ["key", "state", "text"]);
+    if (!hasExactKeys(rawFeature, ["key", "text"])) rejectForeignHit();
     if (!isFeatureKey(rawFeature.key)) rejectForeignHit();
-    if (rawFeature.state !== "visible" && rawFeature.state !== "not_visible") rejectForeignHit();
-    if (typeof rawFeature.text !== "string") rejectForeignHit();
+    if (
+      typeof rawFeature.text !== "string" ||
+      rawFeature.text.trim() === "" ||
+      unicodeCodePointLength(rawFeature.text) > MAX_FEATURE_TEXT_LENGTH
+    ) rejectForeignHit();
     if (seenFeatures.has(rawFeature.key)) rejectForeignHit();
     seenFeatures.add(rawFeature.key);
-    const featureIndex = FEATURE_KEYS.indexOf(rawFeature.key);
-    if (featureIndex <= previousFeatureIndex) rejectForeignHit();
-    previousFeatureIndex = featureIndex;
 
     if (!Array.isArray(rawGroup.hits)) rejectForeignHit();
 
@@ -109,10 +131,8 @@ export function episodeCandidatesFromGroups(
 
     const status = rawGroup.status;
     if (status === "hits") {
-      if (rawFeature.state !== "visible") rejectForeignHit();
       if (rawGroup.failure !== null || hits.length === 0) rejectForeignHit();
     } else if (status === "no_hit") {
-      if (rawFeature.state !== "visible") rejectForeignHit();
       if (rawGroup.failure !== null || hits.length !== 0) rejectForeignHit();
     } else if (status === "failed") {
       if (!isRetrievalFailure(rawGroup.failure) || hits.length !== 0) rejectForeignHit();
@@ -124,9 +144,6 @@ export function episodeCandidatesFromGroups(
           rawGroup.failure === "invalid_tool_arguments") &&
         rawGroup.query !== null
       ) {
-        rejectForeignHit();
-      }
-      if (rawFeature.state === "not_visible" && (rawGroup.failure !== "skipped" || rawGroup.query !== null)) {
         rejectForeignHit();
       }
     } else {

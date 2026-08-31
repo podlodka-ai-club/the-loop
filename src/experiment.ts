@@ -23,12 +23,12 @@ import {
 import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption, readCliOption } from "./cli-options.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
-import type { LegacyMemory } from "./memory/memory.ts";
 import { parseRecallMode } from "./memory/file/memory.ts";
 import { parseBackend, selectFeatureScopedEvaluationMemory, selectMemory } from "./memory/select.ts";
 import { fingerprintOf, loadRows } from "./osv5m.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
+import { OBSERVE_PROMPT_VERSION } from "./observe.ts";
 
 const PHOENIX_URL = process.env.PHOENIX_BASE_URL ?? "http://localhost:6006";
 
@@ -74,17 +74,12 @@ const legacySelection =
     : null;
 const featureScopedSelection =
   flow === "feature-scoped"
-    ? selectFeatureScopedEvaluationMemory({ backend, snapshotId, recall: recallFlag, memoryMode })
+    ? await selectFeatureScopedEvaluationMemory({ backend, snapshotId, recall: recallFlag, memoryMode })
     : null;
 const activeSelection = featureScopedSelection ?? legacySelection;
 if (activeSelection === null) throw new Error("memory selection is missing");
 const retrievalFixturePath = readCliOption("retrieval-fixture", DEFAULT_RETRIEVAL_FIXTURE);
 const retrievalFixture = await loadRetrievalFixture(retrievalFixturePath);
-const legacyGlobalMemory: LegacyMemory | undefined =
-  memoryMode === "warm" && flow === "feature-scoped"
-    ? selectMemory({ backend, snapshotId, recall: recallFlag }).memory
-    : undefined;
-
 // The sample is read from a file in the repository, never drawn afresh. `loadRows`
 // sees only the image shards this machine holds, so a fresh draw would silently
 // score a different set of images here than it did on the machine that reported the
@@ -132,7 +127,7 @@ const pairContract = buildBenchmarkPairContract({
   sampleIds: sample.rows.map((row) => row.id),
   sampleFingerprint: sample.fingerprint,
   manifestPath,
-  observationPromptVersion: "observe-v1",
+  observationPromptVersion: OBSERVE_PROMPT_VERSION,
   memoryMode,
 });
 
@@ -205,11 +200,10 @@ const experiment = await runExperiment({
     const taskInput = truth === undefined ? input : { ...input, truth };
     if (featureScopedSelection !== null) {
       return runTask(taskInput, {
-        memory: featureScopedSelection.memory,
+        memoryBinding: featureScopedSelection.memoryBinding,
         run: featureScopedSelection.run,
         benchmark: {
           retrievalFixture,
-          ...(legacyGlobalMemory === undefined ? {} : { legacyGlobalMemory }),
         },
       });
     }

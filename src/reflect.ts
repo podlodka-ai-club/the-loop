@@ -1,9 +1,10 @@
 import { reflectEpisodeWithRuntime } from "./reflect-runtime.internal.ts";
-import type { MemoryWriter } from "./memory/memory.ts";
+import type { MemoryBinding } from "./memory/memory.ts";
 import type {
   MemoryHit,
   MemoryRunConfig,
   ReflectionEffect,
+  WorkflowMemoryFailure,
 } from "./tools/memory.ts";
 import type { FeatureObservation } from "./observe.ts";
 
@@ -31,15 +32,21 @@ export type ReflectionEpisodeResult =
         | "foreign_hit";
     }
   | {
-      status: "write_failed" | "write_outcome_unknown";
+      status: "write_failed" | "write_outcome_unknown" | "unsupported";
       effect: ReflectionEffect;
       lessonId: null;
-      failure: "write_failed" | "write_outcome_unknown";
+      failure: "write_failed" | "write_outcome_unknown" | "unsupported" | WorkflowMemoryFailure;
+    }
+  | {
+      status: "memory_not_found" | "memory_mismatch" | "unavailable" | "timeout";
+      effect: ReflectionEffect | null;
+      lessonId: null;
+      failure: "memory_not_found" | "memory_mismatch" | "unavailable" | "timeout";
     };
 
 export function reflectEpisode(
   input: ReflectionEpisodeInput,
-  deps: { writer: MemoryWriter; run: MemoryRunConfig },
+  deps: { memoryBinding: MemoryBinding; run: MemoryRunConfig },
 ): Promise<ReflectionEpisodeResult> {
   return reflectEpisodeWithRuntime(input, deps);
 }

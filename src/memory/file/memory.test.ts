@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { MemoryWriteError } from "../memory.ts";
+import { MemoryBindingError, MemoryWriteError, sharedMemoryPromptMetadata } from "../memory.ts";
 import type { LegacyLesson, LegacyLessonInput, LessonInput } from "../memory.ts";
 import type { RecallMode } from "./memory.ts";
 
@@ -50,6 +50,10 @@ function makeSUT({
   const sut = new FileMemory(path, mode, readOnly);
   return { sut, path };
 }
+
+test("configured FileMemory exposes the application-owned common prompt metadata", () => {
+  assert.deepEqual(makeSUT().sut.promptMetadata, sharedMemoryPromptMetadata());
+});
 
 async function writeLessons(path: string, lessons: readonly LegacyLesson[]): Promise<void> {
   const body = lessons.map((lesson) => JSON.stringify(lesson)).join("\n");
@@ -324,6 +328,25 @@ test("snapshot writes the content hash and exact JSONL content", async () => {
 
   assert.equal(snapshotId, expectedId);
   assert.equal(await readFile(join(memoryDir, `${expectedId}.jsonl`), "utf8"), `${body}\n`);
+});
+
+test("loadSnapshot rejects missing, invalid and malformed snapshots with typed failures", async () => {
+  const { sut } = makeSUT();
+
+  await assert.rejects(
+    sut.loadSnapshot("not-a-snapshot"),
+    (error) => error instanceof MemoryBindingError && error.code === "memory_not_found",
+  );
+  await assert.rejects(
+    sut.loadSnapshot("0123456789ab"),
+    (error) => error instanceof MemoryBindingError && error.code === "memory_not_found",
+  );
+
+  await writeFile(join(memoryDir, "0123456789ab.jsonl"), "{malformed}\n", "utf8");
+  await assert.rejects(
+    sut.loadSnapshot("0123456789ab"),
+    (error) => error instanceof MemoryBindingError && error.code === "unavailable",
+  );
 });
 
 test("restore replaces the working store with a frozen snapshot", async () => {

@@ -27,6 +27,7 @@ function failedGroup(
     status: "failed",
     hits: [],
     failure,
+    retryCount: 0,
   };
 }
 
@@ -38,14 +39,28 @@ function finiteFloor(value: number | undefined): number | undefined {
 
 function capReader(reader: MemoryReader, remainingHits: number | undefined): MemoryReader {
   if (remainingHits === undefined) return reader;
-  return {
+  const basePromptPort = reader.promptPort;
+  const capped: MemoryReader = {
     featureScope: reader.featureScope,
-    asFeatureScopedReader: reader.asFeatureScopedReader?.bind(reader),
-    recall: async (query: string, limit: number): Promise<Hint[]> => {
-      const hints = await reader.recall(query, limit);
+    promptMetadata: reader.promptMetadata,
+    recall: async (query: string, limit: number, prompt): Promise<Hint[]> => {
+      const hints = await reader.recall(query, limit, prompt);
       return hints.slice(0, remainingHits);
     },
   };
+  capped.promptPort = {
+    retrieve: async (request) => {
+      if (request.query === undefined) throw new Error("memory retrieve query is required");
+      const hints = basePromptPort === undefined
+        ? await capped.recall(request.query, request.limit ?? 5, request.prompt)
+        : await basePromptPort.retrieve(request);
+      return hints.slice(0, remainingHits);
+    },
+    store: async () => {
+      throw new Error("capped retrieve reader cannot store lessons");
+    },
+  };
+  return capped;
 }
 
 export async function executeMemoryRetrieveWithRuntimeBudget(
@@ -64,11 +79,13 @@ export async function executeMemoryRetrieveWithRuntimeBudget(
     return failedGroup(context, "budget_exhausted");
   }
 
-  return executeMemoryRetrieve(
-    {
-      ...context,
-      reader: capReader(context.reader, memoryHitsRemaining),
-    },
-    args,
-  );
+  const reader = capReader(context.reader, memoryHitsRemaining);
+  const group = await executeMemoryRetrieve({
+    ...context,
+    reader,
+    ...(reader.promptPort === undefined ? {} : { promptPort: reader.promptPort }),
+  }, args);
+  if (memoryHitsRemaining === undefined || group.hits.length <= memoryHitsRemaining) return group;
+  const hits = group.hits.slice(0, memoryHitsRemaining);
+  return { ...group, hits, status: hits.length === 0 ? "no_hit" : "hits" };
 }

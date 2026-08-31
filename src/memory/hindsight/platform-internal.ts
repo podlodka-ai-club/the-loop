@@ -12,6 +12,7 @@ import {
 } from "./constants.ts";
 import type {
   HindsightMemoryResult,
+  HindsightDocumentLookup,
   HindsightPlatformPort,
   HindsightRecallRequest,
   HindsightRecallResponse,
@@ -25,6 +26,7 @@ type RetainOptions = {
   documentId?: string;
   async?: boolean;
   signal?: AbortSignal;
+  retainMission?: string;
 };
 
 type RecallOptions = {
@@ -41,6 +43,7 @@ type RecallOptions = {
 export type HindsightSdkClient = {
   retain(bankId: string, content: string, options?: RetainOptions): Promise<unknown>;
   recall(bankId: string, query: string, options?: RecallOptions): Promise<unknown>;
+  getDocument(bankId: string, documentId: string, options?: { signal?: AbortSignal }): Promise<unknown | null>;
   getVersion(options?: { signal?: AbortSignal }): Promise<unknown>;
   listDocuments(bankId: string, options?: {
     limit?: number;
@@ -224,6 +227,14 @@ function decodeListDocumentsResponse(value: unknown): { total: number } {
   return { total: value.total as number };
 }
 
+function decodeDocumentLookupResponse(value: unknown): HindsightDocumentLookup | null {
+  if (value === null) return null;
+  if (!isRecord(value) || !isNonEmptyString(value.id)) {
+    throw hindsightError("protocol_error", "read");
+  }
+  return { documentId: value.id };
+}
+
 type PreparedSignal = { signal: AbortSignal; timeoutSignal: AbortSignal };
 
 function prepareSignal(
@@ -299,6 +310,7 @@ type CapturedRetainRequest = {
   bankId: string;
   content: string;
   documentId: string;
+  retainMission: string;
   context: string;
   metadata: Record<string, string>;
   async: false;
@@ -321,6 +333,8 @@ function captureRetainRequest(request: unknown): CapturedRetainRequest | null {
       typeof request.bankId !== "string" ||
       typeof request.content !== "string" ||
       typeof request.documentId !== "string" ||
+      typeof request.retainMission !== "string" ||
+      request.retainMission.trim() === "" ||
       request.context !== HINDSIGHT_RETAIN_CONTEXT ||
       !stringMap(request.metadata) ||
       request.async !== false ||
@@ -333,6 +347,7 @@ function captureRetainRequest(request: unknown): CapturedRetainRequest | null {
       bankId: request.bankId,
       content: request.content,
       documentId: request.documentId,
+      retainMission: request.retainMission,
       context: request.context,
       metadata: request.metadata,
       async: false,
@@ -439,6 +454,23 @@ function captureListDocumentsRequest(request: unknown):
   }
 }
 
+function captureGetDocumentRequest(request: unknown):
+  | { bankId: string; documentId: string; timeoutMs: number; signal: AbortSignal }
+  | null {
+  try {
+    const basic = captureBasicRequest(request);
+    if (
+      !basic ||
+      !isRecord(request) ||
+      !isNonEmptyString(request.bankId) ||
+      !isNonEmptyString(request.documentId)
+    ) return null;
+    return { bankId: request.bankId, documentId: request.documentId, ...basic };
+  } catch {
+    return null;
+  }
+}
+
 function validateFactoryConfig(config: { apiKey: string; baseUrl: string }): void {
   try {
     if (
@@ -477,12 +509,14 @@ export function createHindsightPlatformPortInternal(
   };
 
   return {
+    supportsAtomicIdempotency: true,
     async retain(request: HindsightRetainRequest): Promise<HindsightRetainResponse> {
       const captured = captureRetainRequest(request);
       if (captured === null) throw hindsightError("protocol_error", "write");
       return callWithBoundary(captured.timeoutMs, captured.signal, "write", async (signal) => {
         const response = await getClient().retain(captured.bankId, captured.content, {
           documentId: captured.documentId,
+          retainMission: captured.retainMission,
           context: captured.context,
           metadata: captured.metadata,
           async: captured.async,
@@ -507,6 +541,20 @@ export function createHindsightPlatformPortInternal(
           signal,
         });
         return decodeRecallResponse(response);
+      });
+    },
+
+    async getDocument(request: {
+      bankId: string;
+      documentId: string;
+      timeoutMs: number;
+      signal: AbortSignal;
+    }): Promise<HindsightDocumentLookup | null> {
+      const captured = captureGetDocumentRequest(request);
+      if (captured === null) throw hindsightError("protocol_error", "read");
+      return callWithBoundary(captured.timeoutMs, captured.signal, "read", async (signal) => {
+        const response = await getClient().getDocument(captured.bankId, captured.documentId, { signal });
+        return decodeDocumentLookupResponse(response);
       });
     },
 

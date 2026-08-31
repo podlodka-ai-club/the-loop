@@ -10,7 +10,18 @@
 import { FrozenMemory, parseRecallMode, type RecallMode } from "./file/memory.ts";
 import { createMem0Memory, loadMem0MemoryConfig } from "./mem0/memory.ts";
 import { NullMemory } from "./null/memory.ts";
-import { RECALL_LIMIT, type LegacyMemory, type MemoryReader } from "./memory.ts";
+import {
+  createMemorySourceBinding,
+  createMemorySourceResolver,
+  createFrozenMemorySnapshotBinding,
+  RECALL_LIMIT,
+  createNoopMemoryBinding,
+  resolveMemoryBinding,
+  type LegacyMemory,
+  type MemoryBinding,
+  type MemoryReader,
+  type MemorySourceResolver,
+} from "./memory.ts";
 import type { BenchmarkMemoryMode } from "../benchmark-metrics.ts";
 import type { MemoryRunConfig } from "../tools/memory.ts";
 
@@ -34,7 +45,7 @@ export type MemorySelection = {
 };
 
 export type FeatureScopedMemorySelection = {
-  memory: MemoryReader;
+  memoryBinding: MemoryBinding;
   run: MemoryRunConfig;
   describe: string;
   frozen: boolean;
@@ -79,20 +90,20 @@ export function selectMemory(options: {
   };
 }
 
-export function selectFeatureScopedEvaluationMemory(options: {
+export async function selectFeatureScopedEvaluationMemory(options: {
   backend: Backend;
   snapshotId: string;
   recall: string;
   memoryMode: BenchmarkMemoryMode;
-}): FeatureScopedMemorySelection {
+}): Promise<FeatureScopedMemorySelection> {
   const recallMode = parseRecallMode(options.recall);
   if (options.memoryMode === "cold") {
     if (recallMode !== "off") {
       throw new Error("feature-scoped cold evaluation requires --recall off");
     }
     return {
-      memory: new NullMemory(),
-      run: { mode: "production", snapshotId: null, readOnly: true, recallLimit: RECALL_LIMIT },
+      memoryBinding: createNoopMemoryBinding({ mode: "production", snapshotId: null }),
+      run: { memoryRef: null, mode: "production", snapshotId: null, readOnly: true, recallLimit: RECALL_LIMIT },
       describe: "feature-scoped cold control (memory off)",
       frozen: true,
       memoryMode: options.memoryMode,
@@ -111,9 +122,21 @@ export function selectFeatureScopedEvaluationMemory(options: {
     throw new Error("feature-scoped warm evaluation requires a backend with frozen snapshots");
   }
   const snapshotId = options.snapshotId.trim();
+  const memory = new FrozenMemory(snapshotId, recallMode).asFeatureScopedReader();
+  const run = { memoryRef: "file", mode: "evaluation" as const, snapshotId, readOnly: true as const, recallLimit: RECALL_LIMIT };
+  const sourceResolver = createMemorySourceResolver(createMemorySourceBinding({
+    memoryRef: "file",
+    memory,
+    provider: "file",
+    loadSnapshot: async (id) => createFrozenMemorySnapshotBinding({
+      memoryRef: "file",
+      snapshotId: id,
+      reader: new FrozenMemory(id, recallMode),
+    }),
+  }));
   return {
-    memory: new FrozenMemory(snapshotId, recallMode).asFeatureScopedReader(),
-    run: { mode: "evaluation", snapshotId, readOnly: true, recallLimit: RECALL_LIMIT },
+    memoryBinding: await resolveMemoryBinding(run, sourceResolver),
+    run,
     describe: `feature-scoped file snapshot ${snapshotId}, recall top`,
     frozen: true,
     memoryMode: options.memoryMode,

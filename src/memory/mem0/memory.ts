@@ -1,24 +1,32 @@
 export { Mem0MemoryError, type Mem0MemoryErrorCode } from "./error.ts";
 import { setTimeout as scheduleTimeout } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
-import { FEATURE_KEYS } from "../../observe.ts";
+import { isNormalizedFeatureKey } from "../../observe.ts";
 import type { FeatureKey } from "../../observe.ts";
 import {
+  MemoryBindingError,
   MemoryWriteError,
+  encodeMemoryRetrieveQuery,
+  isSharedMemoryPrompt,
+  normalizeMemoryQuery,
   renderedLessonContent,
+  sharedMemoryPrompt,
+  sharedMemoryPromptMetadata,
   type Hint,
   type LegacyLessonInput,
   type LegacyMemory,
   type LessonInput,
   type Memory,
+  type MemoryAdapterPromptPort,
+  type MemoryPrompt,
   type MemoryReader,
   type MemoryWriteResult,
   type ReflectionEffect,
 } from "../memory.ts";
-import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
 import { Mem0MemoryError } from "./error.ts";
 import { createMem0PlatformPort } from "./platform.ts";
 import type { Mem0PlatformPort, Mem0Record } from "./platform.ts";
+import { runIdempotentWrite } from "../idempotency.ts";
 
 export const MEM0_CAPABILITIES = { snapshot: false, restore: false } as const;
 
@@ -47,6 +55,7 @@ const ERROR_MESSAGES = {
   invalid_input: "Mem0 input is invalid",
   authentication: "Mem0 authentication failed",
   authorization: "Mem0 authorization failed",
+  agent_not_found: "Mem0 agent was not found",
   rate_limited: "Mem0 rate limit was exceeded",
   quota_exceeded: "Mem0 quota was exceeded",
   unavailable: "Mem0 is unavailable",
@@ -77,9 +86,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readFeatureKey(value: unknown): FeatureKey | undefined {
-  return typeof value === "string" && (FEATURE_KEYS as readonly string[]).includes(value)
-    ? (value as FeatureKey)
-    : undefined;
+  return isNormalizedFeatureKey(value) ? value : undefined;
 }
 
 function readEffect(value: unknown): ReflectionEffect | undefined {
@@ -118,6 +125,19 @@ function isTransient(error: unknown): boolean {
     error instanceof Mem0MemoryError &&
     (error.code === "rate_limited" || error.code === "unavailable")
   );
+}
+
+function toBindingError(error: Mem0MemoryError): MemoryBindingError | null {
+  if (error.code === "agent_not_found") {
+    return new MemoryBindingError("memory_not_found", "Mem0 agent was not found", { cause: error });
+  }
+  if (error.code === "authentication" || error.code === "authorization") {
+    return new MemoryBindingError("memory_mismatch", "Mem0 credentials were rejected", { cause: error });
+  }
+  if (error.code === "rate_limited" || error.code === "unavailable") {
+    return new MemoryBindingError("unavailable", "Mem0 memory is unavailable", { cause: error });
+  }
+  return null;
 }
 
 function validateConfig(config: Mem0MemoryConfig): Mem0MemoryConfig {
@@ -195,6 +215,21 @@ export function createMem0Memory(
 }
 
 export class Mem0Memory implements Memory, LegacyMemory {
+  readonly promptMetadata = sharedMemoryPromptMetadata();
+  readonly promptPort: MemoryAdapterPromptPort = {
+    retrieve: (request) => {
+      if (request.operation !== "retrieve" || typeof request.query !== "string") {
+        return Promise.reject(new Mem0MemoryError("invalid_input", "Mem0 retrieve prompt binding is invalid"));
+      }
+      return this.recall(request.query, request.limit ?? 5, request.prompt);
+    },
+    store: (request) => {
+      if (request.operation !== "store" || request.lesson === undefined) {
+        return Promise.reject(new Mem0MemoryError("invalid_input", "Mem0 store prompt binding is invalid"));
+      }
+      return this.remember(request.lesson, request.prompt);
+    },
+  };
   private readonly config: Mem0MemoryConfig;
   private readonly dependencies: ResolvedDependencies;
   private quarantined = false;
@@ -214,12 +249,27 @@ export class Mem0Memory implements Memory, LegacyMemory {
   }
 
   asReadOnlyReader(): MemoryReader {
-    return { recall: (query, limit) => this.recall(query, limit) };
+    return {
+      promptMetadata: this.promptMetadata,
+      promptPort: {
+        retrieve: (request) => this.promptPort.retrieve(request),
+        store: async () => {
+          throw new MemoryWriteError("write_failed", "Mem0 reader is read-only");
+        },
+      },
+      recall: (query, limit, prompt) => this.recall(query, limit, prompt),
+    };
   }
 
-  remember(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
+  remember(
+    lesson: LessonInput | LegacyLessonInput,
+    prompt: MemoryPrompt = sharedMemoryPrompt("store"),
+  ): Promise<MemoryWriteResult> {
+    if (!isSharedMemoryPrompt(prompt, "store")) {
+      return Promise.reject(new Mem0MemoryError("invalid_input", "Mem0 requires the shared store prompt"));
+    }
     const operation = this.rememberTail
-      .then(() => this.rememberOne(lesson))
+      .then(() => this.rememberOne(lesson, prompt))
       .catch((error: unknown) => {
         throw this.toMemoryWriteError(error);
       });
@@ -230,7 +280,12 @@ export class Mem0Memory implements Memory, LegacyMemory {
     return operation;
   }
 
-  async recall(queryOrFeatures: string | string[], limit: number): Promise<Hint[]> {
+  async recall(
+    queryOrFeatures: string | string[],
+    limit: number,
+    prompt: MemoryPrompt = sharedMemoryPrompt("retrieve"),
+  ): Promise<Hint[]> {
+    if (!isSharedMemoryPrompt(prompt, "retrieve")) throw sanitizedError("invalid_input");
     this.assertUsable();
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
       throw sanitizedError("invalid_input");
@@ -242,17 +297,11 @@ export class Mem0Memory implements Memory, LegacyMemory {
       throw sanitizedError("invalid_input");
     }
 
-    const features = Array.isArray(queryOrFeatures) ? queryOrFeatures : [queryOrFeatures];
-    const query = features
-      .map((value) => value.trim())
-      .filter(Boolean)
-      .join("\n");
-    if (query === "") return [];
-
+    const query = normalizeMemoryQuery(queryOrFeatures);
     let records: unknown;
     try {
       records = await this.dependencies.platform.search({
-        query,
+        query: encodeMemoryRetrieveQuery(prompt, query),
         filters: { agent_id: this.config.agentId },
         topK: limit,
         threshold: 0.1,
@@ -302,22 +351,42 @@ export class Mem0Memory implements Memory, LegacyMemory {
     );
   }
 
-  private async rememberOne(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
+  private async rememberOne(
+    lesson: LessonInput | LegacyLessonInput,
+    prompt: MemoryPrompt,
+  ): Promise<MemoryWriteResult> {
     this.assertUsable();
     this.validateLesson(lesson);
     if (lesson.idempotencyKey !== undefined) {
-      const existing = await this.findExistingLessonId(lesson.idempotencyKey);
-      if (existing !== undefined) {
-        return { status: "already_stored", lessonId: existing };
+      if (this.dependencies.platform.supportsAtomicIdempotency !== true) {
+        throw new MemoryWriteError(
+          "unsupported",
+          "Mem0 cannot atomically deduplicate idempotent writes across adapter instances",
+        );
       }
+      return runIdempotentWrite(
+        `mem0:${this.config.agentId}`,
+        lesson.idempotencyKey,
+        async () => {
+          const existing = await this.findExistingLessonId(lesson.idempotencyKey!);
+          if (existing !== undefined) return { status: "already_stored", lessonId: existing };
+          return this.rememberOnce(lesson, prompt);
+        },
+      );
     }
+    return { status: "stored", lessonId: await this.rememberOnce(lesson, prompt) };
+  }
 
+  private async rememberOnce(
+    lesson: LessonInput | LegacyLessonInput,
+    prompt: MemoryPrompt,
+  ): Promise<string> {
     const request = {
       messages: [{ role: "assistant" as const, content: renderedLessonContent(lesson) }],
       agentId: this.config.agentId,
       infer: true as const,
       temporalReasoning: false as const,
-      agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
+      agentCustomInstructions: prompt.text,
       metadata: {
         loci_source_attempt_id: lesson.sourceAttemptId,
         loci_triggers: [...lesson.triggers],
@@ -349,7 +418,7 @@ export class Mem0Memory implements Memory, LegacyMemory {
     if (lesson.idempotencyKey !== undefined) {
       this.lessonIdsByIdempotencyKey.set(lesson.idempotencyKey, lessonId);
     }
-    return { status: "stored", lessonId };
+    return lessonId;
   }
 
   private async findExistingLessonId(idempotencyKey: string): Promise<string | undefined> {
@@ -431,8 +500,8 @@ export class Mem0Memory implements Memory, LegacyMemory {
   }
 
   private handleAddFailure(error: unknown): never {
-    if (error instanceof Mem0MemoryError && error.code === "rate_limited") {
-      throw sanitizedError("rate_limited", undefined, true);
+    if (error instanceof Mem0MemoryError && (error.code === "rate_limited" || error.code === "unavailable")) {
+      throw new MemoryBindingError("unavailable", "Mem0 memory is unavailable", { cause: error });
     }
     if (error instanceof Mem0MemoryError) {
       if (error.code === "unavailable" || error.code === "ingestion_outcome_unknown") {
@@ -620,6 +689,11 @@ export class Mem0Memory implements Memory, LegacyMemory {
 
   private toMemoryWriteError(error: unknown): MemoryWriteError {
     if (error instanceof MemoryWriteError) return error;
+    if (error instanceof MemoryBindingError) throw error;
+    if (error instanceof Mem0MemoryError) {
+      const bindingError = toBindingError(error);
+      if (bindingError !== null) throw bindingError;
+    }
     if (error instanceof Mem0MemoryError && error.code === "ingestion_outcome_unknown") {
       return new MemoryWriteError("write_outcome_unknown");
     }

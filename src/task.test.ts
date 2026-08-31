@@ -11,15 +11,23 @@ import {
   type LocateRuntimeHooks,
 } from "./locate-runtime.internal.ts";
 import type { LocateDeps } from "./locate.ts";
-import { resolveMemoryBinding } from "./memory/memory.ts";
+import {
+  createFrozenMemorySnapshotBinding,
+  createMemorySourceBinding,
+  createMemorySourceResolver,
+  markFrozenMemoryReader,
+  resolveMemoryBinding,
+} from "./memory/memory.ts";
 import type {
   Hint,
   LessonInput,
+  MemoryBinding,
   MemoryReader,
   MemoryWriter,
   MemoryWriteResult,
 } from "./memory/memory.ts";
-import { FEATURE_KEYS, type FeatureObservation, type ObserveResult } from "./observe.ts";
+import { type FeatureObservation, type ObserveResult } from "./observe.ts";
+import { loadPrompt } from "./promts.ts";
 import { ReflectRuntimeError } from "./reflect-runtime.internal.ts";
 import { runTask, type FeatureScopedTaskDeps } from "./task.ts";
 import {
@@ -32,8 +40,12 @@ import {
 import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
 import { makeMemoryHitId, type FeatureMemoryGroup, type LocateResult, type MemoryHit, type MemoryRunConfig } from "./tools/memory.ts";
 import type { ReflectionEpisodeInput, ReflectionEpisodeResult } from "./reflect.ts";
+import { FileMemory } from "./memory/file/memory.ts";
+
+const DYNAMIC_FEATURE_KEYS = ["plates", "poles", "vegetation", "roadside_text"] as const;
 
 const run = {
+  memoryRef: "file",
   mode: "training",
   snapshotId: null,
   readOnly: false,
@@ -41,15 +53,14 @@ const run = {
 } satisfies MemoryRunConfig;
 
 function observed(
-  overrides: Partial<Record<(typeof FEATURE_KEYS)[number], Partial<FeatureObservation>>>,
+  overrides: Partial<Record<(typeof DYNAMIC_FEATURE_KEYS)[number], Partial<FeatureObservation>>>,
 ): ObserveResult {
   return {
     error: null,
-    features: FEATURE_KEYS.map((key) => ({
+    features: Object.entries(overrides).map(([key, feature]) => ({
       key,
-      state: "not_visible",
-      text: "",
-      ...overrides[key],
+      text: `${key} visible cue`,
+      ...feature,
     })),
   };
 }
@@ -174,6 +185,31 @@ function locateWithHooks(hooks: LocateRuntimeHooks): LocateFunction {
   return (input, deps) => locateWithRuntime(input, { ...deps, ...hooks });
 }
 
+async function makeResolvedBinding(
+  memory: MemoryWriter,
+  config: MemoryRunConfig = run,
+  loadSnapshot?: (snapshotId: string) => Promise<MemoryReader>,
+): Promise<MemoryBinding> {
+  if (config.memoryRef === null) assert.fail("feature-scoped fixture requires a memory reference");
+  const source = createMemorySourceBinding({
+    memoryRef: config.memoryRef,
+    memory,
+    loadSnapshot: async (snapshotId) => createFrozenMemorySnapshotBinding({
+      memoryRef: config.memoryRef!,
+      snapshotId,
+      reader: markFrozenMemoryReader(
+        loadSnapshot === undefined
+          ? memory.loadSnapshot === undefined
+            ? memory
+            : await memory.loadSnapshot(snapshotId)
+          : await loadSnapshot(snapshotId),
+        snapshotId,
+      ),
+    }),
+  });
+  return resolveMemoryBinding(config, createMemorySourceResolver(source));
+}
+
 const _featureScopedTaskDepsRejectLocateOverride = {
   run,
   // @ts-expect-error locate override is internal-only; public runTask always uses canonical locate.
@@ -203,7 +239,7 @@ test("public runTask ignores hidden locate on widened feature-scoped deps", asyn
   };
   const widenedDeps = {
     run,
-    memory: new MemoryReaderSpy(),
+    memoryBinding: await makeResolvedBinding(new MemoryWriterSpy()),
     locate: injectedLocate,
   } satisfies FeatureScopedTaskDeps & { locate: LocateFunction };
   const publicDeps: FeatureScopedTaskDeps = widenedDeps;
@@ -258,7 +294,7 @@ function analyzeText(request: OpenAI.ChatCompletionCreateParamsNonStreaming): st
 }
 
 test("runTask feature-scoped path keeps a valid guess with failed and no-hit groups and creates candidates only for hits", async () => {
-  const memory = new MemoryReaderSpy();
+  const memory = new MemoryWriterSpy();
   const client = new LocateClientSpy();
   client.missingAlwaysFor.add("plates");
   memory.emptyQueries.add("vegetation visual cue");
@@ -266,16 +302,16 @@ test("runTask feature-scoped path keeps a valid guess with failed and no-hit gro
   const result = await runTaskWithRuntime(
     { imageId: "image-1", imagePath: "image-1.jpg", attemptId: "attempt-1" },
     {
-      memory,
+      memoryBinding: await makeResolvedBinding(memory),
       run,
       locate: locateWithHooks({
         client,
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            plates: { state: "visible", text: "white rear plate" },
-            poles: { state: "visible", text: "wooden poles" },
-            vegetation: { state: "visible", text: "dry scrub" },
+            plates: { text: "white rear plate" },
+            poles: { text: "wooden poles" },
+            vegetation: { text: "dry scrub" },
           }),
       }),
     },
@@ -330,7 +366,9 @@ test("runTask feature-scoped path keeps a valid guess with failed and no-hit gro
   assert.equal(analyze.tools, undefined);
   assert.equal(analyze.parallel_tool_calls, false);
   const text = analyzeText(analyze);
-  assert.equal(text.includes("Memory groups:"), true);
+  const analyzePrompt = loadPrompt("analyze");
+  assert.equal(text.startsWith(analyzePrompt), true);
+  assert.equal(text.includes('"memory_groups"'), true);
   assert.equal(text.includes("treat them as hypotheses"), true);
   assert.equal(text.includes("use them only where they match the image"), true);
   assert.equal(text.includes("hints"), false);
@@ -338,7 +376,8 @@ test("runTask feature-scoped path keeps a valid guess with failed and no-hit gro
 });
 
 test("runTask feature-scoped path does not allow locateDeps to override authoritative memory or run config", async () => {
-  const authoritativeMemory = new MemoryReaderSpy();
+  const authoritativeMemory = new MemoryWriterSpy();
+  const authoritativeBinding = await makeResolvedBinding(authoritativeMemory);
   let capturedDeps: LocateDeps | null = null;
   const locateSpy: LocateFunction = async (input, deps): Promise<LocateResult> => {
     capturedDeps = deps;
@@ -362,7 +401,7 @@ test("runTask feature-scoped path does not allow locateDeps to override authorit
   const result = await runTaskWithRuntime(
     { imageId: "image-authoritative-deps", imagePath: "authoritative-deps.jpg", attemptId: "attempt-authoritative-deps" },
     {
-      memory: authoritativeMemory,
+      memoryBinding: authoritativeBinding,
       run,
       locate: locateSpy,
       locateDeps: {
@@ -374,21 +413,21 @@ test("runTask feature-scoped path does not allow locateDeps to override authorit
   assert.equal(result.ok, true);
   assert.ok(capturedDeps);
   const observedDeps = capturedDeps as LocateDeps;
-  assert.equal(observedDeps.memory, authoritativeMemory);
+  assert.equal(observedDeps.memoryBinding, authoritativeBinding);
   assert.equal(observedDeps.run, run);
   assert.equal(observedDeps.maxToolAttemptsPerFeature, 1);
   assert.deepEqual(authoritativeMemory.invocations, []);
 });
 
 test("runTask feature-scoped path keeps observation failures as empty canonical groups and still analyzes the image", async () => {
-  const memory = new MemoryReaderSpy();
+  const memory = new MemoryWriterSpy();
   const client = new LocateClientSpy();
   const imagePaths: string[] = [];
 
   const result = await runTaskWithRuntime(
     { imageId: "image-observe-failed", imagePath: "observe-failed.jpg" },
     {
-      memory,
+      memoryBinding: await makeResolvedBinding(memory),
       run,
       locate: locateWithHooks({
         client,
@@ -424,14 +463,14 @@ test("runTask feature-scoped path preserves structured unparseable failures", as
   const result = await runTaskWithRuntime(
     { imageId: "image-bad-guess", imagePath: "bad-guess.jpg" },
     {
-      memory: new MemoryReaderSpy(),
+      memoryBinding: await makeResolvedBinding(new MemoryWriterSpy()),
       run,
       locate: locateWithHooks({
         client,
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            poles: { state: "visible", text: "wooden poles" },
+            poles: { text: "wooden poles" },
           }),
       }),
     },
@@ -466,15 +505,15 @@ test("runTask feature-scoped path preserves grouped trace and derives episode ca
   const result = await runTaskWithRuntime(
     { imageId: "image-analyze-failed", imagePath: "analyze-failed.jpg", attemptId: "attempt-analyze-failed" },
     {
-      memory: new MemoryReaderSpy(),
+      memoryBinding: await makeResolvedBinding(new MemoryWriterSpy()),
       run,
       locate: locateWithHooks({
         client,
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            poles: { state: "visible", text: "wooden poles" },
-            vegetation: { state: "visible", text: "dry scrub" },
+            poles: { text: "wooden poles" },
+            vegetation: { text: "dry scrub" },
           }),
       }),
     },
@@ -507,7 +546,7 @@ test("runTask feature-scoped path preserves grouped trace and derives episode ca
 });
 
 test("runTask feature-scoped path retries analyze rate limits without repeating retrieval", async () => {
-  const memory = new MemoryReaderSpy();
+  const memory = new MemoryWriterSpy();
   const client = new LocateClientSpy();
   const sleeps: number[] = [];
   const statusRateLimit = Object.assign(new Error("provider busy"), { status: 429 });
@@ -518,7 +557,7 @@ test("runTask feature-scoped path retries analyze rate limits without repeating 
   const result = await runTaskWithRuntime(
     { imageId: "image-rate-limited", imagePath: "rate-limited.jpg", attemptId: "attempt-rate-limited" },
     {
-      memory,
+      memoryBinding: await makeResolvedBinding(memory),
       run,
       locate: locateWithHooks({
         client,
@@ -528,8 +567,8 @@ test("runTask feature-scoped path retries analyze rate limits without repeating 
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            plates: { state: "visible", text: "white rear plate" },
-            poles: { state: "visible", text: "wooden poles" },
+            plates: { text: "white rear plate" },
+            poles: { text: "wooden poles" },
           }),
       }),
     },
@@ -562,8 +601,7 @@ test("runTask feature-scoped path retries analyze rate limits without repeating 
 });
 
 test("runTask feature-scoped training reflects one episode per hit after reveal without rollback or blind retry", async () => {
-  const memory = new MemoryReaderSpy();
-  const writer = new MemoryWriterSpy();
+  const memory = new MemoryWriterSpy();
   const client = new LocateClientSpy();
   const reflect = new ReflectEpisodeSpy();
   reflect.outcomes = [
@@ -584,8 +622,7 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
       truth: { latitude: -30.03, longitude: -51.23, country: "BR" },
     },
     {
-      memory,
-      writer,
+      memoryBinding: await makeResolvedBinding(memory),
       run,
       reflectEpisode: reflect.reflect,
       locate: locateWithHooks({
@@ -593,7 +630,7 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            poles: { state: "visible", text: "wooden poles" },
+            poles: { text: "wooden poles" },
           }),
       }),
     },
@@ -614,7 +651,7 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
     result.memoryGroups[0]?.hits.map((hit) => ({
       attemptId: "attempt-reflect-training",
       imagePath: "reflect-training.jpg",
-      feature: { key: "poles", state: "visible", text: "wooden poles" },
+      feature: { key: "poles", text: "wooden poles" },
       hitId: hit.memoryHitId,
       guess: result.ok
         ? {
@@ -643,6 +680,7 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
       memoryHitId: result.memoryGroups[0]?.hits[1]?.memoryHitId,
       effect: "misleading",
       reflectionStatus: "write_outcome_unknown",
+      failure: "write_outcome_unknown",
       lessonId: null,
     },
   ]);
@@ -661,12 +699,11 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
       ],
     ],
   );
-  assert.deepEqual(writer.rememberInvocations, []);
+  assert.deepEqual(memory.rememberInvocations, []);
 });
 
 test("runTask feature-scoped training keeps the first stored episode when the next reflection runtime fails", async () => {
-  const memory = new MemoryReaderSpy();
-  const writer = new MemoryWriterSpy();
+  const memory = new MemoryWriterSpy();
   const client = new LocateClientSpy();
   const reflectInvocations: Array<{ input: ReflectionEpisodeInput }> = [];
   const reflect: ReflectEpisodeFunction = async (input) => {
@@ -683,8 +720,7 @@ test("runTask feature-scoped training keeps the first stored episode when the ne
       truth: { latitude: -30.03, longitude: -51.23, country: "BR" },
     },
     {
-      memory,
-      writer,
+      memoryBinding: await makeResolvedBinding(memory),
       run,
       reflectEpisode: reflect,
       locate: locateWithHooks({
@@ -692,7 +728,7 @@ test("runTask feature-scoped training keeps the first stored episode when the ne
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            poles: { state: "visible", text: "wooden poles" },
+            poles: { text: "wooden poles" },
           }),
       }),
     },
@@ -727,13 +763,13 @@ test("runTask feature-scoped training keeps the first stored episode when the ne
       ["reflect", "memory_store", "poles", result.memoryGroups[0]?.hits[1]?.memoryHitId, "reflection_failed"],
     ],
   );
-  assert.deepEqual(writer.rememberInvocations, []);
+  assert.deepEqual(memory.rememberInvocations, []);
 });
 
 test("runTask feature-scoped training preserves typed reflection runtime error code in trace event", async () => {
   for (const code of ["model_failed", "image_data_uri_failed"] as const) {
     const attemptId = `attempt-reflect-${code}`;
-    const feature: FeatureObservation = { key: "poles", state: "visible", text: "wooden poles" };
+    const feature: FeatureObservation = { key: "poles", text: "wooden poles" };
     const hit: MemoryHit = {
       attemptId,
       featureKey: "poles",
@@ -752,6 +788,7 @@ test("runTask feature-scoped training preserves typed reflection runtime error c
           status: "hits",
           hits: [hit],
           failure: null,
+          retryCount: 0,
         },
       ];
       const episodes: LocateResult["episodes"] = [];
@@ -784,8 +821,7 @@ test("runTask feature-scoped training preserves typed reflection runtime error c
         truth: { latitude: 1, longitude: 2, country: "BR" },
       },
       {
-        memory: new MemoryReaderSpy(),
-        writer,
+        memoryBinding: await makeResolvedBinding(writer),
         run,
         locate: locateSpy,
         reflectEpisode: reflect,
@@ -803,7 +839,17 @@ test("runTask feature-scoped training preserves typed reflection runtime error c
         lessonId: null,
       },
     ]);
-    assert.deepEqual(result.trace?.events, [
+    const event = result.trace?.events[0];
+    assert.deepEqual(
+      event === undefined ? undefined : {
+        attemptId: event.attemptId,
+        phase: event.phase,
+        operation: event.operation,
+        featureKey: event.featureKey,
+        memoryHitId: event.memoryHitId,
+        status: event.status,
+        sequence: event.sequence,
+      },
       {
         attemptId,
         phase: "reflect",
@@ -813,17 +859,18 @@ test("runTask feature-scoped training preserves typed reflection runtime error c
         status: code,
         sequence: 1,
       },
-    ]);
+    );
+    assert.equal(event?.memoryRef, "file");
+    assert.match(event?.promptDigest ?? "", /^[a-f0-9]{64}$/);
     assert.deepEqual(writer.rememberInvocations, [], code);
   }
 });
 
-test("runTask feature-scoped path skips reflection for no-hit, not-visible and failed retrieval outcomes", async () => {
+test("runTask feature-scoped path skips reflection for no-hit, skipped and failed retrieval outcomes", async () => {
   const client = new LocateClientSpy();
   client.missingAlwaysFor.add("plates");
-  const memory = new MemoryReaderSpy();
+  const memory = new MemoryWriterSpy();
   memory.emptyQueries.add("vegetation visual cue");
-  const writer = new MemoryWriterSpy();
   const reflect = new ReflectEpisodeSpy();
 
   const result = await runTaskWithRuntime(
@@ -834,8 +881,7 @@ test("runTask feature-scoped path skips reflection for no-hit, not-visible and f
       truth: { latitude: -30.03, longitude: -51.23, country: "BR" },
     },
     {
-      memory,
-      writer,
+      memoryBinding: await makeResolvedBinding(memory),
       run,
       reflectEpisode: reflect.reflect,
       locate: locateWithHooks({
@@ -843,9 +889,8 @@ test("runTask feature-scoped path skips reflection for no-hit, not-visible and f
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            plates: { state: "visible", text: "white rear plate" },
-            poles: { state: "not_visible", text: "" },
-            vegetation: { state: "visible", text: "dry scrub" },
+            plates: { text: "white rear plate" },
+            vegetation: { text: "dry scrub" },
           }),
       }),
     },
@@ -861,7 +906,7 @@ test("runTask feature-scoped path skips reflection for no-hit, not-visible and f
   );
   assert.deepEqual(result.episodes, []);
   assert.deepEqual(reflect.invocations, []);
-  assert.deepEqual(writer.rememberInvocations, []);
+  assert.deepEqual(memory.rememberInvocations, []);
 });
 
 test("runTask feature-scoped reflection is training-only and memory bindings expose reader-only evaluation and production", async () => {
@@ -883,7 +928,7 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
   const frozenSnapshotPath = join(memoryDir, "frozen-snapshot.jsonl");
   await writeFile(frozenSnapshotPath, `${JSON.stringify(frozenLesson)}\n`, "utf8");
   const locateResult = (input: { attemptId: string; imagePath: string }): LocateResult => {
-    const polesFeature: FeatureObservation = { key: "poles", state: "visible", text: "wooden poles" };
+  const polesFeature: FeatureObservation = { key: "poles", text: "wooden poles" };
     const hit = {
       attemptId: input.attemptId,
       featureKey: "poles" as const,
@@ -901,6 +946,7 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
         status: "hits" as const,
         hits: [hit],
         failure: null,
+        retryCount: 0,
       },
     ];
     return {
@@ -923,8 +969,8 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
   const writer = new MemoryWriterSpy();
 
   for (const scenario of [
-    { mode: "evaluation" as const, snapshotId: "snapshot", readOnly: true },
-    { mode: "production" as const, snapshotId: null, readOnly: true },
+    { memoryRef: "file", mode: "evaluation" as const, snapshotId: "snapshot", readOnly: true },
+    { memoryRef: "file", mode: "production" as const, snapshotId: null, readOnly: true },
   ]) {
     const reflect = new ReflectEpisodeSpy();
     const input: FeatureScopedTaskRuntimeInput = {
@@ -934,8 +980,7 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
       truth: { latitude: 1, longitude: 2, country: "BR" },
     };
     const result = await runTaskWithRuntime(input, {
-      memory: new MemoryReaderSpy(),
-      writer,
+      memoryBinding: await makeResolvedBinding(writer, { ...scenario, recallLimit: 5 }),
       run: { ...scenario, recallLimit: 5 },
       locate: locateSpy,
       reflectEpisode: reflect.reflect,
@@ -946,24 +991,38 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
     assert.deepEqual(reflect.invocations, [], scenario.mode);
   }
 
+  const resolver = createMemorySourceResolver(createMemorySourceBinding({
+    memoryRef: "file",
+    memory: new FileMemory(join(memoryDir, "live.jsonl"), "top", false),
+    provider: "file",
+    loadSnapshot: async (snapshotId: string) =>
+      createFrozenMemorySnapshotBinding({
+        memoryRef: "file",
+        snapshotId,
+        reader: new FileMemory(join(memoryDir, `${snapshotId}.jsonl`), "top", true),
+      }),
+  }));
   const evaluation = await resolveMemoryBinding({
+    memoryRef: "file",
     mode: "evaluation",
     snapshotId: "frozen-snapshot",
     readOnly: true,
     recallLimit: 5,
-  });
+  }, resolver);
   const production = await resolveMemoryBinding({
+    memoryRef: "file",
     mode: "production",
     snapshotId: null,
     readOnly: true,
     recallLimit: 5,
-  });
+  }, resolver);
   const training = await resolveMemoryBinding({
+    memoryRef: "file",
     mode: "training",
     snapshotId: null,
     readOnly: false,
     recallLimit: 5,
-  });
+  }, resolver);
 
   assert.equal(evaluation.mode, "evaluation");
   assert.equal(Object.prototype.hasOwnProperty.call(evaluation, "writer"), false);
@@ -976,15 +1035,15 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
   assert.equal(training.mode, "training");
   assert.equal(typeof training.writer.remember, "function");
   await assert.rejects(
-    resolveMemoryBinding({ mode: "evaluation", snapshotId: "", readOnly: true, recallLimit: 5 }),
+    resolveMemoryBinding({ memoryRef: "file", mode: "evaluation", snapshotId: "", readOnly: true, recallLimit: 5 }, resolver),
     /evaluation memory requires/,
   );
   await assert.rejects(
-    resolveMemoryBinding({ mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 }),
+    resolveMemoryBinding({ memoryRef: "file", mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 }, resolver),
     /production memory requires/,
   );
   await assert.rejects(
-    resolveMemoryBinding({ mode: "training", snapshotId: "snapshot", readOnly: false, recallLimit: 5 }),
+    resolveMemoryBinding({ memoryRef: "file", mode: "training", snapshotId: "snapshot", readOnly: false, recallLimit: 5 }, resolver),
     /training memory requires/,
   );
 
@@ -1000,72 +1059,20 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
   await rm(memoryDir, { recursive: true, force: true });
 });
 
-test("runTask evaluation and production reject direct writable adapters without a read-only projection", async () => {
-  for (const scenario of [
-    { mode: "evaluation" as const, snapshotId: "snapshot-direct-writer", readOnly: true },
-    { mode: "production" as const, snapshotId: null, readOnly: true },
-  ]) {
-    const memory = new MemoryWriterSpy();
-    const reflect = new ReflectEpisodeSpy();
-    let locateCalls = 0;
-    const locateSpy: LocateFunction = async (input): Promise<LocateResult> => {
-      locateCalls += 1;
-      return {
-        attemptId: input.attemptId,
-        guess: {
-          latitude: 1,
-          longitude: 2,
-          place: "Should not run",
-          confidence: 0.1,
-          reasoning: "A direct writable adapter without projection must be rejected first.",
-          provider: "fake",
-        },
-        observations: [],
-        memoryGroups: [],
-        episodes: [],
-        trace: { attemptId: input.attemptId, groups: [], episodes: [], events: [] },
-      };
-    };
-
-    const result = await runTaskWithRuntime(
-      {
-        imageId: `image-direct-writer-${scenario.mode}`,
-        imagePath: `direct-writer-${scenario.mode}.jpg`,
-        attemptId: `attempt-direct-writer-${scenario.mode}`,
-        truth: { latitude: 1, longitude: 2, country: "BR" },
-      },
-      {
-        memory,
-        writer: memory,
-        run: { ...scenario, recallLimit: 5 },
-        locate: locateSpy,
-        reflectEpisode: reflect.reflect,
-      },
-    );
-
-    assert.equal(result.ok, false, scenario.mode);
-    if (result.ok) assert.fail("expected read-only projection rejection");
-    assert.equal(result.failure, "api_error", scenario.mode);
-    assert.match(result.message, /feature-scoped evaluation\/production memory must be reader-only/, scenario.mode);
-    assert.equal(locateCalls, 0, scenario.mode);
-    assert.deepEqual(memory.invocations, [], scenario.mode);
-    assert.deepEqual(memory.rememberInvocations, [], scenario.mode);
-    assert.deepEqual(reflect.invocations, [], scenario.mode);
-  }
-});
-
 test("runTask evaluation and production strip writable methods from read-only adapter projection", async () => {
   for (const scenario of [
-    { mode: "evaluation" as const, snapshotId: "snapshot-writable-projection", readOnly: true },
-    { mode: "production" as const, snapshotId: null, readOnly: true },
+    { memoryRef: "file", mode: "evaluation" as const, snapshotId: "snapshot-writable-projection", readOnly: true },
+    { memoryRef: "file", mode: "production" as const, snapshotId: null, readOnly: true },
   ]) {
     const memory = new WritableProjectionMemorySpy();
     let receivedMemory: MemoryReader | null = null;
     const locateSpy: LocateFunction = async (input, deps): Promise<LocateResult> => {
-      receivedMemory = deps.memory;
-      assert.equal("remember" in deps.memory, false, scenario.mode);
-      assert.equal("restore" in deps.memory, false, scenario.mode);
-      assert.deepEqual(await deps.memory.recall("wooden poles", 5), [
+      const memory = deps.memoryBinding?.reader;
+      assert.ok(memory, scenario.mode);
+      receivedMemory = memory;
+      assert.equal("remember" in memory, false, scenario.mode);
+      assert.equal("restore" in memory, false, scenario.mode);
+      assert.deepEqual(await memory.recall("wooden poles", 5), [
         { lessonId: "lesson-1-a", text: "first memory for wooden poles", effect: "helped" },
         { lessonId: "lesson-1-b", text: "second memory for wooden poles", effect: "misleading" },
       ]);
@@ -1094,8 +1101,7 @@ test("runTask evaluation and production strip writable methods from read-only ad
         truth: { latitude: 1, longitude: 2, country: "BR" },
       },
       {
-        memory,
-        writer: memory,
+        memoryBinding: await makeResolvedBinding(memory, { ...scenario, recallLimit: 5 }),
         run: { ...scenario, recallLimit: 5 },
         locate: locateSpy,
         reflectEpisode: new ReflectEpisodeSpy().reflect,
@@ -1111,10 +1117,11 @@ test("runTask evaluation and production strip writable methods from read-only ad
   }
 });
 
-test("runTask evaluation wraps direct writable FileMemory before feature-scoped retrieval", async () => {
-  const { FileMemory } = await import("./memory/file/memory.ts");
+test("runTask evaluation uses the frozen MemoryBinding before feature-scoped retrieval", async () => {
   const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-direct-file-memory-"));
   const memoryPath = join(memoryDir, "live.jsonl");
+  const snapshotId = "snapshot-direct";
+  const snapshotPath = join(memoryDir, `${snapshotId}.jsonl`);
   const storedLesson: LessonInput & { id: string; hits: number; wins: number } = {
     id: "lesson-0001",
     content: "Wooden poles line up with the revealed country.",
@@ -1129,9 +1136,16 @@ test("runTask evaluation wraps direct writable FileMemory before feature-scoped 
     wins: 0,
   };
   await writeFile(memoryPath, `${JSON.stringify(storedLesson)}\n`, "utf8");
+  await writeFile(snapshotPath, `${JSON.stringify(storedLesson)}\n`, "utf8");
   const client = new LocateClientSpy();
 
   try {
+    const sourceMemory = new FileMemory(memoryPath, "top", false);
+    const binding = await makeResolvedBinding(
+      sourceMemory,
+      { memoryRef: "file", mode: "evaluation", snapshotId, readOnly: true, recallLimit: 5 },
+      async (requestedSnapshotId) => new FileMemory(join(memoryDir, `${requestedSnapshotId}.jsonl`), "top", true),
+    );
     const result = await runTaskWithRuntime(
       {
         imageId: "image-direct-file-memory",
@@ -1139,14 +1153,14 @@ test("runTask evaluation wraps direct writable FileMemory before feature-scoped 
         attemptId: "attempt-direct-file-memory",
       },
       {
-        memory: new FileMemory(memoryPath, "all", false),
-        run: { mode: "evaluation", snapshotId: "snapshot-direct", readOnly: true, recallLimit: 5 },
+        memoryBinding: binding,
+        run: { memoryRef: "file", mode: "evaluation", snapshotId, readOnly: true, recallLimit: 5 },
         locate: locateWithHooks({
           client,
           imageDataUri: async () => "data:image/jpeg;base64,AA==",
           observe: async () =>
             observed({
-              poles: { state: "visible", text: "wooden poles" },
+              poles: { text: "wooden poles" },
             }),
         }),
       },
@@ -1163,8 +1177,7 @@ test("runTask evaluation wraps direct writable FileMemory before feature-scoped 
   }
 });
 
-test("runTask production wraps direct writable FileMemory before feature-scoped retrieval", async () => {
-  const { FileMemory } = await import("./memory/file/memory.ts");
+test("runTask production uses a read-only MemoryBinding before feature-scoped retrieval", async () => {
   const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-production-file-memory-"));
   const memoryPath = join(memoryDir, "live.jsonl");
   const storedLesson: LessonInput & { id: string; hits: number; wins: number } = {
@@ -1184,6 +1197,10 @@ test("runTask production wraps direct writable FileMemory before feature-scoped 
   const client = new LocateClientSpy();
 
   try {
+    const binding = await makeResolvedBinding(
+      new FileMemory(memoryPath, "top", false),
+      { memoryRef: "file", mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
+    );
     const result = await runTaskWithRuntime(
       {
         imageId: "image-production-file-memory",
@@ -1191,14 +1208,14 @@ test("runTask production wraps direct writable FileMemory before feature-scoped 
         attemptId: "attempt-production-file-memory",
       },
       {
-        memory: new FileMemory(memoryPath, "all", false),
-        run: { mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
+        memoryBinding: binding,
+        run: { memoryRef: "file", mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
         locate: locateWithHooks({
           client,
           imageDataUri: async () => "data:image/jpeg;base64,AA==",
           observe: async () =>
             observed({
-              poles: { state: "visible", text: "wooden poles" },
+              poles: { text: "wooden poles" },
             }),
         }),
       },

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FEATURE_KEYS, type FeatureObservation } from "../observe.ts";
+import type { FeatureObservation } from "../observe.ts";
 import {
+  MemoryBindingError,
   MemoryWriteError,
+  sharedMemoryPrompt,
+  sharedMemoryPromptMetadata,
   type Hint,
+  type MemoryBindingRequest,
   type MemoryReader,
   type MemoryWriter,
   type MemoryWriteResult,
@@ -26,7 +30,23 @@ import {
   type MemoryToolContext,
 } from "./memory.ts";
 
+const FEATURE_KEYS = [
+  "traffic_side",
+  "script_and_language",
+  "visible_text",
+  "plates",
+  "poles",
+  "bollards_and_barriers",
+  "road_markings",
+  "road_surface",
+  "vegetation",
+  "terrain_and_soil",
+  "built_environment",
+  "vehicles",
+] as const;
+
 const run: MemoryRunConfig = {
+  memoryRef: "file",
   mode: "training",
   snapshotId: null,
   readOnly: false,
@@ -35,7 +55,7 @@ const run: MemoryRunConfig = {
 
 const feature: FeatureObservation = {
   key: "poles",
-  state: "visible",
+
   text: "wooden utility poles with crossarms",
 };
 
@@ -44,6 +64,7 @@ class FakeReader implements MemoryReader {
   hints: Hint[] = [];
   output?: unknown;
   featureScope?: MemoryReader["featureScope"];
+  promptPort?: MemoryReader["promptPort"];
   error?: Error;
 
   async recall(query: string, limit: number): Promise<Hint[]> {
@@ -173,9 +194,19 @@ test("tool definitions are strict, complete and phase gated", () => {
     "triggers",
     "region",
   ]);
-  assert.deepEqual(MEMORY_RETRIEVE_TOOL.function.parameters.properties.feature_key.enum, FEATURE_KEYS);
+  assert.deepEqual(MEMORY_RETRIEVE_TOOL.function.parameters.properties.feature_key, {
+    type: "string",
+    minLength: 1,
+    maxLength: 64,
+    pattern: "^[a-z][a-z0-9_]{0,63}$",
+  });
   assert.equal(MEMORY_RETRIEVE_TOOL.function.parameters.properties.query.type, "string");
-  assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.feature_key.enum, FEATURE_KEYS);
+  assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.feature_key, {
+    type: "string",
+    minLength: 1,
+    maxLength: 64,
+    pattern: "^[a-z][a-z0-9_]{0,63}$",
+  });
   assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.effect.enum, [
     "helped",
     "irrelevant",
@@ -209,6 +240,47 @@ test("tool definitions are strict, complete and phase gated", () => {
   assert.deepEqual(memoryToolsForPhase("retrieve").map((tool) => tool.function.name), ["memory_retrieve"]);
   assert.deepEqual(memoryToolsForPhase("reflect").map((tool) => tool.function.name), ["memory_store"]);
   assert.deepEqual(memoryToolsForPhase("analyze"), []);
+});
+
+test("shared memory prompt metadata is stable and tool descriptions use the shared assets", () => {
+  const retrieve = sharedMemoryPrompt("retrieve");
+  const store = sharedMemoryPrompt("store");
+  assert.deepEqual(sharedMemoryPromptMetadata(), { retrieve, store });
+  assert.equal(MEMORY_RETRIEVE_TOOL.function.description, retrieve.text);
+  assert.equal(MEMORY_STORE_TOOL.function.description, store.text);
+  assert.match(retrieve.digest, /^[a-f0-9]{64}$/);
+  assert.match(store.digest, /^[a-f0-9]{64}$/);
+});
+
+test("dispatcher passes the same application-owned prompt metadata to retrieve and store ports", async () => {
+  const requests: MemoryBindingRequest[] = [];
+  const reader = new FakeReader();
+  reader.promptPort = {
+    retrieve: async (request) => {
+      requests.push(request);
+      return [];
+    },
+    store: async (request) => {
+      requests.push(request);
+      return { status: "stored", lessonId: "lesson-port" };
+    },
+  };
+  const retrieve = await executeMemoryRetrieve(context(reader), {
+    feature_key: "poles",
+    query: "wooden poles",
+  });
+  assert.equal(retrieve.status, "no_hit");
+
+  const writer = new FakeWriter();
+  writer.promptPort = reader.promptPort!;
+  const stored = await executeMemoryStore(storeContext(writer), validStoreArgs);
+  assert.equal(stored.status, "stored");
+  assert.deepEqual(requests.map((request) => [request.operation, request.prompt]), [
+    ["retrieve", sharedMemoryPrompt("retrieve")],
+    ["store", sharedMemoryPrompt("store")],
+  ]);
+  assert.equal(requests[0]?.memoryRef, "file");
+  assert.equal(requests[1]?.memoryRef, "file");
 });
 
 test("memory payload is returned as data and cannot override the active retrieval context", async () => {
@@ -367,7 +439,7 @@ test("all recall mode is rejected and grouped retrieval is not globally merged",
     query: "poles",
   });
   const plates = await executeMemoryRetrieve(
-    { ...context(second), activeFeature: { key: "plates", state: "visible", text: "white plate" } },
+    { ...context(second), activeFeature: { key: "plates", text: "white plate" } },
     { feature_key: "plates", query: "plates" },
   );
 
@@ -380,9 +452,9 @@ test("all recall mode is rejected and grouped retrieval is not globally merged",
 
 test("retrieve dispatchers reject invalid run config before scope or budget outcomes", async () => {
   const invalidRuns: MemoryRunConfig[] = [
-    { mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 },
-    { mode: "evaluation", snapshotId: null, readOnly: true, recallLimit: 5 },
-    { mode: "training", snapshotId: null, readOnly: true, recallLimit: 5 },
+    { memoryRef: "file", mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 },
+    { memoryRef: "file", mode: "evaluation", snapshotId: null, readOnly: true, recallLimit: 5 },
+    { memoryRef: "file", mode: "training", snapshotId: null, readOnly: true, recallLimit: 5 },
   ];
 
   for (const invalidRun of invalidRuns) {
@@ -435,13 +507,21 @@ test("empty result, provider errors, timeout, skipped feature and exhausted budg
 
   const timeout = new FakeReader();
   timeout.error = new HindsightMemoryError("timeout", "read");
-  const timedOut = await executeMemoryRetrieve(context(timeout), {
-    feature_key: "poles",
-    query: "wooden poles",
-  });
-  assert.equal(timedOut.status, "failed");
-  assert.equal(timedOut.failure, "timeout");
-  assertNoEpisodeOutcome(timedOut, "typed timeout");
+  await assert.rejects(
+    () =>
+      executeMemoryRetrieve(context(timeout), {
+        feature_key: "poles",
+        query: "wooden poles",
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof MemoryBindingError);
+      assert.equal(error.code, "timeout");
+      assert.equal(error.name, "MemoryBindingError");
+      return true;
+    },
+    "typed timeout",
+  );
+  assert.deepEqual(timeout.calls, [{ query: "wooden poles", limit: 5 }], "typed timeout provider call");
 
   const messageOnlyTimeout = new FakeReader();
   messageOnlyTimeout.error = new Error("request timeout");
@@ -454,7 +534,7 @@ test("empty result, provider errors, timeout, skipped feature and exhausted budg
   assertNoEpisodeOutcome(messageOnlyFailed, "message-only timeout");
 
   const skipped = await executeMemoryRetrieve(
-    { ...context(), activeFeature: { key: "poles", state: "not_visible", text: "" } },
+    { ...context(), phase: "reflect", activeFeature: { key: "poles", text: "wooden poles" } },
     { feature_key: "poles", query: "wooden poles" },
   );
   assert.equal(skipped.status, "failed");
@@ -482,6 +562,31 @@ test("empty result, provider errors, timeout, skipped feature and exhausted budg
   assert.equal(exhaustedHits.query, null);
   assertNoEpisodeOutcome(exhaustedHits, "memory hit budget exhausted");
   assert.deepEqual(hitBudgetExhausted.calls, []);
+});
+
+test("runtime hit cap remains effective when the reader has its own prompt port", async () => {
+  const reader = new FakeReader();
+  reader.hints = [
+    { lessonId: "lesson-1", text: "first cue" },
+    { lessonId: "lesson-2", text: "second cue" },
+  ];
+  let promptPortCalls = 0;
+  reader.promptPort = {
+    retrieve: async (request) => {
+      promptPortCalls += 1;
+      return reader.recall(request.query!, request.limit ?? 5);
+    },
+    store: async () => ({ status: "stored", lessonId: "unused" }),
+  };
+
+  const result = await executeMemoryRetrieveWithRuntimeBudget(
+    { ...context(reader), budget: { memoryHitsRemaining: 1 } },
+    { feature_key: "poles", query: "wooden poles" },
+  );
+
+  assert.equal(result.status, "hits");
+  assert.equal(result.hits.length, 1);
+  assert.equal(promptPortCalls, 1);
 });
 
 test("public memory retrieval ignores runtime budget on widened context", async () => {
@@ -512,17 +617,18 @@ test("public memory retrieval ignores runtime budget on widened context", async 
   assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 5 }]);
 });
 
-test("episode candidates are created only for returned hits in registry-order eligible groups", () => {
+test("episode candidates are created only for returned hits in model-order groups", () => {
   const firstHit = candidateHit({ providerId: "lesson-pole-a", text: "wooden poles" }, 0);
   const secondHit = candidateHit({ providerId: null, text: "crossarms" }, 1);
   const groups: FeatureMemoryGroup[] = [
     {
       attemptId: "attempt-1",
-      feature: { key: "plates", state: "visible", text: "white plate" },
+      feature: { key: "plates", text: "white plate" },
       query: "white plate",
       status: "no_hit",
       hits: [],
       failure: null,
+      retryCount: 0,
     },
     {
       attemptId: "attempt-1",
@@ -531,14 +637,16 @@ test("episode candidates are created only for returned hits in registry-order el
       status: "hits",
       hits: [firstHit, secondHit],
       failure: null,
+      retryCount: 0,
     },
     {
       attemptId: "attempt-1",
-      feature: { key: "vegetation", state: "visible", text: "dry scrub" },
+      feature: { key: "vegetation", text: "dry scrub" },
       query: null,
       status: "failed",
       hits: [],
       failure: "memory_error",
+      retryCount: 0,
     },
   ];
 
@@ -566,11 +674,12 @@ test("episode candidate ledger accepts valid failed and skipped no-episode group
   const groups: FeatureMemoryGroup[] = [
     {
       attemptId: "attempt-1",
-      feature: { key: "plates", state: "not_visible", text: "" },
+      feature: { key: "plates", text: "white plate" },
       query: null,
       status: "failed",
       hits: [],
       failure: "skipped",
+      retryCount: 0,
     },
     {
       attemptId: "attempt-1",
@@ -579,22 +688,25 @@ test("episode candidate ledger accepts valid failed and skipped no-episode group
       status: "failed",
       hits: [],
       failure: "memory_error",
+      retryCount: 0,
     },
     {
       attemptId: "attempt-1",
-      feature: { key: "road_markings", state: "visible", text: "single center line" },
+      feature: { key: "road_markings", text: "single center line" },
       query: "bounded wrong feature query",
       status: "failed",
       hits: [],
       failure: "wrong_feature",
+      retryCount: 0,
     },
     {
       attemptId: "attempt-1",
-      feature: { key: "vegetation", state: "visible", text: "dry scrub" },
+      feature: { key: "vegetation", text: "dry scrub" },
       query: null,
       status: "failed",
       hits: [],
       failure: "skipped",
+      retryCount: 0,
     },
   ];
 
@@ -612,6 +724,7 @@ test("episode candidate ledger accepts null provider ids but rejects empty provi
         status: "hits",
         hits: [providerlessHit],
         failure: null,
+        retryCount: 0,
       },
     ]),
     [{ attemptId: "attempt-1", featureKey: "poles", memoryHitId: providerlessHit.memoryHitId }],
@@ -628,6 +741,7 @@ test("episode candidate ledger accepts null provider ids but rejects empty provi
             status: "hits",
             hits: [candidateHit({ providerId })],
             failure: null,
+            retryCount: 0,
           },
         ]),
       (error) => error instanceof MemoryToolValidationError && error.failure === "foreign_hit",
@@ -636,14 +750,15 @@ test("episode candidate ledger accepts null provider ids but rejects empty provi
   }
 });
 
-test("episode candidate ledger rejects duplicate, out-of-order and oversized groups", () => {
+test("episode candidate ledger rejects duplicate and oversized groups while preserving dynamic order", () => {
   const platesGroup: FeatureMemoryGroup = {
     attemptId: "attempt-1",
-    feature: { key: "plates", state: "visible", text: "white plate" },
+    feature: { key: "plates", text: "white plate" },
     query: "white plate",
     status: "no_hit",
     hits: [],
     failure: null,
+    retryCount: 0,
   };
   const polesGroup: FeatureMemoryGroup = {
     attemptId: "attempt-1",
@@ -652,6 +767,7 @@ test("episode candidate ledger rejects duplicate, out-of-order and oversized gro
     status: "hits",
     hits: [candidateHit()],
     failure: null,
+    retryCount: 0,
   };
   const tooManyHits: FeatureMemoryGroup = {
     attemptId: "attempt-1",
@@ -662,17 +778,17 @@ test("episode candidate ledger rejects duplicate, out-of-order and oversized gro
       candidateHit({ providerId: `lesson-${index}`, text: `wooden poles ${index}` }, index),
     ),
     failure: null,
+    retryCount: 0,
   };
 
   const scenarios: Array<{ name: string; groups: readonly FeatureMemoryGroup[] }> = [
     { name: "duplicate feature group", groups: [platesGroup, platesGroup] },
-    { name: "out of registry order", groups: [polesGroup, platesGroup] },
     { name: "more than five hits in one group", groups: [tooManyHits] },
     {
-      name: "more groups than registry keys",
+      name: "more groups than the maximum feature budget",
       groups: Array.from({ length: FEATURE_KEYS.length + 1 }, (_value, index) => ({
         ...platesGroup,
-        feature: { key: FEATURE_KEYS[index % FEATURE_KEYS.length], state: "visible", text: "visible cue" },
+        feature: { key: FEATURE_KEYS[index % FEATURE_KEYS.length], text: "visible cue" },
       })) as FeatureMemoryGroup[],
     },
   ];
@@ -684,10 +800,15 @@ test("episode candidate ledger rejects duplicate, out-of-order and oversized gro
       scenario.name,
     );
   }
+
+  assert.deepEqual(
+    episodeCandidatesFromGroups("attempt-1", [polesGroup, platesGroup]),
+    [{ attemptId: "attempt-1", featureKey: "poles", memoryHitId: polesGroup.hits[0]!.memoryHitId }],
+  );
 });
 
 test("episode candidate ledger rejects inconsistent group and hit envelopes", () => {
-  const malformedScenarios: Array<{ name: string; groups: readonly FeatureMemoryGroup[] }> = [
+  const malformedScenarios: Array<{ name: string; groups: readonly unknown[] }> = [
     { name: "malformed group object", groups: [null as unknown as FeatureMemoryGroup] },
     {
       name: "extra group property",
@@ -748,19 +869,6 @@ test("episode candidate ledger rejects inconsistent group and hit envelopes", ()
           attemptId: "attempt-1",
           feature,
           query: " ",
-          status: "no_hit",
-          hits: [],
-          failure: null,
-        },
-      ],
-    },
-    {
-      name: "no-hit group with null query",
-      groups: [
-        {
-          attemptId: "attempt-1",
-          feature,
-          query: null,
           status: "no_hit",
           hits: [],
           failure: null,
@@ -872,11 +980,11 @@ test("episode candidate ledger rejects inconsistent group and hit envelopes", ()
       ],
     },
     {
-      name: "not visible no-hit group",
+      name: "invalid empty-feature no-hit group",
       groups: [
         {
           attemptId: "attempt-1",
-          feature: { key: "poles", state: "not_visible", text: "" },
+          feature: { key: "poles", text: "" },
           query: null,
           status: "no_hit",
           hits: [],
@@ -993,7 +1101,7 @@ test("episode candidate ledger rejects inconsistent group and hit envelopes", ()
       groups: [
         {
           attemptId: "attempt-1",
-          feature: { key: "unknown", state: "visible", text: "unknown cue" },
+          feature: { key: "unknown", text: "unknown cue" },
           query: "unknown cue",
           status: "no_hit",
           hits: [],
@@ -1002,11 +1110,11 @@ test("episode candidate ledger rejects inconsistent group and hit envelopes", ()
       ],
     },
     {
-      name: "unknown feature state",
+      name: "extra feature property",
       groups: [
         {
           attemptId: "attempt-1",
-          feature: { key: "poles", state: "unknown", text: "" },
+          feature: { key: "poles", text: "wooden poles", state: "unknown" },
           query: null,
           status: "failed",
           hits: [],
@@ -1080,11 +1188,11 @@ test("episode candidate ledger rejects inconsistent group and hit envelopes", ()
       ],
     },
     {
-      name: "not visible skipped group with hits",
+      name: "skipped group with hits",
       groups: [
         {
           attemptId: "attempt-1",
-          feature: { key: "poles", state: "not_visible", text: "" },
+          feature: { key: "poles", text: "poles are absent from the frame" },
           query: null,
           status: "failed",
           hits: [candidateHit()],
@@ -1093,11 +1201,11 @@ test("episode candidate ledger rejects inconsistent group and hit envelopes", ()
       ],
     },
     {
-      name: "not visible skipped group with query",
+      name: "skipped group with query",
       groups: [
         {
           attemptId: "attempt-1",
-          feature: { key: "poles", state: "not_visible", text: "" },
+          feature: { key: "poles", text: "poles are absent from the frame" },
           query: "should not have queried a hidden feature",
           status: "failed",
           hits: [],
@@ -1332,11 +1440,11 @@ test("store dispatcher rejects unavailable store phases and read-only modes befo
     { ...storeContext(), activeMemoryHit: undefined },
     {
       ...storeContext(),
-      run: { mode: "evaluation", snapshotId: "snapshot-1", readOnly: true, recallLimit: 5 },
+      run: { memoryRef: "file", mode: "evaluation", snapshotId: "snapshot-1", readOnly: true, recallLimit: 5 },
     },
     {
       ...storeContext(),
-      run: { mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
+      run: { memoryRef: "file", mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
     },
   ];
 

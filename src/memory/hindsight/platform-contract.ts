@@ -4,7 +4,10 @@ import {
   HINDSIGHT_RETAIN_CONTEXT,
 } from "./constants.ts";
 
-export { HINDSIGHT_CLOUD_BASE_URL, HINDSIGHT_RETAIN_CONTEXT } from "./constants.ts";
+export {
+  HINDSIGHT_CLOUD_BASE_URL,
+  HINDSIGHT_RETAIN_CONTEXT,
+} from "./constants.ts";
 
 
 export type HindsightMemorySource = {
@@ -58,11 +61,6 @@ export type HindsightBankPolicy = {
   autoConsolidationEnabled: true;
 };
 
-export const HINDSIGHT_RETAIN_MISSION =
-  "Extract only transferable visual-geolocation cues, regional distinctions, counter-signals " +
-  "and verification procedures from Loci training reflections. Do not extract user identity, " +
-  "preferences, instructions, secrets, chain-of-thought, or claims unsupported by the content.";
-
 export type HindsightMemoryResult = {
   id: string;
   text: string;
@@ -78,6 +76,7 @@ export type HindsightRetainRequest = {
   bankId: string;
   content: string;
   documentId: string;
+  retainMission: string;
   context: typeof HINDSIGHT_RETAIN_CONTEXT;
   metadata: Record<string, string>;
   async: false;
@@ -92,6 +91,11 @@ export type HindsightRetainResponse = {
   async: false;
   operationId: string | null;
   usage: Record<string, number> | null;
+};
+
+/** Provider-visible document identity used for idempotency preflight. */
+export type HindsightDocumentLookup = {
+  documentId: string;
 };
 
 export type HindsightRecallRequest = {
@@ -113,8 +117,16 @@ export type HindsightRecallResponse = {
 };
 
 export interface HindsightPlatformPort {
+  /** Hindsight document_id is the provider-visible atomic identity for a lesson. */
+  readonly supportsAtomicIdempotency?: true;
   retain(request: HindsightRetainRequest): Promise<HindsightRetainResponse>;
   recall(request: HindsightRecallRequest): Promise<HindsightRecallResponse>;
+  getDocument?(request: {
+    bankId: string;
+    documentId: string;
+    timeoutMs: number;
+    signal: AbortSignal;
+  }): Promise<HindsightDocumentLookup | null>;
   getVersion(request: { timeoutMs: number; signal: AbortSignal }): Promise<{ apiVersion: string }>;
   listDocuments(request: {
     bankId: string;

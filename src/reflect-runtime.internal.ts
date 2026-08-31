@@ -2,7 +2,8 @@ import { SpanStatusCode, trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
 import type { ReflectionEpisodeInput, ReflectionEpisodeResult } from "./reflect.ts";
-import type { MemoryWriter } from "./memory/memory.ts";
+import type { MemoryBinding, MemoryBindingFailureCode } from "./memory/memory.ts";
+import { MemoryBindingError, validateMemoryBinding } from "./memory/memory.ts";
 import {
   MEMORY_STORE_TOOL,
   MemoryToolValidationError,
@@ -11,6 +12,7 @@ import {
   type MemoryRunConfig,
   type ReflectionEffect,
 } from "./tools/memory.ts";
+import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
 
 export type ReflectRuntimeChatClient = {
   chat: {
@@ -35,7 +37,7 @@ export type ReflectRuntimeHooks = {
 };
 
 export type ReflectRuntimeDeps = {
-  writer: MemoryWriter;
+  memoryBinding: MemoryBinding;
   run: MemoryRunConfig;
 } & ReflectRuntimeHooks;
 
@@ -85,21 +87,6 @@ const REFLECTION_FAILURES = new Set<ReflectionFailure>([
   "foreign_hit",
 ]);
 
-const PROMPT = `Reflect on exactly one memory hit after the true location is revealed.
-
-Call memory_store exactly once. Do not answer in prose.
-
-The tool call must store one transferable lesson for this feature and selected hit only.
-Use the rubric exactly:
-- helped: the hit supplied a cue consistent with the revealed location and useful for the answer.
-- irrelevant: the hit was usable data but did not affect this image's location decision.
-- misleading: the hit asserted a wrong cue or pulled the analysis toward the wrong location.
-- insufficient: the hit was partly useful but did not contain enough evidence for this decision.
-
-content must be one or two grounded sentences, with no hidden chain-of-thought, tool instructions or unsupported visual claims.
-triggers must be 1-8 short observable noun phrases.
-region must be the two-letter uppercase country code of the revealed truth.`;
-
 let cachedClient: OpenAI | undefined;
 const tracer = trace.getTracer("reflect");
 
@@ -134,21 +121,20 @@ function storeToolForFeature(featureKey: string): OpenAI.ChatCompletionTool {
 }
 
 function reflectionPrompt(input: ReflectionEpisodeInput): string {
-  return (
-    `${PROMPT}\n\n` +
-    `Attempt id: ${input.attemptId}\n` +
-    `Feature:\n${JSON.stringify(input.feature)}\n\n` +
-    `Selected memory hit:\n${JSON.stringify({
+  return `${loadPrompt("reflect")}\n\n${JSON.stringify({
+    attempt_id: input.attemptId,
+    feature: input.feature,
+    selected_memory_hit: {
       memory_hit_id: input.memoryHit.memoryHitId,
       provider_id: input.memoryHit.providerId,
       text: input.memoryHit.text,
       score: input.memoryHit.score,
       previous_effect: input.memoryHit.effect,
-    })}\n\n` +
-    `Blind guess:\n${JSON.stringify(input.guess)}\n\n` +
-    `Truth:\n${JSON.stringify(input.truth)}\n\n` +
-    `Distance km: ${input.distanceKm.toFixed(3)}`
-  );
+    },
+    blind_guess: input.guess,
+    truth: input.truth,
+    distance_km: input.distanceKm.toFixed(3),
+  })}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -169,6 +155,26 @@ function failureResult(failure: unknown): ReflectionEpisodeResult {
     };
   }
   return { status: "reflection_failed", effect: null, lessonId: null, failure: failure as ReflectionFailure };
+}
+
+function bindingFailureResult(code: MemoryBindingFailureCode): ReflectionEpisodeResult {
+  return { status: code, effect: null, lessonId: null, failure: code };
+}
+
+function storeFailureResult(
+  status: "write_failed" | "write_outcome_unknown" | "unsupported" | MemoryBindingFailureCode,
+  effect: ReflectionEffect,
+  failure: "write_failed" | "write_outcome_unknown" | "unsupported" | MemoryBindingFailureCode,
+): ReflectionEpisodeResult {
+  if (
+    status === "memory_not_found" ||
+    status === "memory_mismatch" ||
+    status === "unavailable" ||
+    status === "timeout"
+  ) {
+    return { status, effect, lessonId: null, failure: status };
+  }
+  return { status, effect, lessonId: null, failure };
 }
 
 function parsedToolArguments(toolCalls: readonly unknown[]): unknown {
@@ -199,7 +205,6 @@ function effectFromParsedToolArguments(parsed: unknown): ReflectionEffect | null
 
 function isActiveEpisode(input: ReflectionEpisodeInput): boolean {
   return (
-    input.feature.state === "visible" &&
     input.memoryHit.attemptId === input.attemptId &&
     input.memoryHit.featureKey === input.feature.key
   );
@@ -216,7 +221,7 @@ function regionFromParsedToolArguments(parsed: unknown): string | null {
   return normalizedCountry(parsed.region);
 }
 
-function isWritableTrainingRuntime(deps: ReflectRuntimeDeps): boolean {
+function isWritableTrainingRuntime(deps: ReflectRuntimeDeps, binding: MemoryBinding): boolean {
   if (!isRecord(deps.run)) return false;
   try {
     validateMemoryRunConfig(deps.run);
@@ -225,9 +230,10 @@ function isWritableTrainingRuntime(deps: ReflectRuntimeDeps): boolean {
   }
   return (
     deps.run.mode === "training" &&
+    deps.run.memoryRef !== null &&
     deps.run.readOnly === false &&
     deps.run.snapshotId === null &&
-    typeof deps.writer?.remember === "function"
+    typeof binding.writer?.remember === "function"
   );
 }
 
@@ -235,9 +241,12 @@ export async function reflectEpisodeWithRuntime(
   input: ReflectionEpisodeInput,
   deps: ReflectRuntimeDeps,
 ): Promise<ReflectionEpisodeResult> {
-  return tracer.startActiveSpan("reflect.episode", async (span) => {
+  return tracer.startActiveSpan("reflect.episode", async (span): Promise<ReflectionEpisodeResult> => {
     try {
-      if (!isWritableTrainingRuntime(deps)) return failureResult("invalid_tool_arguments");
+      validateMemoryBinding(deps.memoryBinding, deps.run);
+      const binding = deps.memoryBinding;
+      if (binding.mode !== "training" || binding.writer === undefined) return failureResult("invalid_tool_arguments");
+      if (!isWritableTrainingRuntime(deps, binding)) return failureResult("invalid_tool_arguments");
       const truthCountry = normalizedCountry(input.truth.country);
       if (truthCountry === null) return failureResult("invalid_tool_arguments");
       if (!isActiveEpisode(input)) return failureResult("foreign_hit");
@@ -284,8 +293,9 @@ export async function reflectEpisodeWithRuntime(
       const store = await executeMemoryStore(
         {
           attemptId: input.attemptId,
-          reader: deps.writer,
-          writer: deps.writer,
+          reader: binding.reader,
+          writer: binding.writer,
+          promptPort: binding.promptPort,
           phase: "reflect",
           run: deps.run,
           activeFeature: input.feature,
@@ -299,6 +309,7 @@ export async function reflectEpisodeWithRuntime(
         "reflect.attempt_id": input.attemptId,
         "reflect.feature_key": input.feature.key,
         "reflect.memory_hit_id": input.memoryHit.memoryHitId,
+        "reflect.prompt_version": PROMPT_VERSIONS.reflect,
         "reflect.effect": effect,
         "reflect.status": store.status,
       });
@@ -307,11 +318,37 @@ export async function reflectEpisodeWithRuntime(
         span.setStatus({ code: SpanStatusCode.OK });
         return { status: store.status, effect, lessonId: store.lessonId, failure: null };
       }
-      return { status: store.status, effect, lessonId: null, failure: store.failure ?? store.status };
+      if (store.status === "unsupported") {
+        return {
+          status: "unsupported",
+          effect,
+          lessonId: null,
+          failure: "unsupported",
+        };
+      }
+      if (
+        store.status === "memory_not_found" ||
+        store.status === "memory_mismatch" ||
+        store.status === "unavailable" ||
+        store.status === "timeout"
+      ) {
+        return storeFailureResult(store.status, effect, store.failure);
+      }
+      if (
+        store.status === "write_failed" ||
+        store.status === "write_outcome_unknown" ||
+        store.status === "unsupported"
+      ) {
+        return storeFailureResult(store.status, effect, store.failure);
+      }
+      return failureResult("invalid_tool_arguments");
     } catch (error) {
       span.recordException(error as Error);
       if (error instanceof MemoryToolValidationError) {
         return failureResult(error.failure);
+      }
+      if (error instanceof MemoryBindingError) {
+        return bindingFailureResult(error.code);
       }
       throw error;
     } finally {

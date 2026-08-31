@@ -3,12 +3,23 @@ import { SpanStatusCode, trace, type Span } from "@opentelemetry/api";
 import { UnparseableOutputError, type Guess } from "./agent.ts";
 import { toDataUri } from "./image.ts";
 import {
-  eligibleFeatureObservations,
+  normalizeObserveResult,
   observe,
   type FeatureObservation,
   type ObserveResult,
 } from "./observe.ts";
-import { bindFeatureScopedReader, type MemoryReader } from "./memory/memory.ts";
+import {
+  bindFeatureScopedReader,
+  createMemorySourceBinding,
+  createMemorySourceResolver,
+  createFrozenMemorySnapshotBinding,
+  MemoryBindingError,
+  resolveMemoryBinding,
+  validateMemoryBinding,
+  type MemoryBinding,
+  type MemoryReader,
+  type MemorySourceResolver,
+} from "./memory/memory.ts";
 import {
   attachLocatePartialResult,
   type LocatePartialResult,
@@ -23,6 +34,7 @@ import { executeMemoryRetrieveWithRuntimeBudget } from "./tools/memory-runtime.i
 import {
   MEMORY_RETRIEVE_TOOL,
   MemoryToolValidationError,
+  serializeMemoryRetrieveResult,
   validateMemoryRunConfig,
   type AttemptTrace,
   type EpisodeTrace,
@@ -31,6 +43,8 @@ import {
   type RetrievalFailure,
   type ToolEvent,
 } from "./tools/memory.ts";
+import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
+import { sharedMemoryPrompt } from "./memory/memory.ts";
 
 export type LocateRuntimeChatClient = {
   chat: {
@@ -57,7 +71,10 @@ export type LocateRuntimeHooks = {
   sleep?: (ms: number) => Promise<void>;
 };
 
-export type LocateRuntimeDeps = LocateDeps & LocateRuntimeHooks;
+export type LocateRuntimeDeps = LocateDeps & LocateRuntimeHooks & {
+  /** Internal hand-off from the task composition root; not part of public LocateDeps. */
+  memoryBinding?: MemoryBinding;
+};
 
 type LocateChatClient = LocateRuntimeChatClient;
 
@@ -104,8 +121,12 @@ const RETRYABLE_TOOL_FAILURES: readonly RetrievalFailure[] = [
   "malformed_tool_json",
   "invalid_tool_arguments",
   "wrong_feature",
+  "memory_error",
+  "unavailable",
+  "timeout",
 ];
 const RETRIEVAL_MODEL_ATTEMPT_BUDGET = 24;
+const MEMORY_BINDING_ATTEMPT_DELAYS_MS = [1_000] as const;
 const ANALYZE_RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 60_000];
 
 let cachedClient: OpenAI | undefined;
@@ -181,6 +202,7 @@ function failedGroup(
   attemptId: string,
   feature: FeatureObservation,
   failure: RetrievalFailure,
+  retryCount = 0,
 ): FeatureMemoryGroup {
   return {
     attemptId,
@@ -189,6 +211,7 @@ function failedGroup(
     status: "failed",
     hits: [],
     failure,
+    retryCount,
   };
 }
 
@@ -198,6 +221,62 @@ function isRetryableFailure(group: FeatureMemoryGroup): boolean {
 
 function featureScopedReader(reader: MemoryReader): MemoryReader {
   return bindFeatureScopedReader(reader);
+}
+
+function nullMemoryResolver(): MemorySourceResolver {
+  return {
+    async resolve(): Promise<never> {
+      throw new MemoryBindingError("memory_not_found", "null memory does not resolve a provider binding");
+    },
+  };
+}
+
+function resolverForDeps(deps: LocateRuntimeDeps): MemorySourceResolver {
+  if (deps.memorySourceResolver !== undefined) return deps.memorySourceResolver;
+  if (deps.run.memoryRef === null) return nullMemoryResolver();
+  const memory = deps.memory;
+  if (memory === undefined) {
+    throw new MemoryBindingError("memory_not_found", `no memory binding for ${deps.run.memoryRef}`);
+  }
+  const loadSnapshot = memory.loadSnapshot;
+  return createMemorySourceResolver(createMemorySourceBinding({
+    memoryRef: deps.run.memoryRef,
+    memory,
+    provider: null,
+    ...(loadSnapshot === undefined
+      ? {}
+      : {
+          loadSnapshot: async (snapshotId: string) => createFrozenMemorySnapshotBinding({
+            memoryRef: deps.run.memoryRef!,
+            snapshotId,
+            reader: await loadSnapshot(snapshotId),
+          }),
+        }),
+  }));
+}
+
+export async function resolveBindingWithPolicy(
+  run: LocateRuntimeDeps["run"],
+  resolver: MemorySourceResolver,
+  wait: (ms: number) => Promise<void> = sleep,
+): Promise<Awaited<ReturnType<typeof resolveMemoryBinding>>> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MEMORY_BINDING_ATTEMPT_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await resolveMemoryBinding(run, resolver);
+    } catch (error) {
+      lastError = error;
+      if (
+        !(error instanceof MemoryBindingError) ||
+        (error.code !== "unavailable" && error.code !== "timeout") ||
+        attempt === MEMORY_BINDING_ATTEMPT_DELAYS_MS.length
+      ) {
+        throw error;
+      }
+      await wait(MEMORY_BINDING_ATTEMPT_DELAYS_MS[attempt] ?? 1_000);
+    }
+  }
+  throw lastError;
 }
 
 function maxRetrievalToolAttempts(value: unknown): 1 | 2 {
@@ -221,37 +300,17 @@ function retrieveToolForFeature(featureKey: FeatureObservation["key"]): OpenAI.C
 }
 
 function retrievePrompt(feature: FeatureObservation): string {
-  return (
-    `Call memory_retrieve exactly once for feature_key "${feature.key}". ` +
-    "The query must describe only this visible feature, without country, region, city or continent guesses.\n" +
-    `Observation: ${feature.text}`
-  );
+  return `${loadPrompt("retrieve")}\n\n${JSON.stringify({
+    active_feature: feature.key,
+    observation: feature.text,
+  })}`;
 }
 
 function analyzePrompt(observations: readonly FeatureObservation[], groups: readonly FeatureMemoryGroup[]): string {
-  return (
-    "Make one strict geolocation guess from the original image. " +
-    "Memory groups are prior lessons only: treat them as hypotheses and use them only where they match the image. " +
-    "Do not use any revealed location data and do not call memory tools.\n\n" +
-    `Observations:\n${JSON.stringify(observations)}\n\n` +
-    `Memory groups:\n${JSON.stringify(groups)}`
-  );
-}
-
-function serializeRetrieveResult(group: FeatureMemoryGroup): string {
-  return JSON.stringify({
-    attempt_id: group.attemptId,
-    feature_key: group.feature.key,
-    status: group.status,
-    hits: group.hits.map((hit) => ({
-      memory_hit_id: hit.memoryHitId,
-      provider_id: hit.providerId,
-      text: hit.text,
-      score: hit.score,
-      effect: hit.effect,
-    })),
-    failure: group.failure,
-  });
+  return `${loadPrompt("analyze")}\n\n${JSON.stringify({
+    observations,
+    memory_groups: groups,
+  })}`;
 }
 
 function toolCallId(toolCalls: readonly unknown[]): string | null {
@@ -266,7 +325,9 @@ function toolEvent(
   attemptId: string,
   group: FeatureMemoryGroup,
   sequence: number,
+  memoryRef: string | null,
 ): ToolEvent {
+  const prompt = memoryRef === null ? null : sharedMemoryPrompt("retrieve");
   return {
     attemptId,
     phase: "retrieve",
@@ -275,6 +336,8 @@ function toolEvent(
     memoryHitId: null,
     status: group.status === "failed" ? group.failure ?? "failed" : group.status,
     sequence,
+    memoryRef,
+    ...(prompt === null ? {} : { promptVersion: prompt.version, promptDigest: prompt.digest }),
   };
 }
 
@@ -292,6 +355,8 @@ function setTraceAttributes(
     "locate.episode_candidate_count": episodeCandidateCount,
     "locate.episode_count": result.episodes.length,
     "locate.memory_hit_ids": hitIds.join(","),
+    "locate.retrieve_prompt_version": PROMPT_VERSIONS.retrieve,
+    "locate.analyze_prompt_version": PROMPT_VERSIONS.analyze,
     "locate.memory_groups": JSON.stringify(
       result.memoryGroups.map((group) => ({
         featureKey: group.feature.key,
@@ -357,11 +422,28 @@ async function locateAttempt(
   onPartialResult?: (result: LocatePartialResult, episodeCandidates: EpisodeCandidate[]) => void,
 ): Promise<LocateResult> {
   validateMemoryRunConfig(deps.run);
-  const observeImage = deps.observe ?? observe;
-  const reader = featureScopedReader(deps.memory);
-  const client = deps.client ?? defaultClient();
   const maxAttempts = maxRetrievalToolAttempts(deps.maxToolAttemptsPerFeature);
-  const observed = await observeImage(input.imagePath);
+  let binding: MemoryBinding;
+  if (deps.memoryBinding !== undefined) {
+    validateMemoryBinding(deps.memoryBinding, deps.run);
+    if (deps.memory !== undefined || deps.memorySourceResolver !== undefined) {
+      throw new MemoryBindingError(
+        "memory_mismatch",
+        "a resolved memoryBinding cannot be combined with memory or memorySourceResolver",
+      );
+    }
+    binding = deps.memoryBinding;
+  } else {
+    const resolver = resolverForDeps(deps);
+    binding = await resolveBindingWithPolicy(deps.run, resolver, deps.sleep ?? sleep);
+  }
+  if (binding.mode !== deps.run.mode || binding.memoryRef !== deps.run.memoryRef) {
+    throw new MemoryBindingError("memory_mismatch", "memory binding mode does not match the run mode");
+  }
+  const reader = binding.reader;
+  const client = deps.client ?? defaultClient();
+  const observeImage = deps.observe ?? observe;
+  const observed = normalizeObserveResult(await observeImage(input.imagePath));
   const observations = observed.features;
   const imageUrl = await (deps.imageDataUri ?? toDataUri)(input.imagePath);
   const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -370,9 +452,7 @@ async function locateAttempt(
       content: [
         {
           type: "text",
-          text:
-            "This conversation solves one image. The original image remains authoritative. " +
-            `Observation output:\n${JSON.stringify(observed)}`,
+          text: `${loadPrompt("analyze")}\n\n${JSON.stringify({ observation: observed })}`,
         },
         { type: "image_url", image_url: { url: imageUrl } },
       ],
@@ -384,13 +464,30 @@ async function locateAttempt(
   let sequence = 0;
   let memoryHitsRemaining = 60;
 
-  for (const feature of eligibleFeatureObservations(observations)) {
+  const noMemoryGroup = (feature: FeatureObservation): FeatureMemoryGroup => ({
+    attemptId: input.attemptId,
+    feature,
+    query: null,
+    status: "no_hit",
+    hits: [],
+    failure: null,
+    retryCount: 0,
+  });
+
+  if (deps.run.memoryRef === null) {
+    for (const feature of observations) {
+      const group = noMemoryGroup(feature);
+      groups.push(group);
+    }
+  }
+
+  for (const feature of deps.run.memoryRef === null ? [] : observations) {
     let finalGroup: FeatureMemoryGroup | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (events.length >= RETRIEVAL_MODEL_ATTEMPT_BUDGET) {
-        const group = failedGroup(input.attemptId, feature, "budget_exhausted");
+        const group = failedGroup(input.attemptId, feature, "budget_exhausted", attempt - 1);
         sequence += 1;
-        events.push(toolEvent(input.attemptId, group, sequence));
+        events.push(toolEvent(input.attemptId, group, sequence, deps.run.memoryRef));
         finalGroup = group;
         break;
       }
@@ -416,6 +513,7 @@ async function locateAttempt(
         const context = {
           attemptId: input.attemptId,
           reader,
+          promptPort: binding.promptPort,
           phase: "retrieve" as const,
           run: deps.run,
           activeFeature: feature,
@@ -433,21 +531,33 @@ async function locateAttempt(
           messages.push({
             role: "tool",
             tool_call_id: id,
-            content: serializeRetrieveResult(group),
+            content: JSON.stringify(serializeMemoryRetrieveResult(group)),
           } as OpenAI.ChatCompletionToolMessageParam);
         } else if (isRetryableFailure(group) && attempt < maxAttempts) {
           messages.push({
             role: "user",
-            content: `memory_retrieve failed with ${group.failure}; retry the same active feature once.`,
+            content: `${loadPrompt("retrieve")}\n\n${JSON.stringify({
+              active_feature: feature.key,
+              observation: feature.text,
+              previous_failure: group.failure,
+              retry: true,
+            })}`,
           });
         }
       } catch (error) {
         if (error instanceof MemoryToolValidationError) throw error;
-        group = failedGroup(input.attemptId, feature, isTimeoutFailure(error) ? "timeout" : "memory_error");
+        if (error instanceof MemoryBindingError) {
+          // Provider availability is a sample-level concern. Do not turn it into a
+          // fake feature failure and continue to analyze with a degraded memory run.
+          throw error;
+        } else {
+          group = failedGroup(input.attemptId, feature, isTimeoutFailure(error) ? "timeout" : "memory_error");
+        }
       }
 
+      group = { ...group, retryCount: attempt - 1 };
       sequence += 1;
-      events.push(toolEvent(input.attemptId, group, sequence));
+      events.push(toolEvent(input.attemptId, group, sequence, deps.run.memoryRef));
       memoryHitsRemaining -= group.hits.length;
       finalGroup = group;
 

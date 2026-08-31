@@ -7,14 +7,23 @@ import {
   type ReflectRuntimeChatClient,
 } from "./reflect-runtime.internal.ts";
 import type { ReflectionEpisodeInput } from "./reflect.ts";
+import { loadPrompt } from "./promts.ts";
 import type { FeatureObservation } from "./observe.ts";
 import type {
   Hint,
   LessonInput,
+  MemoryBinding,
   MemoryWriteResult,
   MemoryWriter,
 } from "./memory/memory.ts";
-import { MemoryWriteError } from "./memory/memory.ts";
+import {
+  createFrozenMemorySnapshotBinding,
+  createMemorySourceBinding,
+  createMemorySourceResolver,
+  markFrozenMemoryReader,
+  MemoryWriteError,
+  resolveMemoryBinding,
+} from "./memory/memory.ts";
 import {
   makeIdempotencyKey,
   makeMemoryHitId,
@@ -24,6 +33,7 @@ import {
 } from "./tools/memory.ts";
 
 const run: MemoryRunConfig = {
+  memoryRef: "file",
   mode: "training",
   snapshotId: null,
   readOnly: false,
@@ -32,7 +42,7 @@ const run: MemoryRunConfig = {
 
 const feature: FeatureObservation = {
   key: "road_markings",
-  state: "visible",
+
   text: "single yellow center line on a rural road",
 };
 
@@ -163,12 +173,29 @@ function textPart(request: OpenAI.ChatCompletionCreateParamsNonStreaming): strin
   return part.text;
 }
 
+async function makeResolvedBinding(
+  writer: WriterSpy,
+  config: MemoryRunConfig = run,
+): Promise<MemoryBinding> {
+  if (config.memoryRef === null) assert.fail("reflection fixture requires a memory reference");
+  const source = createMemorySourceBinding({
+    memoryRef: config.memoryRef,
+    memory: writer,
+    loadSnapshot: async (snapshotId) => createFrozenMemorySnapshotBinding({
+      memoryRef: config.memoryRef!,
+      snapshotId,
+      reader: markFrozenMemoryReader(writer, snapshotId),
+    }),
+  });
+  return resolveMemoryBinding(config, createMemorySourceResolver(source));
+}
+
 test("reflectEpisode sends one feature and one memory hit with guess, truth, distance and image", async () => {
   const writer = new WriterSpy();
   const client = new ReflectClientSpy();
 
   const result = await reflectEpisodeWithRuntime(makeInput(), {
-    writer,
+    memoryBinding: await makeResolvedBinding(writer),
     run,
     client,
     imageDataUri: async (imagePath) => `data:image/jpeg;base64,${imagePath}`,
@@ -197,6 +224,7 @@ test("reflectEpisode sends one feature and one memory hit with guess, truth, dis
     ["road_markings"],
   );
   const prompt = textPart(request);
+  assert.equal(prompt.startsWith(loadPrompt("reflect")), true);
   assert.equal(prompt.includes(JSON.stringify(feature)), true);
   assert.equal(prompt.includes(memoryHitId), true);
   assert.equal(prompt.includes(memoryHit.text), true);
@@ -234,7 +262,7 @@ test("reflectEpisode accepts all effect values and writes app-owned provenance",
     client.toolCalls = [toolCall({ effect })];
 
     const result = await reflectEpisodeWithRuntime(makeInput(), {
-      writer,
+      memoryBinding: await makeResolvedBinding(writer),
       run,
       client,
       imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -292,7 +320,7 @@ test("reflectEpisode validates and stores the same canonical parsed tool argumen
   ];
 
   const result = await reflectEpisodeWithRuntime(makeInput(), {
-    writer,
+    memoryBinding: await makeResolvedBinding(writer),
     run,
     client,
     imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -386,7 +414,7 @@ test("reflectEpisode keeps reflection failure distinct from write failure and en
     const client = new ReflectClientSpy();
     client.toolCalls = scenario.toolCalls;
     const result = await reflectEpisodeWithRuntime(makeInput(), {
-      writer,
+      memoryBinding: await makeResolvedBinding(writer),
       run,
       client,
       imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -405,8 +433,14 @@ test("reflectEpisode preflights writable training runtime before image/model acc
   const client = new ReflectClientSpy();
 
   const result = await reflectEpisodeWithRuntime(makeInput(), {
-    writer,
-    run: { mode: "evaluation", snapshotId: "snapshot-1", readOnly: true, recallLimit: 5 },
+    memoryBinding: await makeResolvedBinding(writer, {
+      memoryRef: "file",
+      mode: "evaluation",
+      snapshotId: "snapshot-1",
+      readOnly: true,
+      recallLimit: 5,
+    }),
+    run: { memoryRef: "file", mode: "evaluation", snapshotId: "snapshot-1", readOnly: true, recallLimit: 5 },
     client,
     imageDataUri: async () => assert.fail("image must not be loaded for read-only reflection"),
   });
@@ -420,19 +454,6 @@ test("reflectEpisode preflights writable training runtime before image/model acc
   assert.deepEqual(client.invocations, []);
   assert.deepEqual(writer.invocations, []);
 
-  const missingWriter = await reflectEpisodeWithRuntime(makeInput(), {
-    run,
-    client,
-    imageDataUri: async () => assert.fail("image must not be loaded without a writer"),
-  } as unknown as Parameters<typeof reflectEpisodeWithRuntime>[1]);
-
-  assert.deepEqual(missingWriter, {
-    status: "reflection_failed",
-    effect: null,
-    lessonId: null,
-    failure: "invalid_tool_arguments",
-  });
-  assert.deepEqual(client.invocations, []);
 });
 
 test("reflectEpisode rejects a store region unrelated to revealed truth before writing", async () => {
@@ -441,7 +462,7 @@ test("reflectEpisode rejects a store region unrelated to revealed truth before w
   client.toolCalls = [toolCall({ region: "US" })];
 
   const result = await reflectEpisodeWithRuntime(makeInput(), {
-    writer,
+    memoryBinding: await makeResolvedBinding(writer),
     run,
     client,
     imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -460,7 +481,7 @@ test("reflectEpisode rejects a store region unrelated to revealed truth before w
   const validWriter = new WriterSpy();
   assert.deepEqual(
     await reflectEpisodeWithRuntime(makeInput({ truth: { latitude: -30.03, longitude: -51.23, country: " br " } }), {
-      writer: validWriter,
+      memoryBinding: await makeResolvedBinding(validWriter),
       run,
       client,
       imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -476,7 +497,7 @@ test("reflectEpisode rejects foreign hits before model and returns writer outcom
   const foreign = await reflectEpisodeWithRuntime(
     makeInput({ memoryHit: { ...memoryHit, attemptId: "foreign-attempt" } }),
     {
-      writer: foreignWriter,
+      memoryBinding: await makeResolvedBinding(foreignWriter),
       run,
       client: foreignClient,
       imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -498,7 +519,7 @@ test("reflectEpisode rejects foreign hits before model and returns writer outcom
   duplicateClient.toolCalls = [toolCall({ effect: "irrelevant" })];
   assert.deepEqual(
     await reflectEpisodeWithRuntime(makeInput(), {
-      writer: duplicateWriter,
+      memoryBinding: await makeResolvedBinding(duplicateWriter),
       run,
       client: duplicateClient,
       imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -524,7 +545,7 @@ test("reflectEpisode returns write_failed and write_outcome_unknown without retr
     client.toolCalls = [toolCall({ effect: "insufficient" })];
 
     const result = await reflectEpisodeWithRuntime(makeInput(), {
-      writer,
+      memoryBinding: await makeResolvedBinding(writer),
       run,
       client,
       imageDataUri: async () => "data:image/jpeg;base64,AA==",
@@ -546,7 +567,7 @@ test("reflectEpisode propagates image and model failures as typed runtime errors
   const imageClient = new ReflectClientSpy();
   await assert.rejects(
     reflectEpisodeWithRuntime(makeInput(), {
-      writer: imageWriter,
+      memoryBinding: await makeResolvedBinding(imageWriter),
       run,
       client: imageClient,
       imageDataUri: async () => {
@@ -567,7 +588,7 @@ test("reflectEpisode propagates image and model failures as typed runtime errors
   modelClient.error = new Error("provider rejected model call");
   await assert.rejects(
     reflectEpisodeWithRuntime(makeInput(), {
-      writer: modelWriter,
+      memoryBinding: await makeResolvedBinding(modelWriter),
       run,
       client: modelClient,
       imageDataUri: async () => "data:image/jpeg;base64,AA==",

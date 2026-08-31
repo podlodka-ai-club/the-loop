@@ -4,10 +4,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath, dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { MemoryWriteError } from "../memory.ts";
+import { MemoryWriteError, encodeMemoryRetrieveQuery, sharedMemoryPrompt } from "../memory.ts";
 import type { Hint, LegacyLessonInput } from "../memory.ts";
 import {
-  buildHindsightRecallQuery,
   createHindsightMemory,
   loadHindsightMemoryConfig,
   type HindsightMemory,
@@ -17,7 +16,6 @@ import {
 import {
   HINDSIGHT_CLOUD_BASE_URL,
   HINDSIGHT_RETAIN_CONTEXT,
-  HINDSIGHT_RETAIN_MISSION,
   createHindsightPlatformPort,
   resolveHindsightMemorySource,
   type HindsightMemoryResult,
@@ -474,7 +472,7 @@ export function validateHindsightPilotSourceBindings(
 function rawRecallRequest(config: HindsightMemoryConfig, query: string): HindsightRecallRequest {
   return {
     bankId: config.source.bankId,
-    query,
+    query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), query),
     maxTokens: config.maxTokens,
     budget: config.recallBudget,
     types: ["world", "experience", "observation"],
@@ -740,7 +738,7 @@ export async function runHindsightPilot(options: HindsightPilotRunOptions): Prom
       const results = await rawRecall(
         options.platform,
         options.config,
-        buildHindsightRecallQuery(lessonCase.lesson.triggers, options.config.priorQuery),
+        lessonCase.lesson.triggers.join("\n"),
       );
       readDurations.push(now() - startedRead);
       inspectLessonResults(summary, lessonCase, results);
@@ -759,7 +757,7 @@ export async function runHindsightPilot(options: HindsightPilotRunOptions): Prom
         const results = await rawRecall(
           options.platform,
           options.config,
-          buildHindsightRecallQuery(queryCase.features, options.config.priorQuery),
+          queryCase.features.join("\n"),
         );
         readDurations.push(now() - started);
         if (inspectQueryResults(summary, queryCase, results)) {

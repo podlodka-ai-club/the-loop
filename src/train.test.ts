@@ -91,7 +91,7 @@ test("control and memory-on share the same training sample order and observation
     sampleIds: memoryOn.sample.rows.map((item) => item.id),
     sampleFingerprint: memoryOn.sample.fingerprint,
     manifestPath: "benchmark/samples/osv5m-v1-n200.txt",
-    observationPromptVersion: "observe-v1",
+    observationPromptVersion: "dynamic-features-v2",
     memoryMode: "warm",
   });
 
@@ -99,7 +99,7 @@ test("control and memory-on share the same training sample order and observation
   assert.deepEqual(memoryOn.quotas, new Map([["BR", 2], ["US", 1], ["ZA", 1]]));
   assert.deepEqual(contract.memoryOn.sampleIds, contract.control.sampleIds);
   assert.equal(contract.memoryOn.observationCacheKey, contract.control.observationCacheKey);
-  assert.match(contract.observationCacheKey, /observe-v1:warm$/);
+  assert.match(contract.observationCacheKey, /dynamic-features-v2:warm$/);
 });
 
 function row(overrides: Partial<Row> = {}): Row {

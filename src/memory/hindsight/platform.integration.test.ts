@@ -1,18 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  buildHindsightRecallQuery,
-  buildHindsightRetainRequest,
-  loadHindsightMemoryConfig,
-} from "./memory.ts";
+import { buildHindsightRetainRequest, loadHindsightMemoryConfig } from "./memory.ts";
 import {
   HINDSIGHT_CLOUD_BASE_URL,
   HINDSIGHT_RETAIN_CONTEXT,
-  HINDSIGHT_RETAIN_MISSION,
   resolveHindsightMemorySource,
 } from "./platform-contract.ts";
 import { createHindsightPlatformPort } from "./platform.ts";
 import { parseHindsightPilotArgs } from "./pilot.ts";
+import { encodeMemoryRetrieveQuery, sharedMemoryPrompt, normalizeMemoryQuery } from "../memory.ts";
 
 const pilotArgs = parseHindsightPilotArgs(process.argv.slice(2));
 const liveGate =
@@ -44,7 +40,7 @@ test(
         baseUrl: HINDSIGHT_CLOUD_BASE_URL,
         bankId: pilotSource.bankId,
         purpose: pilotSource.purpose,
-        retainMission: HINDSIGHT_RETAIN_MISSION,
+        retainMission: sharedMemoryPrompt("store").text,
         observationsEnabled: true,
         autoConsolidationEnabled: true,
       },
@@ -53,7 +49,7 @@ test(
         baseUrl: HINDSIGHT_CLOUD_BASE_URL,
         bankId: pilotSource.bankId,
         purpose: "pilot",
-        retainMission: HINDSIGHT_RETAIN_MISSION,
+        retainMission: sharedMemoryPrompt("store").text,
         observationsEnabled: true,
         autoConsolidationEnabled: true,
       },
@@ -101,7 +97,7 @@ test(
 
     const recall = await platform.recall({
       bankId: integrationSource.bankId,
-      query: buildHindsightRecallQuery(lesson.triggers, config.priorQuery),
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), normalizeMemoryQuery(lesson.triggers)),
       maxTokens: config.maxTokens,
       budget: config.recallBudget,
       types: ["world", "experience", "observation"],

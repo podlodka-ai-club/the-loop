@@ -6,7 +6,7 @@ import { XmemoryMemoryError } from "./error.ts";
 export const XMEMORY_SCHEMA_PATH = "src/memory/xmemory/schema.xmd.yml";
 
 const XMEMORY_SCHEMA_V1_SHA256 =
-  "711109bcf4abbb8abac2d981c0a00995d937ed72e5d26604eccd8ea0dd8f0593";
+  "15a661fee3e0224d8eb6c84420b1dd2119059568f9d6151ac6b2774d9d6942cf";
 
 export type LoadedXmemorySchema = {
   source: string;

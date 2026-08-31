@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import OpenAI from "openai";
+import { withHints } from "./agent.ts";
 import { FileMemory } from "./memory/file/memory.ts";
 import type { Hint, MemoryReader } from "./memory/memory.ts";
-import { FEATURE_KEYS, type FeatureObservation, type ObserveResult } from "./observe.ts";
+import { type FeatureObservation, type ObserveResult } from "./observe.ts";
 import { locate, type LocateDeps } from "./locate.ts";
 import {
   locateWithRuntime,
@@ -17,22 +18,34 @@ import {
 import { readLocatePartialResult } from "./locate-partial.internal.ts";
 import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
 import { MemoryToolValidationError, type MemoryRunConfig } from "./tools/memory.ts";
+import { loadPrompt } from "./promts.ts";
+
+const MAX_FEATURE_KEYS = Array.from({ length: 12 }, (_value, index) => `dynamic_cue_${index + 1}`);
 
 const run: MemoryRunConfig = {
+  memoryRef: "file",
   mode: "training",
   snapshotId: null,
   readOnly: false,
   recallLimit: 5,
 };
 
-function observed(overrides: Partial<Record<(typeof FEATURE_KEYS)[number], Partial<FeatureObservation>>>): ObserveResult {
+test("agent solve prompt is loaded from the Markdown asset before runtime hints", () => {
+  const hint: Hint = { lessonId: "lesson-1", text: "dry road surface" };
+  const prompt = withHints([hint]);
+  const asset = loadPrompt("agent");
+
+  assert.equal(prompt.startsWith(asset), true);
+  assert.equal(prompt.slice(asset.length).trim(), JSON.stringify([hint]));
+});
+
+function observed(overrides: Record<string, Partial<FeatureObservation>>): ObserveResult {
   return {
     error: null,
-    features: FEATURE_KEYS.map((key) => ({
+    features: Object.entries(overrides).map(([key, feature]) => ({
       key,
-      state: "not_visible",
-      text: "",
-      ...overrides[key],
+      text: `${key} visible cue`,
+      ...feature,
     })),
   };
 }
@@ -124,7 +137,7 @@ class FakeClient implements LocateChatClient {
           }
           const toolFeatureKey =
             attempts === 1 && this.wrongFirstFor.has(featureKey)
-              ? FEATURE_KEYS.find((key) => key !== featureKey) ?? "traffic_side"
+              ? featureKey === "plates" ? "poles" : "plates"
               : featureKey;
           const args =
             attempts === 1 && this.invalidArgsFirstFor.has(featureKey)
@@ -254,26 +267,27 @@ function analyzeMemoryGroups(request: OpenAI.ChatCompletionCreateParamsNonStream
   hits: unknown[];
 }> {
   const text = analyzeText(request);
-  const marker = "Memory groups:\n";
-  const markerIndex = text.indexOf(marker);
-  assert.ok(markerIndex >= 0);
-  return JSON.parse(text.slice(markerIndex + marker.length)) as Array<{
-    feature: { key: string };
-    status: string;
-    failure: string | null;
-    hits: unknown[];
-  }>;
+  const prompt = loadPrompt("analyze");
+  assert.equal(text.startsWith(prompt), true);
+  const data = JSON.parse(text.slice(prompt.length).trim()) as {
+    memory_groups: Array<{
+      feature: { key: string };
+      status: string;
+      failure: string | null;
+      hits: unknown[];
+    }>;
+  };
+  return data.memory_groups;
 }
 
 function analyzeObservations(request: OpenAI.ChatCompletionCreateParamsNonStreaming): FeatureObservation[] {
   const text = analyzeText(request);
-  const startMarker = "Observations:\n";
-  const endMarker = "\n\nMemory groups:\n";
-  const start = text.indexOf(startMarker);
-  const end = text.indexOf(endMarker);
-  assert.ok(start >= 0);
-  assert.ok(end > start);
-  return JSON.parse(text.slice(start + startMarker.length, end)) as FeatureObservation[];
+  const prompt = loadPrompt("analyze");
+  assert.equal(text.startsWith(prompt), true);
+  const data = JSON.parse(text.slice(prompt.length).trim()) as {
+    observations: FeatureObservation[];
+  };
+  return data.observations;
 }
 
 test("retrieve loop processes visible features in order, retries once and disables parallel tool calls", async () => {
@@ -291,8 +305,8 @@ test("retrieve loop processes visible features in order, retries once and disabl
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            plates: { state: "visible", text: "white rear plate" },
-            poles: { state: "visible", text: "wooden pole with crossarm" },
+            plates: { text: "white rear plate" },
+            poles: { text: "wooden pole with crossarm" },
           }),
       },
     );
@@ -309,6 +323,11 @@ test("retrieve loop processes visible features in order, retries once and disabl
         }),
       ["plates", "poles", "poles"],
     );
+    const retrieveMessage = client.requests[0]?.messages.at(-1);
+    assert.ok(retrieveMessage);
+    const retrieveContent = retrieveMessage.content;
+    assert.ok(typeof retrieveContent === "string");
+    assert.equal(retrieveContent.startsWith(loadPrompt("retrieve")), true);
     for (const request of client.requests.filter((item) => item.tools !== undefined)) {
       assert.equal(request.parallel_tool_calls, false);
       assert.deepEqual(request.tool_choice, { type: "function", function: { name: "memory_retrieve" } });
@@ -352,7 +371,7 @@ test("retrieve loop processes visible features in order, retries once and disabl
   });
 });
 
-test("not_visible observations are not retrieved but remain available to final analyze", async () => {
+test("only model-emitted dynamic observations are retrieved and passed to final analyze", async () => {
   await withImage(async (imagePath) => {
     const client = new FakeClient();
     const memory = new FakeReader();
@@ -366,8 +385,7 @@ test("not_visible observations are not retrieved but remain available to final a
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            plates: { state: "not_visible", text: "model should have normalized this upstream" },
-            poles: { state: "visible", text: "wooden pole with crossarm" },
+            poles: { text: "wooden pole with crossarm" },
           }),
       },
     );
@@ -391,11 +409,34 @@ test("not_visible observations are not retrieved but remain available to final a
     const analyze = client.requests.at(-1);
     assert.ok(analyze);
     const observations = analyzeObservations(analyze);
-    assert.deepEqual(
-      observations.filter((feature) => feature.state === "visible").map((feature) => feature.key),
-      ["poles"],
+    assert.deepEqual(observations.map((feature) => feature.key), ["poles"]);
+    assert.equal(Object.prototype.hasOwnProperty.call(observations[0] ?? {}, "state"), false);
+  });
+});
+
+test("null memory bypasses retrieval model turns, provider calls and memory prompt metadata", async () => {
+  await withImage(async (imagePath) => {
+    const client = new FakeClient();
+    const memory = new FakeReader();
+    const result = await locateWithRuntime(
+      { attemptId: "attempt-cold", imagePath },
+      {
+        memory,
+        run: { memoryRef: null, mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
+        client,
+        imageDataUri: async () => "data:image/jpeg;base64,AA==",
+        observe: async () => observed({ poles: { text: "wooden pole with crossarm" } }),
+      },
     );
-    assert.equal(observations.find((feature) => feature.key === "plates")?.state, "not_visible");
+
+    assert.equal(client.requests.filter((request) => request.tools !== undefined).length, 0);
+    assert.deepEqual(memory.calls, []);
+    assert.deepEqual(result.memoryGroups.map((group) => [group.feature.key, group.status, group.query]), [
+      ["poles", "no_hit", null],
+    ]);
+    assert.equal(result.trace.events[0]?.memoryRef, null);
+    assert.equal(result.trace.events[0]?.promptVersion, undefined);
+    assert.equal(result.trace.events[0]?.promptDigest, undefined);
   });
 });
 
@@ -415,8 +456,8 @@ test("final analyze sees the original image and stable feature groups without st
         },
         observe: async () =>
           observed({
-            traffic_side: { state: "visible", text: "traffic keeps right" },
-            vegetation: { state: "visible", text: "dry scrub and sparse trees" },
+            traffic_side: { text: "traffic keeps right" },
+            vegetation: { text: "dry scrub and sparse trees" },
           }),
       },
     );
@@ -457,9 +498,9 @@ test("final analyze receives one failed group after two missing retrieval calls 
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            plates: { state: "visible", text: "white rear plate" },
-            poles: { state: "visible", text: "wooden pole with crossarm" },
-            vegetation: { state: "visible", text: "dry scrub and sparse trees" },
+            plates: { text: "white rear plate" },
+            poles: { text: "wooden pole with crossarm" },
+            vegetation: { text: "dry scrub and sparse trees" },
           }),
       },
     );
@@ -506,7 +547,7 @@ test("final analyze receives one failed group after two missing retrieval calls 
 test("runtime caps retrieval attempts at two per feature and twenty-four model calls", async () => {
   await withImage(async (imagePath) => {
     const client = new FakeClient();
-    for (const key of FEATURE_KEYS) client.missingAlwaysFor.add(key);
+    for (const key of MAX_FEATURE_KEYS) client.missingAlwaysFor.add(key);
 
     const result = await locateWithRuntime(
       { attemptId: "attempt-2c", imagePath },
@@ -519,8 +560,8 @@ test("runtime caps retrieval attempts at two per feature and twenty-four model c
         observe: async () =>
           observed(
             Object.fromEntries(
-              FEATURE_KEYS.map((key) => [key, { state: "visible", text: `${key} visible cue` }]),
-            ) as Partial<Record<(typeof FEATURE_KEYS)[number], Partial<FeatureObservation>>>,
+              MAX_FEATURE_KEYS.map((key) => [key, { text: `${key} visible cue` }]),
+            ),
           ),
       },
     );
@@ -528,14 +569,14 @@ test("runtime caps retrieval attempts at two per feature and twenty-four model c
     const retrieveRequests = client.requests.filter((request) => request.tools !== undefined);
     assert.equal(retrieveRequests.length, 24);
     assert.equal(result.trace.events.length, 24);
-    assert.equal(result.memoryGroups.length, FEATURE_KEYS.length);
+    assert.equal(result.memoryGroups.length, MAX_FEATURE_KEYS.length);
     assert.deepEqual(
-      FEATURE_KEYS.map((key) => client.seen.get(key)),
-      FEATURE_KEYS.map(() => 2),
+      MAX_FEATURE_KEYS.map((key) => client.seen.get(key)),
+      MAX_FEATURE_KEYS.map(() => 2),
     );
     assert.deepEqual(
       result.memoryGroups.map((group) => [group.feature.key, group.status, group.failure]),
-      FEATURE_KEYS.map((key) => [key, "failed", "missing_tool_call"]),
+      MAX_FEATURE_KEYS.map((key) => [key, "failed", "missing_tool_call"]),
     );
   });
 });
@@ -558,10 +599,10 @@ test("retrieve loop retries malformed, wrong-feature, multiple and invalid-args 
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            plates: { state: "visible", text: "white rear plate" },
-            poles: { state: "visible", text: "wooden pole with crossarm" },
-            road_markings: { state: "visible", text: "single center line" },
-            vegetation: { state: "visible", text: "dry scrub and sparse trees" },
+            plates: { text: "white rear plate" },
+            poles: { text: "wooden pole with crossarm" },
+            road_markings: { text: "single center line" },
+            vegetation: { text: "dry scrub and sparse trees" },
           }),
       },
     );
@@ -604,6 +645,7 @@ test("locate rethrows control-plane memory validation errors instead of recordin
     const client = new FakeClient();
     let observeCalls = 0;
     const invalidRun: MemoryRunConfig = {
+      memoryRef: "file",
       mode: "evaluation",
       snapshotId: null,
       readOnly: true,
@@ -622,7 +664,7 @@ test("locate rethrows control-plane memory validation errors instead of recordin
             observe: async () => {
               observeCalls += 1;
               return observed({
-                plates: { state: "visible", text: "white rear plate" },
+              plates: { text: "white rear plate" },
               });
             },
           },
@@ -687,7 +729,7 @@ test("locate rethrows the original final analyze error when partial result canno
           imageDataUri: async () => "data:image/jpeg;base64,AA==",
           observe: async () =>
             observed({
-              poles: { state: "visible", text: "wooden pole" },
+              poles: { text: "wooden pole" },
             }),
         },
       );
@@ -761,7 +803,7 @@ test("FileMemory all mode is bounded to top recall in the feature-scoped path", 
         imageDataUri: async () => "data:image/jpeg;base64,AA==",
         observe: async () =>
           observed({
-            poles: { state: "visible", text: "wooden pole" },
+            poles: { text: "wooden pole" },
           }),
       },
     );

@@ -317,6 +317,7 @@ export function createXmemoryPlatformPortInternal(
   }
 
   return {
+    supportsAtomicIdempotency: true,
     async getSchema(timeoutMs) {
       let value: unknown;
       try {

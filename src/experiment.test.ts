@@ -19,11 +19,11 @@ test("experiment metrics use fixed fixture labels and compare feature-scoped wit
   ] satisfies readonly RetrievalFixtureCase[];
   const groups: FeatureMemoryGroup[] = [
     group({
-      feature: { key: "visible_text", state: "visible", text: "small tunnel sign" },
+      feature: { key: "visible_text", text: "small tunnel sign" },
       providerIds: ["rare-sign-lesson"],
     }),
     group({
-      feature: { key: "road_surface", state: "visible", text: "broad paved road" },
+      feature: { key: "road_surface", text: "broad paved road" },
       providerIds: ["broad-road-lesson"],
     }),
   ];
@@ -87,14 +87,14 @@ test("benchmark pair contract pins sample order cache key and explicit cold or w
     sampleIds: ["img-1", "img-2"],
     sampleFingerprint: "abc123",
     manifestPath: "benchmark/samples/osv5m-v1-n200.txt",
-    observationPromptVersion: "observe-v1",
+    observationPromptVersion: "dynamic-features-v2",
     memoryMode: "cold",
   });
 
   assert.deepEqual(contract.control.sampleIds, ["img-1", "img-2"]);
   assert.deepEqual(contract.memoryOn.sampleIds, ["img-1", "img-2"]);
   assert.equal(contract.control.observationCacheKey, contract.memoryOn.observationCacheKey);
-  assert.match(contract.observationCacheKey, /abc123:observe-v1:cold$/);
+  assert.match(contract.observationCacheKey, /abc123:dynamic-features-v2:cold$/);
 });
 
 test("retrieval fixture loader requires fixed rare and broad provider ids", async () => {
@@ -219,8 +219,8 @@ test("FileMemory and Mem0 readers both enter feature-scoped retrieval through th
       attemptId: "attempt-file",
       reader: fileReader,
       phase: "retrieve",
-      run: { mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
-      activeFeature: { key: "poles", state: "visible", text: "wooden poles" },
+      run: { memoryRef: "file", mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
+      activeFeature: { key: "poles", text: "wooden poles" },
     },
     { feature_key: "poles", query: "wooden poles" },
   );
@@ -229,8 +229,8 @@ test("FileMemory and Mem0 readers both enter feature-scoped retrieval through th
       attemptId: "attempt-mem0",
       reader: mem0,
       phase: "retrieve",
-      run: { mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
-      activeFeature: { key: "poles", state: "visible", text: "wooden poles" },
+      run: { memoryRef: "file", mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
+      activeFeature: { key: "poles", text: "wooden poles" },
     },
     { feature_key: "poles", query: "wooden poles" },
   );
@@ -266,6 +266,7 @@ function group(input: { feature: FeatureObservation; providerIds: string[] }): F
       effect: null,
     })),
     failure: null,
+    retryCount: 0,
   };
 }
 

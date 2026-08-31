@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { loadPrompt } from "../../promts.ts";
 import { HindsightError } from "@vectorize-io/hindsight-client";
 import { HindsightMemoryError, normalizeHindsightError } from "./error.ts";
 import {
@@ -17,6 +18,7 @@ const retainRequest: HindsightRetainRequest = {
   bankId: "bank-test",
   content: "synthetic lesson",
   documentId: "attempt-001",
+  retainMission: loadPrompt("memory-store"),
   context: "loci_training_reflection",
   metadata: {
     loci_source_attempt_id: "attempt-001",
@@ -43,7 +45,7 @@ const recallRequest: HindsightRecallRequest = {
 };
 
 function sdk(overrides: Partial<HindsightSdkClient> = {}): HindsightSdkClient {
-  return {
+  const defaults: HindsightSdkClient = {
     retain: async () => ({
       success: true,
       bank_id: "bank-test",
@@ -53,9 +55,14 @@ function sdk(overrides: Partial<HindsightSdkClient> = {}): HindsightSdkClient {
       usage: { input_tokens: 3 },
     }),
     recall: async () => ({ results: [] }),
+    getDocument: async () => null,
     getVersion: async () => ({ api_version: "v1" }),
     listDocuments: async () => ({ items: [], total: 0, limit: 1, offset: 0 }),
+  };
+  return {
+    ...defaults,
     ...overrides,
+    getDocument: overrides.getDocument ?? defaults.getDocument,
   };
 }
 
@@ -176,6 +183,7 @@ test("SDK constructor and Cloud calls are lazy and map normalized envelopes", as
   assert.deepEqual(retainArgs.slice(0, 2), ["bank-test", "synthetic lesson"]);
   assert.deepEqual(retainArgs[2], {
     documentId: "attempt-001",
+    retainMission: retainRequest.retainMission,
     context: "loci_training_reflection",
     metadata: retainRequest.metadata,
     async: false,
@@ -257,7 +265,7 @@ test("status, malformed response and transport failures are decoded without raw 
   );
   await assertError(
     port(sdk({ recall: async () => { throw { statusCode: 401, body: "private secret" }; } })).recall(recallRequest),
-    "protocol_error",
+    "authentication",
     "read",
     false,
   );
@@ -268,7 +276,7 @@ test("status, malformed response and transport failures are decoded without raw 
     false,
   );
   const foreign = normalizeHindsightError({ statusCode: 401, body: "private secret" }, "read");
-  assert.equal(foreign.code, "protocol_error");
+  assert.equal(foreign.code, "authentication");
 });
 
 test("already-aborted calls return timeout without SDK calls; later aborts preserve write uncertainty", async () => {

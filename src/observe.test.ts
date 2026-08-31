@@ -1,323 +1,196 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import {
-  FEATURE_KEYS,
-  eligibleFeatureObservations,
+  MAX_FEATURES,
+  OBSERVE_PROMPT_VERSION,
+  OBSERVE_SCHEMA_VERSION,
+  isNormalizedFeatureKey,
+  normalizeFeatureKey,
   observe,
-  type FeatureObservation,
+  OBSERVE_PROMPT,
   type ObserveModelRequest,
 } from "./observe.ts";
+import { loadPrompt } from "./promts.ts";
 
-function fullObservation(
-  overrides: Partial<Record<(typeof FEATURE_KEYS)[number], Partial<FeatureObservation>>> = {},
-): FeatureObservation[] {
-  return FEATURE_KEYS.map((key) => ({
-    key,
-    state: "visible",
-    text: `${key.replaceAll("_", " ")} visible cue`,
-    ...overrides[key],
-  }));
-}
-
-async function withCacheDir<T>(fn: (cacheDir: string) => Promise<T>): Promise<T> {
-  const cacheDir = await mkdtemp(join(tmpdir(), "loci-observe-"));
+async function withFixture<T>(fn: (input: { cacheDir: string; imagePath: string }) => Promise<T>): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), "loci-observe-"));
+  const cacheDir = join(root, "cache");
+  const imagePath = join(root, "image.bin");
+  await writeFile(imagePath, Buffer.from("image-a"));
   try {
-    return await fn(cacheDir);
+    return await fn({ cacheDir, imagePath });
   } finally {
-    await rm(cacheDir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 }
 
-test("successful observation returns one ordered record per registry key and rejects geographic implications", async () => {
-  await withCacheDir(async (cacheDir) => {
+function response(features: readonly unknown[]): string {
+  return JSON.stringify({ features });
+}
+
+test("dynamic observation accepts variable model-selected features in response order", async () => {
+  await withFixture(async ({ cacheDir, imagePath }) => {
     const calls: ObserveModelRequest[] = [];
-    const result = await observe("image-a.jpg", {
+    const result = await observe(imagePath, {
       cacheDir,
+      config: {
+        model: "test-model",
+        seed: 7,
+        schemaVersion: OBSERVE_SCHEMA_VERSION,
+        promptVersion: OBSERVE_PROMPT_VERSION,
+      },
       model: async (request) => {
         calls.push(request);
-        return JSON.stringify({ features: fullObservation() });
+        return response([
+          { key: "Road Markings", text: "broken white center line" },
+          { key: "red--bollard", text: "red reflector on a short post" },
+        ]);
       },
     });
 
     assert.equal(result.error, null);
-    assert.deepEqual(
-      result.features.map((feature) => feature.key),
-      FEATURE_KEYS,
-    );
-    assert.equal(result.features.length, FEATURE_KEYS.length);
-    assert.equal(calls[0]?.schema.properties.features.items.properties.key.enum, FEATURE_KEYS);
-    assert.deepEqual(calls[0]?.schema.properties.features.items.required, ["key", "state", "text"]);
-    assert.equal(calls[0]?.schema.properties.features.minItems, FEATURE_KEYS.length);
-    assert.equal(calls[0]?.schema.properties.features.maxItems, FEATURE_KEYS.length);
-
-    const geoResult = await observe("image-b.jpg", {
-      cacheDir,
-      model: async () =>
-        JSON.stringify({
-          features: fullObservation({
-            vegetation: { text: "dry vegetation suggests Brazil" },
-          }),
-        }),
-    });
-    assert.deepEqual(geoResult.features, []);
-    assert.equal(geoResult.error, "malformed observation response");
+    assert.deepEqual(result.features, [
+      { key: "road_markings", text: "broken white center line" },
+      { key: "red_bollard", text: "red reflector on a short post" },
+    ]);
+    assert.equal(result.features.length < MAX_FEATURES, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.prompt, loadPrompt("observe"));
+    assert.equal(OBSERVE_PROMPT, loadPrompt("observe"));
+    assert.equal(calls[0]?.schema.properties.features.minItems, 0);
+    assert.equal(calls[0]?.schema.properties.features.maxItems, MAX_FEATURES);
+    assert.equal("enum" in calls[0]!.schema.properties.features.items.properties.key, false);
+    assert.deepEqual(calls[0]?.schema.properties.features.items.required, ["key", "text"]);
   });
 });
 
-test("malformed observation records with missing duplicate or out-of-order keys return an error", async () => {
-  await withCacheDir(async (cacheDir) => {
-    const missing = await observe("missing-key.jpg", {
+test("empty dynamic observation is accepted without placeholder records", async () => {
+  await withFixture(async ({ cacheDir, imagePath }) => {
+    const result = await observe(imagePath, {
       cacheDir,
-      model: async () =>
-        JSON.stringify({
-          features: fullObservation().slice(0, FEATURE_KEYS.length - 1),
-        }),
+      model: async () => response([]),
     });
-    assert.deepEqual(missing.features, []);
-    assert.equal(missing.error, "malformed observation response");
 
-    const duplicated = fullObservation({
-      plates: { key: "poles" } as Partial<FeatureObservation>,
-    });
-    const duplicate = await observe("duplicate-key.jpg", {
-      cacheDir,
-      model: async () => JSON.stringify({ features: duplicated }),
-    });
-    assert.deepEqual(duplicate.features, []);
-    assert.equal(duplicate.error, "malformed observation response");
-
-    const outOfOrder = fullObservation();
-    [outOfOrder[0], outOfOrder[1]] = [outOfOrder[1]!, outOfOrder[0]!];
-    const reordered = await observe("out-of-order.jpg", {
-      cacheDir,
-      model: async () => JSON.stringify({ features: outOfOrder }),
-    });
-    assert.deepEqual(reordered.features, []);
-    assert.equal(reordered.error, "malformed observation response");
+    assert.deepEqual(result, { features: [], error: null });
   });
 });
 
-test("not_visible records are excluded from eligible features", () => {
-  const features = fullObservation({
-    plates: { state: "not_visible", text: "" },
-    vehicles: { state: "not_visible", text: "not visible" },
-  });
+test("normalization enforces bounded keys, generic-key denylist and duplicate rejection", async () => {
+  assert.equal(normalizeFeatureKey("  Road--Markings "), "road_markings");
+  assert.equal(normalizeFeatureKey("other"), null);
+  assert.equal(normalizeFeatureKey("Feature_2"), null);
+  assert.equal(isNormalizedFeatureKey("custom_cue"), true);
+  assert.equal(isNormalizedFeatureKey("custom-cue"), false);
 
-  assert.deepEqual(
-    eligibleFeatureObservations(features).map((feature) => feature.key),
-    FEATURE_KEYS.filter((key) => key !== "plates" && key !== "vehicles"),
-  );
-});
-
-test("visible records stay eligible even when observation text is empty", () => {
-  const features = fullObservation({
-    plates: { state: "visible", text: "" },
-    road_markings: { state: "visible", text: " \t " },
-  });
-
-  assert.deepEqual(
-    eligibleFeatureObservations(features).map((feature) => feature.key),
-    FEATURE_KEYS,
-  );
-});
-
-test("geographic implication validation rejects place language without rejecting visual state text", async () => {
-  await withCacheDir(async (cacheDir) => {
-    const acceptedScriptTexts = [
-      "Thai script with tone marks",
-      "Cyrillic/Russian text on a sign",
-      "Spanish text on sign",
-      "Latin script",
-    ];
-    for (const [index, text] of acceptedScriptTexts.entries()) {
-      const result = await observe(`script-${index}.jpg`, {
-        cacheDir,
-        model: async () =>
-          JSON.stringify({
-            features: fullObservation({
-              script_and_language: { text },
-            }),
-          }),
+  await withFixture(async ({ cacheDir, imagePath }) => {
+    for (const [name, features] of [
+      ["duplicate", [{ key: "Road Markings", text: "white line" }, { key: "road-markings", text: "another line" }]],
+      ["generic", [{ key: "misc_1", text: "some cue" }]],
+      ["invalid", [{ key: "not/a-key", text: "some cue" }]],
+      [
+        "too-many",
+        Array.from({ length: MAX_FEATURES + 1 }, (_value, index) => ({
+          key: `signal_${index + 1}`,
+          text: "visible cue",
+        })),
+      ],
+    ] as const) {
+      const result = await observe(imagePath, {
+        cacheDir: join(cacheDir, name),
+        model: async () => response(features),
       });
-      assert.equal(result.error, null, text);
-      assert.equal(result.features.find((feature) => feature.key === "script_and_language")?.text, text);
+      assert.deepEqual(result.features, [], name);
+      assert.equal(result.error, "malformed observation response", name);
     }
-
-    const rejectedTexts = [
-      "Kenyan-style plates",
-      "Mediterranean-looking stone walls",
-      "Parisian architecture",
-      "Scandinavian road markings",
-      "Mongolian road surface",
-      "Quebec-looking signs",
-      "Andean terrain with dry slopes",
-      "California-style highway signs",
-      "road edge suggests a country",
-      "dense city road lane markings",
-      "country or region language appears on the sign",
-    ];
-
-    for (const [index, text] of rejectedTexts.entries()) {
-      const result = await observe(`geo-${index}.jpg`, {
-        cacheDir,
-        model: async () =>
-          JSON.stringify({
-            features: fullObservation({
-              built_environment: { text },
-            }),
-          }),
-      });
-      assert.deepEqual(result.features, [], text);
-      assert.equal(result.error, "malformed observation response", text);
-    }
-
-    const accepted = await observe("visual-state.jpg", {
-      cacheDir,
-      model: async () =>
-        JSON.stringify({
-          features: fullObservation({
-            road_markings: { text: "the word state painted in white on the road surface" },
-          }),
-        }),
-    });
-    assert.equal(accepted.error, null);
-    assert.equal(
-      accepted.features.find((feature) => feature.key === "road_markings")?.text,
-      "the word state painted in white on the road surface",
-    );
-
-    const acceptedStyle = await observe("visual-style.jpg", {
-      cacheDir,
-      model: async () =>
-        JSON.stringify({
-          features: fullObservation({
-            built_environment: { text: "modern-style low building with flat roof" },
-          }),
-        }),
-    });
-    assert.equal(acceptedStyle.error, null);
-
-    const rejectedScript = await observe("script-place.jpg", {
-      cacheDir,
-      model: async () =>
-        JSON.stringify({
-          features: fullObservation({
-            script_and_language: { text: "Cyrillic text suggests Russia" },
-          }),
-        }),
-    });
-    assert.deepEqual(rejectedScript.features, []);
-    assert.equal(rejectedScript.error, "malformed observation response");
   });
 });
 
-test("runtime observation parser enforces strict object shapes", async () => {
-  await withCacheDir(async (cacheDir) => {
-    const topLevelExtra = await observe("top-extra.jpg", {
-      cacheDir,
-      model: async () => JSON.stringify({ features: fullObservation(), memory_ref: "foreign" }),
-    });
-    assert.deepEqual(topLevelExtra.features, []);
-    assert.equal(topLevelExtra.error, "malformed observation response");
-
-    const featureExtra = await observe("feature-extra.jpg", {
+test("structurally valid geographic-looking and visible-writing text is preserved", async () => {
+  await withFixture(async ({ cacheDir, imagePath }) => {
+    const text = "dry asphalt suggests Brazil; Cyrillic and Russian text on a sign";
+    const result = await observe(imagePath, {
       cacheDir,
       model: async () =>
-        JSON.stringify({
-          features: fullObservation({
-            plates: { text: "white rear plate", extra: "foreign" } as Partial<FeatureObservation>,
-          }),
-        }),
-    });
-    assert.deepEqual(featureExtra.features, []);
-    assert.equal(featureExtra.error, "malformed observation response");
-  });
-});
-
-test("not_visible observation text is normalized to an empty string", async () => {
-  await withCacheDir(async (cacheDir) => {
-    const result = await observe("not-visible-text.jpg", {
-      cacheDir,
-      model: async () =>
-        JSON.stringify({
-          features: fullObservation({
-            vehicles: { state: "not_visible", text: "not visible behind glare" },
-          }),
-        }),
+        response([
+          { key: "Surface Cue", text },
+          { key: "Brazil", text: "visible place name printed on a sign" },
+        ]),
     });
 
     assert.equal(result.error, null);
-    assert.equal(result.features.find((feature) => feature.key === "vehicles")?.text, "");
-    assert.deepEqual(
-      eligibleFeatureObservations(result.features).map((feature) => feature.key),
-      FEATURE_KEYS.filter((key) => key !== "vehicles"),
-    );
+    assert.deepEqual(result.features, [
+      { key: "surface_cue", text },
+      { key: "brazil", text: "visible place name printed on a sign" },
+    ]);
   });
 });
 
-test("same image and prompt version uses cache while changed prompt version or image path makes a new call", async () => {
-  await withCacheDir(async (cacheDir) => {
+test("observation cache identity includes image bytes, image path, model, seed and versions", async () => {
+  await withFixture(async ({ cacheDir, imagePath }) => {
     let calls = 0;
-    const model = async (): Promise<string> => {
+    const model = async () => {
       calls += 1;
-      return JSON.stringify({ features: fullObservation() });
+      return response([{ key: "surface", text: "gray paved surface" }]);
+    };
+    const config = {
+      model: "model-a",
+      seed: 1,
+      schemaVersion: OBSERVE_SCHEMA_VERSION,
+      promptVersion: OBSERVE_PROMPT_VERSION,
     };
 
-    await observe("image-a.jpg", { cacheDir, promptVersion: "v1", model });
-    await observe("image-a.jpg", { cacheDir, promptVersion: "v1", model });
+    await observe(imagePath, { cacheDir, config, model });
+    await observe(imagePath, { cacheDir, config, model });
     assert.equal(calls, 1);
 
-    await observe("image-a.jpg", { cacheDir, promptVersion: "v2", model });
-    assert.equal(calls, 2);
+    await observe(imagePath, { cacheDir, config: { ...config, seed: 2 }, model });
+    await observe(imagePath, { cacheDir, config: { ...config, model: "model-b" }, model });
+    await observe(imagePath, { cacheDir, config: { ...config, promptVersion: "prompt-b" }, model });
+    await observe(imagePath, { cacheDir, config: { ...config, schemaVersion: "schema-b" }, model });
+    assert.equal(calls, 5);
 
-    await observe("image-b.jpg", { cacheDir, promptVersion: "v2", model });
-    assert.equal(calls, 3);
+    await writeFile(imagePath, Buffer.from("image-b"));
+    await observe(imagePath, { cacheDir, config, model });
+    assert.equal(calls, 6);
+
+    const secondPath = join(cacheDir, "same-bytes.bin");
+    await writeFile(secondPath, Buffer.from("image-b"));
+    await observe(secondPath, { cacheDir, config, model });
+    assert.equal(calls, 7);
   });
 });
 
-test("model and parse failures return an error result without fabricated features", async () => {
-  await withCacheDir(async (cacheDir) => {
-    let parseCalls = 0;
-    const parseFailure = await observe("bad-json.jpg", {
+test("malformed, empty and failed model responses are not cached or fabricated", async () => {
+  await withFixture(async ({ cacheDir, imagePath }) => {
+    let calls = 0;
+    const bad = await observe(imagePath, {
       cacheDir,
       model: async () => {
-        parseCalls += 1;
+        calls += 1;
         return "{not-json}";
       },
     });
-    assert.deepEqual(parseFailure.features, []);
-    assert.equal(parseFailure.error, "malformed observation response");
-    const parseRetry = await observe("bad-json.jpg", {
+    assert.deepEqual(bad, { features: [], error: "malformed observation response" });
+
+    const retry = await observe(imagePath, {
       cacheDir,
       model: async () => {
-        parseCalls += 1;
-        return JSON.stringify({ features: fullObservation() });
+        calls += 1;
+        return response([]);
       },
     });
-    assert.equal(parseRetry.error, null);
-    assert.equal(parseCalls, 2);
+    assert.deepEqual(retry, { features: [], error: null });
+    assert.equal(calls, 2);
 
-    let modelCalls = 0;
-    const modelFailure = await observe("model-error.jpg", {
-      cacheDir,
+    const failed = await observe(imagePath, {
+      cacheDir: join(cacheDir, "failed"),
       model: async () => {
-        modelCalls += 1;
         throw new Error("provider unavailable");
       },
     });
-    assert.deepEqual(modelFailure.features, []);
-    assert.equal(modelFailure.error, "provider unavailable");
-    const modelRetry = await observe("model-error.jpg", {
-      cacheDir,
-      model: async () => {
-        modelCalls += 1;
-        return JSON.stringify({ features: fullObservation() });
-      },
-    });
-    assert.equal(modelRetry.error, null);
-    assert.equal(modelCalls, 2);
+    assert.deepEqual(failed, { features: [], error: "provider unavailable" });
   });
 });

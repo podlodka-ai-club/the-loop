@@ -12,8 +12,15 @@
  */
 import { readManifest, DEFAULT_MANIFEST } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
-import { RECALL_LIMIT } from "./memory/memory.ts";
-import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
+import {
+  createFrozenMemorySnapshotBinding,
+  createMemorySourceBinding,
+  createMemorySourceResolver,
+  createNoopMemoryBinding,
+  RECALL_LIMIT,
+  resolveMemoryBinding,
+} from "./memory/memory.ts";
+import { FileMemory, FrozenMemory, parseRecallMode } from "./memory/file/memory.ts";
 import { loadCsvRows, loadRows } from "./osv5m.ts";
 import { runTrainingTaskWithRuntime } from "./task-runtime.internal.ts";
 import type { MemoryRunConfig } from "./tools/memory.ts";
@@ -69,19 +76,36 @@ if (matchManifest) {
 }
 const memory = new FileMemory(undefined, recallMode);
 const run = {
+  memoryRef: memoryMode === "cold" || recallMode === "off" ? null : "file",
   mode: "training",
   snapshotId: null,
   readOnly: false,
   recallLimit: RECALL_LIMIT,
 } satisfies MemoryRunConfig;
+const memoryBinding = run.memoryRef === null
+  ? createNoopMemoryBinding({ mode: "training", snapshotId: null })
+  : await resolveMemoryBinding(run, createMemorySourceResolver(createMemorySourceBinding({
+      memoryRef: "file",
+      memory,
+      provider: "file",
+      loadSnapshot: async (snapshotId) => createFrozenMemorySnapshotBinding({
+        memoryRef: "file",
+        snapshotId,
+        reader: new FrozenMemory(snapshotId, "top"),
+      }),
+    })));
 
 console.log(`pool     ${trainPool.length} train-eligible of ${pool.length} on disk`);
 console.log(`sample   n=${sample.rows.length} seed=${seed} fp=${sample.fingerprint}`);
 console.log(`mode     ${memoryMode} training stream, observations use the versioned image cache`);
-console.log(
-  `memory   ${memory.path}, ${await memory.size()} lessons, ` +
-    `recall ${recallMode} (limit ${RECALL_LIMIT} applies to top only)`,
-);
+if (run.memoryRef === null) {
+  console.log("memory   off (no memory reads, writes or snapshots)");
+} else {
+  console.log(
+    `memory   ${memory.path}, ${await memory.size()} lessons, ` +
+      `recall ${recallMode} (limit ${RECALL_LIMIT} applies to top only)`,
+  );
+}
 
 let learned = 0;
 let refused = 0;
@@ -95,8 +119,7 @@ for (const [index, row] of sample.rows.entries()) {
     attemptId,
     truth: { latitude: row.latitude, longitude: row.longitude, country: row.country },
   }, {
-    memory,
-    writer: memory,
+    memoryBinding,
     run,
   });
 
@@ -118,15 +141,18 @@ for (const [index, row] of sample.rows.entries()) {
     refused += result.episodes.filter((episode) => episode.reflectionStatus === "reflection_failed").length;
   } else {
     console.log(`[${index + 1}/${sample.rows.length}] ${row.id} FAILED ${result.failure}: ${result.message.slice(0, 120)}`);
+    if (result.failure === "memory_not_found" || result.failure === "memory_mismatch" || result.failure === "unavailable" || result.failure === "timeout") {
+      throw new Error(`training aborted after memory failure: ${result.failure}`);
+    }
   }
 
-  if ((index + 1) % snapshotEvery === 0) {
+  if (run.memoryRef !== null && (index + 1) % snapshotEvery === 0) {
     const id = await memory.snapshot();
     console.log(`         snapshot ${id}, ${await memory.size()} lessons`);
   }
 }
 
-const finalSnapshot = await memory.snapshot();
+const finalSnapshot = run.memoryRef === null ? null : await memory.snapshot();
 const sorted = distances.slice().sort((a, b) => a - b);
 const median = sorted.length === 0 ? Number.NaN : (sorted[sorted.length >> 1] ?? Number.NaN);
 
@@ -134,6 +160,8 @@ console.log("---");
 console.log(`attempts scored   ${distances.length}/${sample.rows.length}`);
 console.log(`median distance   ${median.toFixed(1)} km  (training stream, not a benchmark)`);
 console.log(`lessons written   ${learned}, reflection produced nothing ${refused} times`);
-console.log(`memory size       ${await memory.size()} lessons`);
-console.log(`final snapshot    ${finalSnapshot}`);
-console.log(`evaluate it with  npm run experiment -- --snapshot ${finalSnapshot} --concurrency 1`);
+if (run.memoryRef !== null) {
+  console.log(`memory size       ${await memory.size()} lessons`);
+  console.log(`final snapshot    ${finalSnapshot}`);
+  console.log(`evaluate it with  npm run experiment -- --snapshot ${finalSnapshot} --concurrency 1`);
+}

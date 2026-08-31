@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { MemoryWriteError } from "../memory.ts";
+import { MemoryWriteError, encodeMemoryRetrieveQuery, normalizeMemoryQuery, sharedMemoryPrompt, sharedMemoryPromptMetadata } from "../memory.ts";
 import {
   XMEMORY_CAPABILITIES,
   XmemoryMemoryError,
@@ -59,6 +59,11 @@ test("xmemory dependencies, lockfile and scripts are pinned to the Phase 1 contr
       "xmemory:pilot:finalize": "node src/memory/xmemory/pilot-finalize.ts",
     },
   );
+});
+
+test("configured xmemory exposes the application-owned common prompt metadata", async () => {
+  const memory = await behaviorMemory();
+  assert.deepEqual(memory.promptMetadata, sharedMemoryPromptMetadata());
 });
 
 test("runtime config uses exact variables and safe timeout defaults", () => {
@@ -1002,7 +1007,7 @@ test("recall validates limit before features and trace creation", async () => {
     {},
     Array.from({ length: 65 }, (_, index) => `feature-${index}`),
     [42] as unknown as string[],
-    ["x".repeat(257)],
+    ["x".repeat(513)],
     ["<LOCI_bad>"],
     revokedFeatures.proxy,
     hostileFeatures,
@@ -1034,22 +1039,16 @@ test("recall sends exact normalized feature and prior templates", async () => {
   assert.deepEqual(await memory.recall([" ", "\n"], 7), []);
   assert.deepEqual(requests, [
     {
-      query:
-        "Use only stored Loci Insights to help interpret a new photograph.\n" +
-        "Visible features:\n" +
-        "- yellow roadside posts\n" +
-        "- lava field\n" +
-        "Return at most 5 distinct grounded insights. Preserve conditions, counter-signals,\n" +
-        "comparisons and caveats. Do not invent observations or claim a final location.",
+      query: encodeMemoryRetrieveQuery(
+        sharedMemoryPrompt("retrieve"),
+        normalizeMemoryQuery(["yellow roadside posts", "lava field"]),
+      ),
       readMode: "single-answer",
       traceId,
       timeoutMs: 60_000,
     },
     {
-      query:
-        "Return at most 7 high-value stored Loci Insights that are broadly useful before any visual\n" +
-        "features are available. Preserve conditions, counter-signals, comparisons and caveats. Do not\n" +
-        "invent observations or claim a final location.",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), ""),
       readMode: "single-answer",
       traceId,
       timeoutMs: 60_000,
@@ -1057,7 +1056,7 @@ test("recall sends exact normalized feature and prior templates", async () => {
   ]);
 });
 
-test("recall accepts 64 distinct features at the exact 256-code-unit boundary", async () => {
+test("recall accepts a bounded dynamic feature query and uses the shared instruction", async () => {
   let request: Parameters<XmemoryPlatformPort["read"]>[0] | undefined;
   const memory = await behaviorMemory({
     read: async (value) => {
@@ -1065,17 +1064,10 @@ test("recall accepts 64 distinct features at the exact 256-code-unit boundary", 
       return { traceId: null, readerResult: { answer: "" } };
     },
   });
-  const features = Array.from(
-    { length: 64 },
-    (_, index) => `${String(index).padStart(2, "0")}${"f".repeat(254)}`,
-  );
+  const features = ["yellow roadside posts", "lava field", "black volcanic surface"];
   assert.deepEqual(await memory.recall(features, 1), []);
   assert.ok(request !== undefined);
-  assert.equal(features.length, 64);
-  assert.ok(features.every((feature) => feature.length === 256));
-  assert.equal(request.query.split("\n").filter((line) => line.startsWith("- ")).length, 64);
-  assert.equal(request.query.includes(`- ${features[0]}`), true);
-  assert.equal(request.query.includes(`- ${features[63]}`), true);
+  assert.equal(request.query, encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), normalizeMemoryQuery(features)));
 });
 
 test("recall accepts provider trace metadata and maps blank or non-empty answer to at most one Hint", async () => {

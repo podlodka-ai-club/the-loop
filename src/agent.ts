@@ -14,6 +14,7 @@ import { SpanStatusCode, trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
 import type { Hint } from "./memory/memory.ts";
+import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
 
 export { provider };
 
@@ -38,11 +39,6 @@ export class UnparseableOutputError extends Error {
   }
 }
 
-const PROMPT =
-  "You are a geolocation expert. Look at this landscape photo and guess where " +
-  "it was taken. Use terrain, vegetation, architecture, sky and any visible text. " +
-  "Always give your single best guess, even when you are unsure.";
-
 /**
  * Lessons are appended to the prompt, never sent as tool calls the model may choose
  * to make. Comparing memory-on with memory-off requires that both runs issue exactly
@@ -50,14 +46,8 @@ const PROMPT =
  * comparison into a measurement of that decision.
  */
 export function withHints(hints: readonly Hint[]): string {
-  if (hints.length === 0) return PROMPT;
-  const lines = hints.map((hint) => `- ${hint.text}`).join("\n");
-  return (
-    `${PROMPT}\n\n` +
-    "Notes you wrote after earlier attempts. Each one may be wrong, and none of them " +
-    "describes this photo. Use a note only where it agrees with what you can see.\n" +
-    `${lines}`
-  );
+  const prompt = loadPrompt("agent");
+  return hints.length === 0 ? prompt : `${prompt}\n\n${JSON.stringify(hints)}`;
 }
 
 const SCHEMA = {
@@ -177,6 +167,7 @@ export function geolocate(imagePath: string, hints: readonly Hint[] = []): Promi
       "geolocate.model": MODEL,
       "geolocate.temperature": TEMPERATURE,
       "geolocate.seed": SEED,
+      "geolocate.prompt_version": PROMPT_VERSIONS.agent,
       "geolocate.hint_count": hints.length,
       "geolocate.hint_ids": hints.map((hint) => hint.lessonId).join(","),
     });

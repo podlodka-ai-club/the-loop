@@ -194,7 +194,7 @@ export const featureCountEvaluator: Evaluator = {
     const result = output as TaskResult | null;
     const count =
       Array.isArray(result?.observations)
-        ? result.observations.filter((feature) => feature.state === "visible").length
+        ? result.observations.length
         : (result?.features?.length ?? 0);
     return { score: count, label: count > 0 ? "observed" : "blind" };
   },
