@@ -22,12 +22,18 @@
  * no longer describe the corpus built from it. The fix is always the same, and it is
  * recorded rather than improvised: name the frame in `benchmark/samples/rejected.txt`.
  *
- * ## Screening still runs
+ * ## Leak control is the review, not a rule
  *
  * A frame whose burned-in strip spells out its own coordinates is not a geolocation
- * question. Every frame in the pool is read by OCR at every freeze, even though each one
- * passed the same screen when it was staged for review, because the check costs minutes
- * and the corpus is the thing the benchmark rests on.
+ * question, and such frames used to be caught here by an eight-pass OCR ensemble over the
+ * bottom of every candidate. That pass is gone. Review looked at each frame in the pool
+ * and dropped the ones that showed a readout, which is a stronger check than the ensemble
+ * was: a person reads the whole frame, in any orientation, and does not mistake gravel for
+ * a coordinate. The ensemble's own failure mode argues the same way - it rejected frames on
+ * two confident words in one line, which road texture supplies freely.
+ *
+ * What remains is what a person cannot do by eye: an unreadable file, and two frames whose
+ * bytes are identical. Both are cheap, and both are checked at every freeze.
  *
  * Usage:
  *   node src/sample.ts                      verify the frozen corpora
@@ -35,7 +41,6 @@
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { closeOcr, screenFrame } from "./screen.ts";
 import { REJECTS_PATH, loadRejects } from "./rejects.ts";
 import { REVIEWED_PATH, loadReviewed } from "./reviewed.ts";
 import {
@@ -106,7 +111,8 @@ type Inspection =
  * Reads every frame in the pool and reports what is wrong with it.
  *
  * Chunks are planned in parallel and consumed in order, so the list of flaws does not
- * depend on which worker finished first.
+ * depend on which worker finished first. That mattered more when this pass ran OCR; it is
+ * kept because the duplicate report names the lower id first either way.
  */
 async function inspect(rows: readonly Row[]): Promise<Flaw[]> {
   const flaws: Flaw[] = [];
@@ -117,11 +123,7 @@ async function inspect(rows: readonly Row[]): Promise<Flaw[]> {
     const results: Inspection[] = await Promise.all(
       chunk.map(async (row): Promise<Inspection> => {
         try {
-          const [screen, bytes] = await Promise.all([
-            screenFrame(row.imagePath),
-            readFile(row.imagePath),
-          ]);
-          if (!screen.ok) return { ok: false, row, reason: screen.reason, detail: screen.text };
+          const bytes = await readFile(row.imagePath);
           return { ok: true, row, digest: createHash("sha256").update(bytes).digest("hex") };
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -144,10 +146,8 @@ async function inspect(rows: readonly Row[]): Promise<Flaw[]> {
       }
       firstSeen.set(result.digest, result.row.id);
     }
-
-    process.stdout.write(`\r  screen: ${Math.min(start + concurrency, rows.length)}/${rows.length}`);
   }
-  process.stdout.write(`\r  screen: ${rows.length}/${rows.length} read\n`);
+  console.log(`read     ${rows.length} frames, ${flaws.length} unusable`);
   return flaws;
 }
 
@@ -214,7 +214,6 @@ function reportOverlap(counts: Overlap): boolean {
 
 if (freeze) {
   const flaws = await inspect(curated);
-  await closeOcr();
 
   if (flaws.length > 0) {
     const byReason = new Map<string, number>();

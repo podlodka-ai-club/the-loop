@@ -3,10 +3,12 @@
 # One frame per line: <id> <reason>. A reason is required - without one, nobody later
 # can tell whether the frame was broken or merely disliked, so nobody dares restore it.
 #
-# The automatic screen in src/screen.ts rejects burned-in overlays. This file is for
-# defects a person has to judge. Orientation is the main one: OSV-5M ships frames rotated
-# with the rotation baked into the pixels, and the pixel heuristics tried for it reached
-# only about 68% precision, which is too low to act on automatically.
+# Review is the only gate a frame passes. An OCR pass over the bottom of each frame used
+# to hunt burned-in coordinates; it was removed once review covered the whole pool, because
+# a person reads the whole frame in any orientation and does not mistake gravel for a
+# readout. Orientation is why a human gate was unavoidable anyway: OSV-5M ships frames
+# rotated with the rotation baked into the pixels, and the heuristics tried for it reached
+# only about 68% precision, too low to act on automatically.
 #
 # This file outranks benchmark/samples/reviewed.txt. A frame approved and then dropped
 # is named in both, and the later, stronger verdict is the rejection.

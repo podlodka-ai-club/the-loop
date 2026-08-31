@@ -22,9 +22,9 @@
  * real frame until a run failed on it.
  *
  * Frames are copied byte for byte, with one exception: a frame listed in
- * `benchmark/samples/rotated.txt` is turned upright first. Nothing is cropped, because
- * the screen rejects any frame carrying a burned-in overlay, so what ships here is what
- * the model sees.
+ * `benchmark/samples/rotated.txt` is turned upright first. Nothing is cropped: review
+ * dropped every frame carrying a burned-in overlay, so what ships here is what the model
+ * sees.
  */
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";

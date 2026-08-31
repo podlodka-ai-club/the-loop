@@ -1,21 +1,24 @@
 /**
  * Frames barred from every corpus by review.
  *
- * The automatic screen in `screen.ts` catches burned-in overlays. It cannot catch
- * everything that makes a frame a bad benchmark item, and the clearest example is
- * orientation: OSV-5M ships a few percent of frames rotated, the rotation is baked into
- * the pixels, and the pixel heuristics tried for it reached only about 68% precision at
- * a useful recall. At that accuracy an automatic rule either discards good frames or
- * keeps bad ones, and a rule that rotates instead of rejecting would corrupt a good
- * frame on every false positive.
+ * Review is the only gate a frame passes. There used to be an automatic one as well - an
+ * OCR ensemble over the bottom of each frame, hunting burned-in coordinates - and it was
+ * removed once review covered the whole pool. A person reads the whole frame, in any
+ * orientation, and does not mistake gravel for a readout; the ensemble did, rejecting
+ * frames on two confident words in one line.
+ *
+ * Orientation is the defect that made a human gate unavoidable. OSV-5M ships a few percent
+ * of frames rotated, the rotation is baked into the pixels, and the pixel heuristics tried
+ * for it reached only about 68% precision at a useful recall. At that accuracy an automatic
+ * rule either discards good frames or keeps bad ones, and a rule that rotates instead of
+ * rejecting would corrupt a good frame on every false positive.
  *
  * So a person decides, and the decision is written down here rather than re-derived. The
  * file is committed for the same reason the manifests are: a fresh clone must reach the
  * same corpora, and a judgement that lives only in someone's session is lost.
  *
- * Rejection refills from the ranked pool, so removing a frame costs one candidate out of
- * several times more than a corpus needs. Adding an id here therefore has a bounded
- * price and no effect on any other frame.
+ * There is no refill. The pool is `reviewed.txt`, so an id here shrinks both corpora by one
+ * frame between them rather than promoting the next candidate by rank.
  */
 import { appendFile, readFile } from "node:fs/promises";
 

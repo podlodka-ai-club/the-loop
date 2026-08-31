@@ -8,8 +8,8 @@
  * The distinction is load-bearing, which is why the kept list is committed rather than
  * derived. A corpus built from "everything the draw offered minus the rejects" silently
  * includes every frame nobody has judged yet, and the defects review exists to catch -
- * a frame stored upside down above all - are invisible to the automatic screen. So the
- * corpus is built from this list, and an unreviewed frame is simply not in it.
+ * a frame stored upside down above all - are invisible to any pixel rule. So the corpus is
+ * built from this list, and an unreviewed frame is simply not in it.
  *
  * A kept frame carries no reason. Approval is the default verdict a reviewer gives, and
  * asking for a sentence to justify "this looks fine" would only produce noise. A

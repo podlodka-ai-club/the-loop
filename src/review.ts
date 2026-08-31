@@ -1,10 +1,10 @@
 /**
  * Local web app for judging corpus frames by eye, one frame at a time.
  *
- * The automatic screen in `screen.ts` rejects burned-in overlays. Everything else that
- * makes a frame a bad benchmark item is a human call, and until now that call was made
- * against contact sheets in `tmp/review/`, which name a frame but cannot act on it. This
- * app closes that loop: one frame fills the window, and one arrow key records the verdict.
+ * Every judgement about a frame is made here. There is no automatic screen left to defer
+ * to, and until this app existed the human call was made against contact sheets in
+ * `tmp/review/`, which name a frame but cannot act on it. This app closes that loop: one
+ * frame fills the window, and one arrow key records the verdict.
  *
  *   up     keep the frame, go to the next one
  *   down   drop the frame, go to the next one

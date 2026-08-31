@@ -11,7 +11,7 @@
  * A crop removed the bottom strip, because some OSV-5M frames are dashcam captures whose
  * burned-in telemetry spells out the ground truth. It was dropped because a crop can only
  * be as good as the detector that sizes it, and a missed detection left a readable
- * coordinate in the corpus. `src/screen.ts` now rejects such a frame outright, so there is
+ * coordinate in the corpus. Review reads the whole frame instead and drops it, so there is
  * no strip to remove. Dropping the crop also dropped a re-encode: the crop pass
  * recompressed at quality 92, which grew a median frame from 40 KB to 48 KB while
  * discarding pixels.

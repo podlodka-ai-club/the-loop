@@ -7,9 +7,9 @@
  * removes that dependency. It pins the ids; the labels still come from `test.csv`,
  * which is identical for everybody, so no ground truth is duplicated here.
  *
- * The file pins ids only. Frames are used whole: the corpus screen rejects any frame
- * that carries a burned-in overlay instead of cropping one away, so there is no
- * per-frame preprocessing left to record.
+ * The file pins ids only. Frames are used whole: review dropped every frame carrying a
+ * burned-in overlay rather than cropping one away, so there is no per-frame preprocessing
+ * left to record.
  */
 import { access, readFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";

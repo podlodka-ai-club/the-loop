@@ -34,12 +34,11 @@
     "@arizeai/openinference-semantic-conventions": "2.7.0",
     "@arizeai/phoenix-client": "^7.5.0",
     "@arizeai/phoenix-otel": "2.2.0",
-    "csv-parse": "^6.1.0",
     "@vectorize-io/hindsight-client": "0.9.2",
+    "csv-parse": "^6.1.0",
     "mem0ai": "3.1.7",
     "openai": "^6.49.0",
     "sharp": "^0.35.3",
-    "tesseract.js": "^7.0.0",
     "xmemory": "3.8.1",
     "yaml": "2.9.0"
   },

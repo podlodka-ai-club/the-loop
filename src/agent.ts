@@ -164,8 +164,8 @@ const tracer = trace.getTracer("geolocate");
  * `hints` is the seam for memory. With none it behaves exactly as before, so a
  * memory-off run is unchanged by this parameter existing.
  *
- * Frames are sent whole. The corpus screen rejects any frame with a burned-in
- * overlay, so there is nothing to crop here.
+ * Frames are sent whole, exactly as they sit under `benchmark/images/`. Review dropped
+ * every frame that showed a burned-in readout, so there is nothing to crop here.
  */
 export function geolocate(imagePath: string, hints: readonly Hint[] = []): Promise<Guess> {
   return tracer.startActiveSpan("geolocate", async (span) => {
