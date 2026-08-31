@@ -12,6 +12,7 @@
     "sample": "node --env-file-if-exists=.env src/sample.ts",
     "experiment": "node --env-file-if-exists=.env src/experiment.ts",
     "review": "node --env-file-if-exists=.env src/review.ts",
+    "test:observe": "node --test src/observe.test.ts",
     "test:file": "node --test src/memory/file/*.test.ts",
     "test:mem0": "node --test src/memory/mem0/*.test.ts",
     "test:xmemory": "node --test src/memory/xmemory/*.test.ts",

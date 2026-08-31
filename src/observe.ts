@@ -26,6 +26,7 @@ import { trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
 import { rotationOf } from "./rotations.ts";
+import type { Turn } from "./rotations.ts";
 
 const MODEL = process.env.OBSERVE_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
@@ -97,8 +98,15 @@ function client(): OpenAI {
 
 const tracer = trace.getTracer("observe");
 
-async function cachePath(imagePath: string): Promise<string> {
-  const angle = await rotationOf(basename(imagePath, extname(imagePath)));
+/**
+ * Where one frame's features are cached. Exported so the parent can unit-check it.
+ *
+ * The angle is a parameter rather than a lookup so that this stays a pure function of
+ * what the model was shown. It is part of the key, not decoration: a reviewer who turns a
+ * frame upright after its features were cached changes the picture the model is asked
+ * about, and the cached answer describes the orientation that was rejected.
+ */
+export function observeCachePath(imagePath: string, angle: Turn): string {
   const key = createHash("sha256")
     .update(`${PROMPT_VERSION}:${imagePath}:${angle}`)
     .digest("hex")
@@ -113,7 +121,8 @@ async function cachePath(imagePath: string): Promise<string> {
  * losing the row costs the denominator, which is worse and harder to notice.
  */
 export async function observe(imagePath: string): Promise<string[]> {
-  const path = await cachePath(imagePath);
+  const angle = await rotationOf(basename(imagePath, extname(imagePath)));
+  const path = observeCachePath(imagePath, angle);
   try {
     return JSON.parse(await readFile(path, "utf8")) as string[];
   } catch {
