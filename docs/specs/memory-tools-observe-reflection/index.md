@@ -9,3 +9,5 @@
 # Specification
 
 * [Feature-scoped memory tools](spec.md) - Контракт retrieval по признакам, episode-level reflection, provenance, ошибки и порядок внедрения.
+
+> Историческая версия с фиксированным registry. Для текущего решения используйте [динамическую итерацию features](../memory-tools-observe-dynamic-features/index.md).

@@ -2,17 +2,29 @@
 type: Specification
 title: "Mem0 Cloud adapter v1"
 description: Контракт Mem0 Cloud-адаптера для remember и ranked recall без поддержки snapshot и restore.
-timestamp: 2026-08-28T00:00:00+03:00
-date: 2026-08-28
+timestamp: 2026-08-31T00:00:00+03:00
+date: 2026-08-31
 model: gpt-5
-version: 1
+version: 2
 tags: [loci, memory, mem0, cloud, typescript, specification]
 ---
 
 # Spec: Mem0 Cloud adapter v1
 
-Operationalizes [the accepted ADR](adr.md). Produces a `Memory` implementation, normalized Mem0
-Platform port, typed errors and a gated 30-case Cloud pilot.
+Operationalizes [the accepted ADR](adr.md). Produces a dynamic `Memory` implementation, normalized
+Mem0 Platform port, typed errors and a gated 30-case Cloud pilot.
+
+Changes from v1: the public adapter boundary uses one dynamic query and a typed write result; older
+array-query examples are provider-internal compatibility details.
+
+The `features: string[]` values used by the pilot fixture and native query builder are test/input
+components only. The public `Memory.recall` boundary receives one already-formed query string from the
+dynamic dispatcher.
+
+Dynamic writes persist `loci_source_attempt_id`, `loci_feature_key`, `loci_memory_hit_id`,
+`loci_effect`, `loci_triggers`, `loci_region` and `loci_idempotency_key` in machine-readable metadata;
+recall projects available metadata into `Hint.featureKey` and `Hint.effect` or preserves the exact
+`[effect=<effect>]` prefix.
 
 ## Goal
 
@@ -32,7 +44,7 @@ wiring the adapter into the snapshot-dependent benchmark workflow.
 ### 1. Adapter surface — `src/mem0-memory.ts`
 
 ```ts
-import type { Hint, LessonInput, Memory } from "./memory.ts";
+import type { Hint, LessonInput, Memory, MemoryWriteResult } from "./memory.ts";
 import type { Mem0PlatformPort } from "./mem0-platform.ts";
 
 export const MEM0_CAPABILITIES = { snapshot: false, restore: false } as const;
@@ -65,8 +77,8 @@ export function createMem0Memory(
 ): Mem0Memory;
 
 export class Mem0Memory implements Memory {
-  recall(features: string[], limit: number): Promise<Hint[]>;
-  remember(lesson: LessonInput): Promise<void>;
+  recall(query: string, limit: number): Promise<Hint[]>;
+  remember(lesson: LessonInput): Promise<MemoryWriteResult>;
   snapshot(): Promise<string>;
   restore(id: string): Promise<void>;
 }
@@ -122,8 +134,12 @@ export type Mem0AddRequest = {
   agentCustomInstructions: string;
   metadata: {
     loci_source_attempt_id: string;
+    loci_feature_key: string;
+    loci_memory_hit_id: string;
+    loci_effect: "helped" | "irrelevant" | "misleading" | "insufficient";
     loci_triggers: string[];
     loci_region: string;
+    loci_idempotency_key: string;
   };
 };
 
@@ -225,8 +241,9 @@ type Mem0PilotQueryCase = {
 ```
 
 The harness receives created IDs through `onRememberCompleted`, reads their records through the
-shared port and evaluates lesson facts. For query cases it calls `recall(features, 5)`, reads each
-returned fact by `Hint.lessonId` and compares `metadata.loci_source_attempt_id`.
+shared port and evaluates lesson facts. For query cases it builds one private query string from the
+fixture's `features` and calls `recall(query, 5)`, reads each returned fact by `Hint.lessonId` and
+compares `metadata.loci_source_attempt_id`.
 
 ```ts
 type Mem0PilotSummary = {
@@ -257,6 +274,10 @@ summary with `harnessFailures: 1`, both quarantine/retirement flags false, and z
 
 ## Rules
 
+The `features` arrays in the pilot and query-builder sections below are fixture inputs for constructing
+one query string. They are not the public `Memory.recall` input; the dynamic dispatcher always calls
+the adapter with `recall(query: string, limit)`.
+
 ### C — Configuration and security
 
 | # | Rule |
@@ -284,14 +305,15 @@ summary with `harnessFailures: 1`, both quarantine/retirement flags false, and z
 | W.9 | Quarantined instance rejects subsequent remember/recall without calls. Quarantine is process-local instance state. |
 | W.10 | No outcome-unknown path automatically retries add. Completion observer fires once only after no-op or visibility success; an observer throw becomes non-retryable `observer_failed` without quarantine. |
 | W.11 | Concurrent `remember` calls on one instance execute FIFO. Recall may run during ingestion and observes only facts already visible in Cloud. |
+| W.12 | Before `add`, the dynamic adapter searches for an existing record with the exact `loci_idempotency_key`; a match returns `already_stored` and its provider ID without a second add request. A void/ambiguous native result becomes `write_outcome_unknown`. |
 
 ### R — Ranked recall
 
 | # | Rule |
 |---|---|
-| R.1 | Order is quarantine check, limit validation, then feature normalization. |
-| R.2 | Limit is an integer 1–1,000; invalid input fails without search. |
-| R.3 | Query follows Contract §4; an empty query returns `[]` without search. |
+| R.1 | Order is quarantine check, limit validation, then validation of one public query string. |
+| R.2 | Query is one non-empty string of at most 512 code units; invalid input fails without search. |
+| R.3 | Provider query follows Contract §4; feature arrays are used only by the private pilot fixture builder. |
 | R.4 | Search uses Contract §3 with `topK === limit`; pilot always uses limit 5. |
 | R.5 | Hints map provider ID/text, preserve provider order and are defensively sliced to limit. |
 | R.6 | Empty/mismatched ID, empty text or provider failure becomes an error, never successful `[]`. |
@@ -322,7 +344,7 @@ summary with `harnessFailures: 1`, both quarantine/retirement flags false, and z
 - Wiring `train.ts`, `experiment.ts` or product memory tools.
 - Add retry after ambiguous outcome; Cloud backup, cleanup, retention, rollback or migration.
 - Graph, temporal reasoning, reranking, Dream, webhooks and manual CRUD.
-- General capability framework for other backends; changes to `Memory` or feature extraction.
+- General capability framework for other backends; dynamic feature extraction remains specified in the dynamic feature iteration.
 
 ## Tests
 

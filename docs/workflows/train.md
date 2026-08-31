@@ -11,8 +11,8 @@ tags: [loci, workflow, learning, memory, training]
 ## Назначение
 
 Обучение проходит по подготовленному train-корпусу и изменяет только внешнюю память. На каждом
-примере Loci сначала решает задачу без ground truth, затем получает правильное место, выполняет
-рефлексию и передаёт её текст в выбранную систему памяти.
+примере Loci сначала выполняет dynamic `observe → retrieve → analyze` без ground truth, затем
+получает правильное место и выполняет отдельную рефлексию для каждой пары `feature + memory hit`.
 
 Система памяти сама решает, как извлечь, связать, консолидировать или сохранить опыт. Loci не
 требует создания атомарных заметок и не управляет внутренними memory objects.
@@ -34,8 +34,8 @@ training_run
 `runner_config_id` — в [`runner_config`](models.md#runner-config). Ground truth хранится в
 закрытом контексте оркестратора и не входит в запрос решателя.
 
-`memory_ref: null` означает обучение без подключённой памяти; рефлексия может выполняться, но её
-результат не сохраняется.
+`memory_ref: null` означает обучение без подключённой памяти; retrieval groups получают `no_hit`,
+memory tool calls и post-reveal reflection не выполняются.
 
 ## Результат
 
@@ -49,6 +49,7 @@ training_result
   memory_ref | null
   processed_samples
   failed_samples
+  failed_episodes
   remaining_samples
   experiences_submitted
 ```
@@ -58,6 +59,9 @@ training_result
 считает начатые шаги, завершившиеся terminal error до или после reveal. `remaining_samples` — часть
 корпуса, не начатая из-за abort; сумма трёх counters равна размеру корпуса.
 `experiences_submitted` считает успешные вызовы `memory_store`; при `memory_ref: null` он равен нулю.
+`failed_episodes` считает reflection/write failures после reveal отдельно от sample counters. Такие
+failures не откатывают другие episodes и не делают весь sample failed, если blind answer и reveal
+завершились. `remaining_samples` считается только по sample-level counters.
 
 ## Цикл
 
@@ -88,34 +92,36 @@ Ground truth не раскрывается, а выбранная память �
 
 ### 3. Reveal
 
-Для успешного шага оркестратор раскрывает правильное место. Рефлексия выполняется в новом чистом
-контексте, который содержит только изображение, зафиксированный `answer_snapshot` со всеми memory
-calls и ground truth. Внутренний контекст blind solver не продолжается.
+Для успешного шага оркестратор раскрывает правильное место. Рефлексия выполняется отдельно для
+каждого returned memory hit в новом чистом контексте, который содержит изображение, feature
+observation, один hit, blind Guess, ground truth и distance. Внутренний контекст blind solver не
+продолжается.
 
 ### 4. Рефлексия
 
-Агент сравнивает ответ с ground truth, учитывает влияние результата памяти и формирует `content`
-для [`memory_store`](../tools/memory_store.md): самостоятельную произвольную прозу, предпочтительно
-в Markdown.
+Агент сравнивает ответ с ground truth, учитывает влияние одного результата памяти и формирует один
+strict JSON tool payload для [`memory_store`](../tools/memory_store.md) с effect, triggers, region и
+application-owned provenance.
 
-Желаемая структура описывает наблюдаемые признаки, слепой ответ и альтернативы, правильное место,
-разбор успеха или ошибки и переносимый опыт. Это prompt-конвенция, а не JSON schema: разделы можно
-объединять, переставлять, дополнять или пропускать.
+Legacy Markdown-структура ниже сохраняется только для provider-native compatibility и не является
+dynamic agent tool contract.
 
-Если эпизод не даёт полезного материала для будущих задач, `content` не создаётся.
+Если модель не может сформировать grounded lesson, episode получает `reflection_failed`; silent skip
+не используется. Negative или insufficient effect остаются валидными lessons.
 
 ### 5. Обновление памяти
 
-Если `content` создан и задана `memory_ref`, оркестратор вызывает `memory_store`. Инструмент
-передаёт текст выбранному provider и возвращает его нативный payload. Loci не проверяет, какие
-внутренние memories созданы и когда завершатся фоновые extraction или consolidation.
+Если reflection payload валиден и задана `memory_ref`, оркестратор делает ровно один `memory_store`
+для этого feature/hit episode. Успешные и negative effects сохраняются независимо; unknown write не
+повторяется, а уже сохранённые episodes не откатываются.
 
-Если `content` отсутствует, система памяти не вызывается.
+Если reflection завершилась `reflection_failed`, система памяти для этого episode не вызывается.
 
 ```text
 memory = memory_ref
 status = completed
 abort_reason = null
+failed_episodes = 0
 
 for sample in corpus:
   answer = locate_with_retries(
@@ -135,13 +141,15 @@ for sample in corpus:
   if answer is sample_memory_failure:
     failed_samples += 1
     continue
-  content = reflect(answer, sample.ground_truth)
-  if content and memory is not null:
-    stored = memory_store(memory, content)
-    if stored is null:
-      failed_samples += 1
-      continue
-    experiences_submitted += 1
+  for group in answer.memoryGroups:
+    for hit in group.hits:
+      reflection = reflect_episode(sample.image, group.feature, hit, answer.guess, sample.ground_truth)
+      if reflection is valid and memory is not null:
+        stored = memory_store(memory, reflection)
+        if stored is null:
+          failed_episodes += 1
+          continue
+        experiences_submitted += 1
   processed_samples += 1
 
 remaining_samples = corpus.size - processed_samples - failed_samples
@@ -150,13 +158,18 @@ return training_result(status, abort_reason, memory, counters)
 
 ## Ошибки
 
+Dynamic tool failures остаются episode/feature-level outcomes. Workflow-level binding errors
+(`memory_not_found`, `memory_mismatch`, `unavailable`, `timeout`) обрабатываются по mapping из
+[dynamic feature spec](/specs/memory-tools-observe-dynamic-features/spec.md); они не превращаются в
+malformed tool calls.
+
 - Сбой до reveal повторяется только в новом blind context и не изменяет память со стороны Loci.
 - `memory_not_found`, `memory_mismatch` или исчерпание retry для retrieval означают общую
   недоступность выбранной памяти и прерывают training-run.
 - Sample-specific `invalid_request` retrieval помечает только текущий sample как failed.
-- После reveal общий оркестратор не повторяет `memory_store` при `timeout`: провайдер мог принять
-  content, а контракт не требует идемпотентности.
-- Terminal failure `memory_store` помечает текущий sample как failed; выбранная память не
+- После reveal оркестратор не повторяет `memory_store` при `write_outcome_unknown`: провайдер мог
+  принять content, а dispatcher уже передал idempotency key.
+- Terminal failure `memory_store` помечает текущий episode как failed; выбранная память не
   переключается и уже принятые provider updates не откатываются.
 
 ## Инварианты
@@ -164,7 +177,7 @@ return training_result(status, abort_reason, memory, counters)
 - Ground truth скрыт до фиксации ответа.
 - Обучение изменяет только память, а не веса модели и не общий solver.
 - Каждый шаг использует не более одной закреплённой `memory_ref`.
-- Loci передаёт один текстовый training experience и не управляет внутренней моделью памяти.
+- Loci передаёт отдельный episode-level experience для каждой пары feature + memory hit и не управляет внутренней моделью памяти.
 - Внутри обучения нет baseline-run, score, A/B-сравнения или валидации отдельных memory objects.
 - Порядок samples и content hash задаёт `corpus_ref`.
 - Train-корпус не пересекается с eval-корпусом по `data_group_id`.

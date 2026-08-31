@@ -2,17 +2,27 @@
 type: Specification
 title: "Hindsight Cloud adapter v1"
 description: Контракт Hindsight Cloud-адаптера Loci с API key, synchronous retain, native recall и pilot-only ограничениями.
-timestamp: 2026-08-29T00:00:00+03:00
-date: 2026-08-29
+timestamp: 2026-08-31T00:00:00+03:00
+date: 2026-08-31
 model: gpt-5
-version: 1
+version: 2
 tags: [loci, memory, hindsight, cloud, typescript, adapter, specification]
 ---
 
 # Spec: Hindsight Cloud adapter v1
 
-Операционализирует [принятый ADR](adr.md). Спецификация создаёт реализацию текущего `Memory`,
+Операционализирует [принятый ADR](adr.md). Спецификация создаёт реализацию dynamic `Memory`,
 Cloud transport port, нормализованные ошибки и disposable pilot для Hindsight.
+
+Изменения v1: публичная граница адаптера использует один dynamic query и typed write result;
+старые array-query примеры описывают только внутреннюю compatibility-логику провайдера.
+
+Массивы `features` в pilot fixtures и native query template являются внутренними входными данными
+пилота. Через публичную границу dynamic `Memory.recall(query, limit)` адаптер получает одну строку.
+
+Dynamic retain persists source attempt, feature key, memory hit ID, effect, region, triggers and
+idempotency key as machine-readable metadata; recall returns the available provenance or the exact
+`[effect=<effect>]` prefix when the provider cannot return metadata.
 
 ## Goal
 
@@ -194,7 +204,7 @@ failures are normalized without retaining their raw objects.
 ### 4. Adapter surface — `src/memory/hindsight/memory.ts`
 
 ```ts
-import type { Hint, LessonInput, Memory } from "../memory.ts";
+import type { Hint, LessonInput, Memory, MemoryWriteResult } from "../memory.ts";
 import type { HindsightPlatformPort } from "./platform-contract.ts";
 
 export const HINDSIGHT_CAPABILITIES = { snapshot: false, restore: false } as const;
@@ -236,8 +246,8 @@ export type HindsightMemoryDependencies = {
 };
 
 export interface HindsightMemory extends Memory {
-  recall(features: string[], limit: number): Promise<Hint[]>;
-  remember(lesson: LessonInput): Promise<void>;
+  recall(query: string, limit: number): Promise<Hint[]>;
+  remember(lesson: LessonInput): Promise<MemoryWriteResult>;
   snapshot(): Promise<string>;
   restore(id: string): Promise<void>;
 }
@@ -274,12 +284,16 @@ The retain request has this exact shape after normalization:
 ```json
 {
   "content": "<LessonInput.content unchanged>",
-  "document_id": "<trimmed sourceAttemptId>",
+  "document_id": "<trimmed idempotencyKey>",
   "context": "loci_training_reflection",
   "metadata": {
     "loci_source_attempt_id": "<trimmed sourceAttemptId>",
+    "loci_feature_key": "<trimmed featureKey>",
+    "loci_memory_hit_id": "<trimmed memoryHitId>",
+    "loci_effect": "<LessonInput.effect>",
     "loci_region": "<LessonInput.region>",
-    "loci_triggers_json": "<canonical JSON array>"
+    "loci_triggers_json": "<canonical JSON array>",
+    "loci_idempotency_key": "<trimmed idempotencyKey>"
   },
   "async": false
 }
@@ -376,6 +390,9 @@ export type HindsightPilotSummary = {
 
 ## Rules
 
+The `features` arrays in pilot fixtures below are converted into one query string before crossing the
+public dynamic `Memory.recall(query: string, limit)` boundary.
+
 ### C — Configuration and construction
 
 | # | Rule |
@@ -401,21 +418,22 @@ export type HindsightPilotSummary = {
 | # | Rule |
 |---|---|
 | W.1 | `lesson.content` is a non-empty string ≤50,000 UTF-16 code units; `sourceAttemptId` is a non-empty trimmed string matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`; `region` is ≤256 code units; `triggers` contains ≤64 strings, each ≤256 code units. Invalid input is rejected before Cloud call. |
-| W.2 | One `sourceAttemptId` represents exactly one logical lesson. `document_id` equals its trimmed source ID; a repeated ID uses provider replace semantics and is never automatically retried after unknown outcome. |
-| W.3 | `content` is sent unchanged; context is `loci_training_reflection`; metadata keys and canonical `loci_triggers_json` are exactly those in §5; retain uses `async: false`. |
+| W.2 | One `idempotencyKey` represents exactly one logical lesson. `document_id` equals its trimmed idempotency key; a repeated key returns the existing lesson identity and is never automatically retried after unknown outcome. |
+| W.3 | `content` is sent unchanged; context is `loci_training_reflection`; metadata keys for source attempt, feature key, memory hit, effect, region, triggers and idempotency are exactly those in §5; retain uses `async: false`. |
 | W.4 | Concurrent `remember` calls execute FIFO per adapter instance. A failed operation settles its queue before the next call is considered. |
 | W.5 | A successful retain response has `success === true`, the configured bank ID, `itemsCount === 1` (one input item), `async === false` and `operationId === null`; zero extracted facts is a successful no-op measured by pilot inspection. |
 | W.6 | E.1 is the canonical status mapping; a malformed retain response becomes `protocol_error`. A transport timeout, abort or 5xx after the retain call starts becomes `write_outcome_unknown`. |
 | W.7 | `write_outcome_unknown` quarantines the adapter exactly once, calls `onInstanceQuarantined` at most once, rejects queued and future read/write calls with `instance_quarantined`, and never retries retain automatically. |
 | W.8 | `onRememberCompleted` runs once after successful retain. An observer failure becomes `observer_failed` and does not quarantine or undo the completed Cloud write. |
+| W.9 | Before retain, the adapter resolves an existing `document_id` from the exact idempotency key; a match returns `already_stored` and its lesson identity without a second retain. |
 
 ### R — Recall
 
 | # | Rule |
 |---|---|
-| R.1 | `limit` is an integer from 1 through 1,000 and is validated before feature normalization or Cloud call. |
-| R.2 | `features` must be an array of strings with at most 64 entries. Each value is trimmed, internal whitespace is collapsed, empty values are removed, and stable duplicates are removed. Values longer than 256 code units or malformed arrays are `invalid_input`. |
-| R.3 | Non-empty features use the exact query template in §5. Empty normalized features use `priorQuery` unchanged. |
+| R.1 | `limit` is an integer from 1 through 1,000 and is validated before public query validation or Cloud call. |
+| R.2 | The public query is one string of at most 512 code units; invalid input is `invalid_input`. Feature arrays in pilot fixtures are private query-builder inputs. |
+| R.3 | The adapter receives the already-formed dynamic query string; any native template builder is internal and is not the public `Memory.recall` boundary. |
 | R.4 | The platform request uses all three fact types, `preferObservations: true`, configured `maxTokens` and budget, and disables source facts, chunks and entities. It does not request reflect. |
 | R.5 | A valid response contains an array of results. Each result has a non-empty unique `id` and non-empty `text`; provider order is preserved; each result maps to `{ lessonId: result.id, text: result.text }`; the returned array is defensively sliced to `limit`. |
 | R.6 | A valid empty results array returns `[]`. A malformed response is `protocol_error`; provider errors are never mapped to `[]`. |
@@ -451,7 +469,7 @@ export type HindsightPilotSummary = {
 - Hindsight bank provisioning, bank deletion, production promotion and automated cleanup.
 - `reflect`, mental models, directives, file upload, image/OCR ingestion and multimodal memory.
 - Cross-episode fact aggregation, local deduplication by `document_id` and changes to `Hint`.
-- Changes to `src/memory/memory.ts`, `memory_store`, `memory_retrieve`, train/evaluate workflows or other adapters.
+- Dynamic feature extraction and memory tool orchestration remain specified in the dynamic feature iteration.
 - Production rollout, shared banks, multi-process writers and automatic Cloud data retention policy.
 
 ## Tests
@@ -463,12 +481,12 @@ export type HindsightPilotSummary = {
 | 3 | `src/memory/hindsight/platform.test.ts` | Cloud base URL allowlist, lazy client construction, source/config/key binding and sanitized failures | C.2, C.3, C.5, C.6 |
 | 4 | same | SDK constructor/retain/recall/version/list mapping, pre/post-call AbortSignal behavior, malformed retain response, redaction and unknown provider errors | C.6, E.1, E.2, E.6 |
 | 5 | `src/memory/hindsight/memory.test.ts` | Lesson boundaries, source ID pattern, region/trigger limits and no-call invalid input | W.1 |
-| 6 | same | Exact retain content, document ID, context, metadata and async=false envelope; repeated source ID keeps replace identity | W.2, W.3 |
+| 6 | same | Exact retain content, idempotency document ID, context, metadata and async=false envelope; repeated idempotency key keeps the existing lesson identity | W.2, W.3 |
 | 7 | same | FIFO remembers, successful response, zero-fact no-op and completed observer | W.4, W.5, W.8 |
 | 8 | same | Canonical permanent status/error matrix, malformed retain response and write timeout mapping | W.6, E.1, E.2, E.3 |
 | 9 | same | Unknown write outcome quarantines once, blocks queue/future calls and never retries | W.7, P.7 |
 | 10 | same | Observer failure is sanitized and leaves the adapter usable | W.8, E.2 |
-| 11 | `src/memory/hindsight/memory.test.ts` | Limit/features validation order, normalization, stable dedupe and exact prior/feature queries | R.1, R.2, R.3 |
+| 11 | `src/memory/hindsight/memory.test.ts` | Limit/query validation order, bounded query and exact public query handling | R.1, R.2, R.3 |
 | 12 | same | Recall options, provider order, result identity/text mapping, duplicate rejection and defensive slice | R.4, R.5 |
 | 13 | same | Empty results, malformed results, timeout/rate/unavailable errors and no fallback/retry | R.6, R.7, E.3 |
 | 14 | same | Snapshot/restore reject with operation-specific errors without platform calls or state changes | E.4 |

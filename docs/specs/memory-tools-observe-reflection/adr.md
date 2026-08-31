@@ -10,7 +10,7 @@ tags: [loci, memory, tools, observe, reflection, decision]
 
 # Feature-scoped retrieval против доминирования широких признаков
 
-**Status:** Accepted
+**Status:** Accepted; observe registry portion superseded by [dynamic features ADR](/specs/memory-tools-observe-dynamic-features/adr.md)
 **Date:** 2026-08-30
 **Authors:** Loci
 **Related ADRs:** [Mem0-адаптер](../mem0-adapter/adr.md), [Hindsight-адаптер](../hindsight-adapter/adr.md), [xmemory-адаптер](../xmemory-adapter/adr.md)
