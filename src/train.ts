@@ -3,7 +3,7 @@
  * ask it to write down what it should have noticed.
  *
  * Usage:
- *   node src/train.ts [--limit 0] [--snapshot-every 10]
+ *   node src/train.ts [--limit 0] [--snapshot-every 10] [--two-step]
  *
  * The training stream is the frozen train corpus, not a draw made here. Holding the
  * two corpora apart is a property of the corpora, so it is decided once at freeze
@@ -11,10 +11,19 @@
  * no uploader and no 25 km grid cell with the eval corpus. Drawing here instead
  * would re-derive that separation on every run, from whatever shards this machine
  * happens to hold.
+ *
+ * This replaced a run-time draw that copied country quotas off the eval manifest. The
+ * requirement behind those quotas still holds and is now met earlier: a lesson about a
+ * country the benchmark never shows cannot move the number, it only adds tokens, which
+ * is exactly what the shuffled control is meant to isolate. `src/split.ts` gives the two
+ * corpora matching country shares at freeze time, and `npm run sample` prints the gap
+ * next to the smallest gap the pool allows, so the property is checked rather than
+ * re-approximated per run.
  */
 import { DEFAULT_TRAIN_MANIFEST, loadFrozenSample } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
-import { FileMemory, RECALL_LIMIT, parseRecallMode } from "./memory.ts";
+import { RECALL_LIMIT } from "./memory/memory.ts";
+import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
 import { loadRows } from "./osv5m.ts";
 import { reflect } from "./reflect.ts";
 import { runTask } from "./task.ts";
@@ -30,6 +39,7 @@ function flag(name: string, fallback: string): string {
 const limit = Number(flag("limit", "0"));
 const snapshotEvery = Number(flag("snapshot-every", "10"));
 const recallMode = parseRecallMode(flag("recall", "all"));
+const twoStep = process.argv.includes("--two-step");
 
 const { rows: pool } = await loadRows();
 const corpus = await loadFrozenSample(pool, flag("manifest", DEFAULT_TRAIN_MANIFEST), "train");
@@ -54,6 +64,7 @@ for (const [index, row] of rows.entries()) {
 
   const result = await runTask(input, {
     memory,
+    twoStep,
     learn: async (guess) => {
       const distanceKm = haversineKm(guess, {
         latitude: row.latitude,

@@ -186,6 +186,17 @@ export const hintTokensEvaluator: Evaluator = {
   evaluate: ({ output }) => ({ score: (output as TaskResult | null)?.hintTokens ?? 0 }),
 };
 
+/** How many features the observation step produced. Zero means recall ran blind. */
+export const featureCountEvaluator: Evaluator = {
+  name: "features_observed",
+  kind: "CODE",
+  evaluate: ({ output }) => {
+    const result = output as TaskResult | null;
+    const count = result?.features?.length ?? 0;
+    return { score: count, label: count > 0 ? "observed" : "blind" };
+  },
+};
+
 export const geoEvaluators: Evaluator[] = [
   distanceKmEvaluator,
   geoScoreEvaluator,
@@ -196,4 +207,5 @@ export const geoEvaluators: Evaluator[] = [
   suspectedLeakEvaluator,
   hintCountEvaluator,
   hintTokensEvaluator,
+  featureCountEvaluator,
 ];

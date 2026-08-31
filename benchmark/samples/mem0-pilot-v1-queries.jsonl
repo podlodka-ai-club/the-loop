@@ -1,0 +1,30 @@
+{"caseId":"case-01","features":["yellow roadside delineator posts","treeless moss-covered lava terrain"],"expectedSourceAttemptIds":["pilot-01"]}
+{"caseId":"case-02","features":["steep basalt sea cliffs","green treeless slopes","grass-roof village"],"expectedSourceAttemptIds":["pilot-02"]}
+{"caseId":"case-03","features":["high dry mountains","round rondavel houses","cultivated slopes"],"expectedSourceAttemptIds":["pilot-03"]}
+{"caseId":"case-04","features":["flat semi-arid scrub","pale sandy road shoulders","livestock fences"],"expectedSourceAttemptIds":["pilot-04"]}
+{"caseId":"case-05","features":["solid yellow outer shoulder line","left-side traffic","dry grassland highway"],"expectedSourceAttemptIds":["pilot-05"]}
+{"caseId":"case-06","features":["humid roadside vegetation","red soil","English shop signs in West Africa"],"expectedSourceAttemptIds":["pilot-06"]}
+{"caseId":"case-07","features":["yellow rear license plates","left-side traffic","tea highlands and acacia"],"expectedSourceAttemptIds":["pilot-07"]}
+{"caseId":"case-08","features":["vivid red dirt shoulders","motorcycle taxis","dense equatorial greenery"],"expectedSourceAttemptIds":["pilot-08"]}
+{"caseId":"case-09","features":["densely cultivated steep green hills","terraced small fields","tile roofs"],"expectedSourceAttemptIds":["pilot-09"]}
+{"caseId":"case-10","features":["flat sandy Sahel","French-language signs","colorful fishing pirogues"],"expectedSourceAttemptIds":["pilot-10"]}
+{"caseId":"case-11","features":["volcanic highland city","concrete utility poles","rooftop water tanks"],"expectedSourceAttemptIds":["pilot-11"]}
+{"caseId":"case-12","features":["agave and cactus","dry high plateau","colorful colonial Mexican streets"],"expectedSourceAttemptIds":["pilot-12"]}
+{"caseId":"case-13","features":["very high Andean valley","green cultivated slopes","equatorial elevation"],"expectedSourceAttemptIds":["pilot-13"]}
+{"caseId":"case-14","features":["dense settlement below barren brown mountains","coastal desert","irrigated fields"],"expectedSourceAttemptIds":["pilot-14"]}
+{"caseId":"case-15","features":["treeless Altiplano","unfinished red brick","distant snowcapped Andes"],"expectedSourceAttemptIds":["pilot-15"]}
+{"caseId":"case-16","features":["extremely flat Pampas farmland","long straight road","windbreak rows"],"expectedSourceAttemptIds":["pilot-16"]}
+{"caseId":"case-17","features":["rolling green grassland","cattle pasture","concrete utility poles"],"expectedSourceAttemptIds":["pilot-17"]}
+{"caseId":"case-18","features":["Portuguese signs","deep red soil","orange tile roofs","lush vegetation"],"expectedSourceAttemptIds":["pilot-18"]}
+{"caseId":"case-19","features":["left-side traffic","open concrete drainage channels","vertical Japanese writing"],"expectedSourceAttemptIds":["pilot-19"]}
+{"caseId":"case-20","features":["Hangul text","dense apartment towers","mountainous urban backdrop"],"expectedSourceAttemptIds":["pilot-20"]}
+{"caseId":"case-21","features":["traditional Chinese characters","many scooters","striped roadside poles"],"expectedSourceAttemptIds":["pilot-21"]}
+{"caseId":"case-22","features":["Thai script","left-side traffic","spirit houses and temple roofs"],"expectedSourceAttemptIds":["pilot-22"]}
+{"caseId":"case-23","features":["Malay-language signs","black-and-white curbs","oil palms"],"expectedSourceAttemptIds":["pilot-23"]}
+{"caseId":"case-24","features":["dense motorbike traffic","red clay roof tiles","mosques","volcanic terrain"],"expectedSourceAttemptIds":["pilot-24"]}
+{"caseId":"case-25","features":["Tagalog and English signs","jeepneys","dense concrete roadside buildings"],"expectedSourceAttemptIds":["pilot-25"]}
+{"caseId":"case-26","features":["eucalyptus woodland","white reflector posts","broad dry shoulder","left traffic"],"expectedSourceAttemptIds":["pilot-26"]}
+{"caseId":"case-27","features":["tree ferns","lush temperate pasture","one-lane bridge warning"],"expectedSourceAttemptIds":["pilot-27"]}
+{"caseId":"case-28","features":["Turkish place names","mosque minarets","dry Anatolian rolling hills"],"expectedSourceAttemptIds":["pilot-28"]}
+{"caseId":"case-29","features":["Greek script","olive groves","whitewashed masonry","dry rocky hills"],"expectedSourceAttemptIds":["pilot-29"]}
+{"caseId":"case-30","features":["steep Balkan mountains","unfinished concrete houses","Albanian signs"],"expectedSourceAttemptIds":["pilot-30"]}

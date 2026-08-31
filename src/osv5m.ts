@@ -84,31 +84,22 @@ export async function loadRows(split = "test"): Promise<{ rows: Row[]; csvRowCou
 }
 
 /**
- * Stable pseudo-random rank in [0, 1). Depends only on the seed and the row id, so
- * the same seed always selects the same rows regardless of file or CSV order.
+ * What a frozen corpus is.
+ *
+ * There is no draw function here any more. Corpora used to be ranked by
+ * `sha256(seed:id)` and cut at a size; they are now a partition of the frames review
+ * approved, computed by `src/split.ts`. The ranking is gone rather than kept for
+ * reference, because a caller that ranked the whole split again would build a corpus
+ * out of frames nobody has looked at, which is the one thing the review gate exists to
+ * prevent. The caps that ranking enforced - one frame per `sequence`, at most three per
+ * uploader - are checked directly by `checkCaps` in `src/split.ts`.
  */
-function rank(seed: string, id: string): number {
-  const digest = createHash("sha256").update(`${seed}:${id}`).digest();
-  return Number(digest.readBigUInt64BE(0) >> 11n) / 2 ** 53;
-}
-
-export type SampleOptions = {
-  size: number;
-  seed: string;
-  /** At most one row per capture sequence, since a sequence is one stretch of road. */
-  onePerSequence?: boolean;
-  /** Cap on rows from a single uploader. The top 15 creators hold ~21% of the split. */
-  maxPerCreator?: number;
-  /** Everything an earlier corpus occupies. Rows it covers never enter this draw. */
-  exclude?: Exclusion;
-};
-
 export type Sample = {
   rows: Row[];
   /** Short digest of the selected ids. Identifies the frozen set across runs. */
   fingerprint: string;
   seed: string;
-  /** Number of `cell` strata the draw covers. */
+  /** Number of `cell` strata the corpus covers. */
   strata: number;
 };
 
@@ -149,7 +140,7 @@ export function gridCellOf(row: Row, km = DEFAULT_GRID_KM): string {
  * uploader", and blocking on them would remove every anonymous row from the second draw.
  *
  * The result records cells, not the spacing that produced them, so a caller that passes
- * a non-default `km` uses it for its own analysis: `drawCandidates` always tests at
+ * a non-default `km` uses it for its own analysis. Every separation check runs at
  * `DEFAULT_GRID_KM`.
  */
 export function exclusionOf(rows: readonly Row[], km = DEFAULT_GRID_KM): Exclusion {
@@ -166,13 +157,6 @@ export function exclusionOf(rows: readonly Row[], km = DEFAULT_GRID_KM): Exclusi
   return { ids, sequences, creators, gridCells };
 }
 
-function isExcluded(exclusion: Exclusion, row: Row): boolean {
-  if (exclusion.ids.has(row.id)) return true;
-  if (row.sequence !== "" && exclusion.sequences.has(row.sequence)) return true;
-  if (row.creator !== "" && exclusion.creators.has(row.creator)) return true;
-  return exclusion.gridCells.has(gridCellOf(row, DEFAULT_GRID_KM));
-}
-
 /**
  * Short digest of a set of row ids, order-independent.
  *
@@ -186,60 +170,3 @@ export function fingerprintOf(ids: readonly string[]): string {
     .slice(0, 12);
 }
 
-/**
- * The eligible pool in draw order, with the caps and the exclusion applied but no size
- * limit.
- *
- * Screening rejects frames after the draw, so a caller that needs exactly `size` rows
- * refills each rejected slot from further down this list. Ranking twice would move the
- * refill off the ranking that produced the corpus, so this is the only ranking path and
- * `drawSample` is a prefix of it.
- */
-export function drawCandidates(pool: readonly Row[], options: SampleOptions): Row[] {
-  const { seed, onePerSequence = true, maxPerCreator = 3, exclude } = options;
-
-  const ranked = pool
-    .map((row) => ({ row, r: rank(seed, row.id) }))
-    .sort((a, b) => a.r - b.r || (a.row.id < b.row.id ? -1 : 1));
-
-  // Decorrelate first: one row per sequence, and a cap per uploader. Both caps are
-  // greedy over the rank order, so the survivors do not depend on the pool order.
-  const seenSequence = new Set<string>();
-  const creatorCount = new Map<string, number>();
-  const eligible: Row[] = [];
-  for (const { row } of ranked) {
-    if (exclude !== undefined && isExcluded(exclude, row)) continue;
-    if (onePerSequence && row.sequence !== "" && seenSequence.has(row.sequence)) continue;
-    const used = creatorCount.get(row.creator) ?? 0;
-    if (row.creator !== "" && used >= maxPerCreator) continue;
-    seenSequence.add(row.sequence);
-    creatorCount.set(row.creator, used + 1);
-    eligible.push(row);
-  }
-  return eligible;
-}
-
-export function drawSample(pool: Row[], options: SampleOptions): Sample {
-  const { size, seed } = options;
-
-  // Take the first `size` by rank. Because `rank` is a hash, that is a simple random
-  // sample of the decorrelated pool, so the draw stays dataset-weighted and the
-  // metric remains comparable with full-test-set results.
-  //
-  // Do NOT allocate proportionally across the `cell` grid here. There are ~2000 cells
-  // and far fewer sampled rows, so every quota floors to zero and largest-remainder
-  // hands every slot to the densest cells. A 12-row draw came back entirely European.
-  // Stratification only pays off when each stratum can hold several rows.
-  const eligible = drawCandidates(pool, options);
-  const chosen = eligible.slice(0, Math.min(size, eligible.length));
-
-  chosen.sort((a, b) => (a.id < b.id ? -1 : 1));
-  const fingerprint = fingerprintOf(chosen.map((row) => row.id));
-
-  return {
-    rows: chosen,
-    fingerprint,
-    seed,
-    strata: new Set(chosen.map((row) => row.cell)).size,
-  };
-}

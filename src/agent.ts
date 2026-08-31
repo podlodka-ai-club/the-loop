@@ -13,7 +13,7 @@ import {
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
-import type { Hint } from "./memory.ts";
+import type { Hint } from "./memory/memory.ts";
 
 export { provider };
 
@@ -49,7 +49,7 @@ const PROMPT =
  * one request per image; a model that decides for itself whether to search turns the
  * comparison into a measurement of that decision.
  */
-function withHints(hints: readonly Hint[]): string {
+export function withHints(hints: readonly Hint[]): string {
   if (hints.length === 0) return PROMPT;
   const lines = hints.map((hint) => `- ${hint.text}`).join("\n");
   return (

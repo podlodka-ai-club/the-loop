@@ -6,8 +6,10 @@
  */
 import { UnparseableOutputError, geolocate } from "./agent.ts";
 import type { Guess } from "./agent.ts";
-import { NullMemory, RECALL_LIMIT } from "./memory.ts";
-import type { Hint, Memory } from "./memory.ts";
+import { NullMemory } from "./memory/null/memory.ts";
+import { observe } from "./observe.ts";
+import { RECALL_LIMIT } from "./memory/memory.ts";
+import type { Hint, Memory } from "./memory/memory.ts";
 
 export type FailureKind = "unparseable" | "api_error" | "missing_image";
 
@@ -21,6 +23,8 @@ export type MemoryUse = {
   hintCount: number;
   hintIds: string[];
   hintTokens: number;
+  /** The query recall was given. Empty means the search ran blind. */
+  features: string[];
 };
 
 export type TaskResult =
@@ -45,6 +49,14 @@ export type ExampleInput = {
 export type TaskDeps = {
   memory?: Memory;
   recallLimit?: number;
+  /**
+   * Look at the image first and use what it sees as the recall query.
+   *
+   * Off by default: it costs a second vision call per item, and a run with no
+   * memory has nothing to search for. On, it is the only way ranking gets an input
+   * at all - and the only way a query-based backend can work.
+   */
+  twoStep?: boolean;
   /**
    * Called after a successful guess, with the hints that were in the prompt. This is
    * where training turns an outcome into a lesson; it is absent during evaluation.
@@ -90,12 +102,20 @@ export function estimateHintTokens(hints: readonly Hint[]): number {
 
 export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise<TaskResult> {
   const memory = deps.memory ?? new NullMemory();
-  const hints = await memory.recall(input.features ?? [], deps.recallLimit ?? RECALL_LIMIT);
+
+  // Observation runs before recall because recall needs a query. Its output is used
+  // for search only: the solver below still receives the image, so anything this
+  // step misses is not lost to the answer.
+  const features =
+    input.features ?? (deps.twoStep === true ? await observe(input.imagePath) : []);
+
+  const hints = await memory.recall(features, deps.recallLimit ?? RECALL_LIMIT);
   const use: MemoryUse = {
     hints: [...hints],
     hintCount: hints.length,
     hintIds: hints.map((hint) => hint.lessonId),
     hintTokens: estimateHintTokens(hints),
+    features,
   };
   try {
     const guess = await geolocateWithBackoff(input.imagePath, hints);

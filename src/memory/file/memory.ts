@@ -1,23 +1,17 @@
 /**
- * Memory: lessons the agent wrote about its own past attempts, and the retrieval
- * that puts them back in front of it.
+ * JSONL-backed Memory adapter.
  *
- * Stored as JSONL, one lesson per line, never a database. Two reasons: a lesson has
- * to be readable in a diff, and a control run has to be able to swap the whole store
- * for a different file without a migration.
- *
- * The lesson body is free text, matching `memory_note` in docs/workflows/models.md.
- * Everything a retriever needs to rank it lives outside that text, so ranking never
- * has to parse prose.
+ * Lessons are stored as one JSON object per line. The file remains readable in a
+ * diff, and a control run can swap the whole store for a different file without a
+ * migration.
  */
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { RECALL_LIMIT, renderHint } from "../memory.ts";
+import type { Hint, Lesson, LessonInput, Memory } from "../memory.ts";
 
 export const MEMORY_DIR = process.env.MEMORY_DIR ?? join("data", "memory");
-
-/** Default number of lessons a single recall may put into the prompt. */
-export const RECALL_LIMIT = Number(process.env.MEMORY_RECALL_LIMIT ?? 5);
 
 /**
  * How recall decides what to show.
@@ -41,59 +35,6 @@ export function parseRecallMode(value: string): RecallMode {
   throw new Error(`unknown recall mode "${value}", expected one of ${RECALL_MODES.join("|")}`);
 }
 
-export type Lesson = {
-  id: string;
-  /** Free text, the transferable part. Written by the model during reflection. */
-  content: string;
-  /** Which attempt produced it, so a lesson can be traced back to its episode. */
-  sourceAttemptId: string;
-  /** Observable features that make this lesson relevant. Used for ranking. */
-  triggers: string[];
-  /** Country or area the lesson talks about. Diagnostic, not used for ranking. */
-  region: string;
-  /** Times the lesson reached a prompt. */
-  hits: number;
-  /** Times it reached a prompt and the guess landed closer than the run baseline. */
-  wins: number;
-};
-
-/** What reflection produces, before the store assigns provenance and counters. */
-export type LessonInput = {
-  content: string;
-  sourceAttemptId: string;
-  triggers: string[];
-  region: string;
-};
-
-export type Hint = {
-  lessonId: string;
-  text: string;
-};
-
-export interface Memory {
-  /** Lessons worth showing, most relevant first. Never throws on an empty store. */
-  recall(features: string[], limit: number): Promise<Hint[]>;
-  remember(lesson: LessonInput): Promise<void>;
-  /** Freezes the current store to its own file and returns that file's id. */
-  snapshot(): Promise<string>;
-  /** Replaces the working store with a frozen one. */
-  restore(id: string): Promise<void>;
-}
-
-/** Baseline: the agent never sees a lesson. Every memory-off run uses this. */
-export class NullMemory implements Memory {
-  async recall(): Promise<Hint[]> {
-    return [];
-  }
-  async remember(): Promise<void> {}
-  async snapshot(): Promise<string> {
-    return "null";
-  }
-  async restore(id: string): Promise<void> {
-    if (id !== "null") throw new Error(`NullMemory cannot restore snapshot ${id}`);
-  }
-}
-
 /** Lowercased word set, so ranking compares features the way they were written. */
 function tokenize(values: readonly string[]): Set<string> {
   const tokens = new Set<string>();
@@ -115,8 +56,6 @@ function parseLessons(text: string): Lesson[] {
 }
 
 /**
- * JSONL-backed store.
- *
  * Ranking is deliberately the dumbest thing that can work: overlap between the
  * query's tokens and the lesson's trigger tokens. It is a placeholder for a real
  * retriever, and it is a *useful* placeholder only because it is deterministic -
@@ -154,7 +93,7 @@ export class FileMemory implements Memory {
     if (this.mode === "all") {
       const every = lessons.slice().sort((a, b) => (a.id < b.id ? -1 : 1));
       await this.countHits(every.map((lesson) => lesson.id));
-      return every.map((lesson) => ({ lessonId: lesson.id, text: lesson.content }));
+      return every.map(renderHint);
     }
 
     const query = tokenize(features);
@@ -171,7 +110,7 @@ export class FileMemory implements Memory {
         .sort((a, b) => b.hits - a.hits || (a.id < b.id ? -1 : 1))
         .slice(0, limit);
       await this.countHits(prior.map((lesson) => lesson.id));
-      return prior.map((lesson) => ({ lessonId: lesson.id, text: lesson.content }));
+      return prior.map(renderHint);
     }
 
     const ranked = lessons
@@ -189,7 +128,7 @@ export class FileMemory implements Memory {
     if (ranked.length > 0) {
       await this.countHits(ranked.map((entry) => entry.lesson.id));
     }
-    return ranked.map(({ lesson }) => ({ lessonId: lesson.id, text: lesson.content }));
+    return ranked.map(({ lesson }) => renderHint(lesson));
   }
 
   async remember(input: LessonInput): Promise<void> {
