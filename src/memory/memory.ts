@@ -371,6 +371,12 @@ export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
       "global memory reader cannot be used by the feature-scoped runtime",
     );
   }
+  if (reader.promptPort !== undefined && scoped.promptPort === undefined) {
+    throw new MemoryBindingError(
+      "memory_mismatch",
+      "feature-scoped reader projection dropped the adapter prompt port",
+    );
+  }
   const wrapped: MemoryReader = {
     featureScope: scoped.featureScope,
     promptMetadata: scoped.promptMetadata,
@@ -379,7 +385,13 @@ export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
   if (scoped.asReadOnlyReader !== undefined) {
     wrapped.asReadOnlyReader = () => scoped.asReadOnlyReader!();
   }
-  wrapped.promptPort = readerPromptPort(wrapped);
+  const adapterPromptPort = scoped.promptPort;
+  wrapped.promptPort = adapterPromptPort === undefined
+    ? readerPromptPort(wrapped)
+    : {
+        retrieve: (request) => adapterPromptPort.retrieve(request),
+        store: (request) => adapterPromptPort.store(request),
+      };
   if (frozenSnapshotId !== null) markFrozenMemoryReader(wrapped, frozenSnapshotId);
   return wrapped;
 }
@@ -387,6 +399,12 @@ export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
 export function readerOnly(memory: MemoryReader): MemoryReader {
   const frozenSnapshotId = frozenReaderSnapshotId(memory);
   const source = memory.asReadOnlyReader?.() ?? memory;
+  if (memory.promptPort !== undefined && source.promptPort === undefined) {
+    throw new MemoryBindingError(
+      "memory_mismatch",
+      "read-only reader projection dropped the adapter prompt port",
+    );
+  }
   const reader: MemoryReader =
     source.featureScope === undefined
       ? { promptMetadata: source.promptMetadata, recall: (query, limit, prompt) => source.recall(query, limit, prompt) }
@@ -401,7 +419,15 @@ export function readerOnly(memory: MemoryReader): MemoryReader {
   if (source.loadSnapshot !== undefined) {
     reader.loadSnapshot = async (snapshotId: string) => readerOnly(await source.loadSnapshot!(snapshotId));
   }
-  reader.promptPort = readerPromptPort(reader);
+  const sourcePromptPort = source.promptPort;
+  reader.promptPort = sourcePromptPort === undefined
+    ? readerPromptPort(reader)
+    : {
+        retrieve: (request) => sourcePromptPort.retrieve(request),
+        store: async () => {
+          throw new MemoryWriteError("write_failed", "reader-only memory cannot store lessons");
+        },
+      };
   if (frozenSnapshotId !== null) markFrozenMemoryReader(reader, frozenSnapshotId);
   return reader;
 }
@@ -633,9 +659,12 @@ export function createMemorySourceBinding(input: MemorySourceBindingInput): Memo
   const reader = bindFeatureScopedReader(memory);
   const adapterPromptPort = memory.promptPort ?? fallbackPromptPort(memory, writer);
   const readerPort = reader.promptPort;
+  const fallbackReaderPort = readerPromptPort(reader);
   const promptPort: MemoryAdapterPromptPort = {
-    retrieve: readerPort?.retrieve ?? readerPromptPort(reader).retrieve,
-    store: adapterPromptPort.store,
+    retrieve: (request) => readerPort === undefined
+      ? fallbackReaderPort.retrieve(request)
+      : readerPort.retrieve(request),
+    store: (request) => adapterPromptPort.store(request),
   };
   if (typeof promptPort.retrieve !== "function" || typeof promptPort.store !== "function") {
     throw new Error("memory adapter prompt boundary is invalid");

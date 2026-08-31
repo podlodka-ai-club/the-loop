@@ -11,14 +11,19 @@ import {
   type FeatureObservation,
 } from "./observe.ts";
 import {
+  bindFeatureScopedReader,
   createMemorySourceResolver,
   createMemorySourceBinding,
   createFrozenMemorySnapshotBinding,
   MemoryBindingError,
   markFrozenMemoryReader,
   createNoopMemoryBinding,
+  readerOnly,
   resolveMemoryBinding,
+  sharedMemoryPrompt,
   validateMemoryBinding,
+  type MemoryAdapterPromptPort,
+  type MemoryBindingRequest,
   type Hint,
   type MemoryReader,
   type MemoryWriter,
@@ -31,6 +36,7 @@ import {
   type LocateRuntimeChatCompletion,
 } from "./locate-runtime.internal.ts";
 import {
+  executeMemoryRetrieve,
   executeMemoryStore,
   makeMemoryHitId,
   type LocateResult,
@@ -160,6 +166,292 @@ test("reflect binding, XMD schema and binding identity have explicit hard bounda
     },
     (error) => error instanceof MemoryBindingError && error.code === "memory_mismatch",
   );
+});
+
+test("source binding keeps the adapter retrieve prompt boundary and dynamic feature context", async () => {
+  const requests: Array<{ memoryRef: string; featureKey: string; promptDigest: string; query: string }> = [];
+  const memory: MemoryReader = {
+    recall: async () => {
+      throw new Error("source binding must not bypass the adapter retrieve boundary");
+    },
+    promptPort: {
+      retrieve: async (request) => {
+        requests.push({
+          memoryRef: request.memoryRef,
+          featureKey: request.featureKey,
+          promptDigest: request.prompt.digest,
+          query: request.query ?? "",
+        });
+        return [];
+      },
+      store: async () => ({ status: "stored", lessonId: "unused" }),
+    },
+  };
+  const source = createMemorySourceBinding({ memoryRef: "adapter-boundary", memory });
+  const binding = await resolveMemoryBinding(
+    { memoryRef: "adapter-boundary", mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
+    createMemorySourceResolver(source),
+  );
+
+  const hints = await binding.promptPort.retrieve({
+    memoryRef: "adapter-boundary",
+    operation: "retrieve",
+    prompt: sharedMemoryPrompt("retrieve"),
+    featureKey: "unseen_dynamic_feature",
+    query: "visible cue",
+  });
+
+  assert.deepEqual(hints, []);
+  assert.deepEqual(requests, [{
+    memoryRef: "adapter-boundary",
+    featureKey: "unseen_dynamic_feature",
+    promptDigest: sharedMemoryPrompt("retrieve").digest,
+    query: "visible cue",
+  }]);
+});
+
+class RecordingAdapterPromptPort implements MemoryAdapterPromptPort {
+  readonly retrieveRequests: MemoryBindingRequest[] = [];
+  readonly storeRequests: MemoryBindingRequest[] = [];
+
+  async retrieve(request: MemoryBindingRequest): Promise<Hint[]> {
+    this.retrieveRequests.push(request);
+    return [];
+  }
+
+  async store(request: MemoryBindingRequest): Promise<{ status: "stored"; lessonId: string }> {
+    this.storeRequests.push(request);
+    return { status: "stored", lessonId: "lesson-boundary" };
+  }
+}
+
+test("feature-scoped projection keeps the adapter boundary for retrieve and store dispatchers", async () => {
+  const promptPort = new RecordingAdapterPromptPort();
+  let recallCalls = 0;
+  const dynamicFeature: FeatureObservation = { key: "curb_paint", text: "painted curb" };
+  const projection: MemoryReader = {
+    featureScope: "feature",
+    recall: async () => {
+      recallCalls += 1;
+      throw new Error("feature-scoped dispatcher must not call projection.recall");
+    },
+    promptPort,
+  };
+  const memory: MemoryWriter = {
+    featureScope: "global",
+    recall: async () => {
+      recallCalls += 1;
+      throw new Error("feature-scoped dispatcher must not call source.recall");
+    },
+    promptPort,
+    asFeatureScopedReader: () => projection,
+    remember: async () => {
+      throw new Error("feature-scoped dispatcher must not call writer.remember");
+    },
+    snapshot: async () => "unused",
+    restore: async () => {},
+  };
+  const memoryRef = "feature-projection-boundary";
+  const source = createMemorySourceBinding({ memoryRef, memory });
+  const binding = await resolveMemoryBinding(
+    { memoryRef, mode: "training", snapshotId: null, readOnly: false, recallLimit: 5 },
+    createMemorySourceResolver(source),
+  );
+
+  const retrieved = await executeMemoryRetrieve({
+    attemptId: "feature-projection-attempt",
+    reader: binding.reader,
+    promptPort: binding.promptPort,
+    phase: "retrieve",
+    run: { memoryRef, mode: "training", snapshotId: null, readOnly: false, recallLimit: 5 },
+    activeFeature: dynamicFeature,
+  }, { feature_key: dynamicFeature.key, query: dynamicFeature.text });
+
+  assert.equal(retrieved.status, "no_hit");
+  assert.equal(recallCalls, 0);
+  assert.equal(promptPort.retrieveRequests.length, 1);
+  const retrieveRequest = promptPort.retrieveRequests[0];
+  assert.ok(retrieveRequest);
+  assert.equal(retrieveRequest.memoryRef, memoryRef);
+  assert.equal(retrieveRequest.operation, "retrieve");
+  assert.equal(retrieveRequest.featureKey, dynamicFeature.key);
+  assert.equal(retrieveRequest.query, dynamicFeature.text);
+  assert.equal(retrieveRequest.prompt.text, sharedMemoryPrompt("retrieve").text);
+  assert.equal(retrieveRequest.prompt.version, sharedMemoryPrompt("retrieve").version);
+  assert.equal(retrieveRequest.prompt.digest, sharedMemoryPrompt("retrieve").digest);
+
+  const memoryHitId = makeMemoryHitId(
+    "feature-projection-attempt",
+    dynamicFeature.key,
+    "provider-boundary",
+    dynamicFeature.text,
+    0,
+  );
+  const stored = await executeMemoryStore({
+    attemptId: "feature-projection-attempt",
+    reader: binding.reader,
+    writer: binding.writer,
+    promptPort: binding.promptPort,
+    phase: "reflect",
+    run: { memoryRef, mode: "training", snapshotId: null, readOnly: false, recallLimit: 5 },
+    activeFeature: dynamicFeature,
+    activeMemoryHit: {
+      attemptId: "feature-projection-attempt",
+      featureKey: dynamicFeature.key,
+      memoryHitId,
+      providerId: "provider-boundary",
+      text: dynamicFeature.text,
+      score: null,
+      effect: null,
+    },
+  }, {
+    feature_key: dynamicFeature.key,
+    memory_hit_id: memoryHitId,
+    effect: "helped",
+    content: "The painted curb was useful.",
+    triggers: [dynamicFeature.text],
+    region: "BR",
+  });
+
+  assert.deepEqual(stored, { status: "stored", lessonId: "lesson-boundary", failure: null });
+  assert.equal(recallCalls, 0);
+  assert.equal(promptPort.storeRequests.length, 1);
+  const storeRequest = promptPort.storeRequests[0];
+  assert.ok(storeRequest);
+  assert.equal(storeRequest.memoryRef, memoryRef);
+  assert.equal(storeRequest.operation, "store");
+  assert.equal(storeRequest.featureKey, dynamicFeature.key);
+  assert.equal(storeRequest.prompt.text, sharedMemoryPrompt("store").text);
+  assert.equal(storeRequest.prompt.version, sharedMemoryPrompt("store").version);
+  assert.equal(storeRequest.prompt.digest, sharedMemoryPrompt("store").digest);
+  assert.equal(storeRequest.lesson?.featureKey, dynamicFeature.key);
+  assert.equal(storeRequest.lesson?.memoryHitId, memoryHitId);
+});
+
+test("projection loss is fail-closed and never falls back to recall", () => {
+  let recallCalls = 0;
+  const promptPort: MemoryAdapterPromptPort = {
+    retrieve: async () => [],
+    store: async () => ({ status: "stored", lessonId: "unused" }),
+  };
+  const globalReader: MemoryReader = {
+    featureScope: "global",
+    promptPort,
+    recall: async () => {
+      recallCalls += 1;
+      throw new Error("invalid feature projection must not reach recall");
+    },
+    asFeatureScopedReader: () => ({
+      featureScope: "feature",
+      recall: async () => {
+        recallCalls += 1;
+        throw new Error("invalid feature projection must not reach recall");
+      },
+    }),
+  };
+
+  assert.throws(
+    () => bindFeatureScopedReader(globalReader),
+    (error) => error instanceof MemoryBindingError && error.code === "memory_mismatch",
+  );
+  assert.equal(recallCalls, 0);
+
+  const readOnlySource: MemoryReader = {
+    featureScope: "feature",
+    promptPort,
+    recall: async () => {
+      recallCalls += 1;
+      throw new Error("invalid read-only projection must not reach recall");
+    },
+    asReadOnlyReader: () => ({
+      featureScope: "feature",
+      recall: async () => {
+        recallCalls += 1;
+        throw new Error("invalid read-only projection must not reach recall");
+      },
+    }),
+  };
+
+  assert.throws(
+    () => readerOnly(readOnlySource),
+    (error) => error instanceof MemoryBindingError && error.code === "memory_mismatch",
+  );
+  assert.equal(recallCalls, 0);
+});
+
+test("read-only projection keeps the adapter retrieve boundary and rejects store dispatch", async () => {
+  const promptPort = new RecordingAdapterPromptPort();
+  let recallCalls = 0;
+  const source: MemoryReader = {
+    featureScope: "feature",
+    promptPort,
+    recall: async () => {
+      recallCalls += 1;
+      throw new Error("read-only dispatcher must not call source.recall");
+    },
+    asReadOnlyReader: () => ({
+      featureScope: "feature",
+      promptPort,
+      recall: async () => {
+        recallCalls += 1;
+        throw new Error("read-only dispatcher must not call projection.recall");
+      },
+    }),
+  };
+  const reader = readerOnly(source);
+  const memoryRef = "read-only-projection-boundary";
+  const activeFeature: FeatureObservation = { key: "wall_finish", text: "whitewashed wall" };
+  const retrieveRun = { memoryRef, mode: "production" as const, snapshotId: null, readOnly: true, recallLimit: 5 as const };
+  const retrieved = await executeMemoryRetrieve({
+    attemptId: "read-only-projection-attempt",
+    reader,
+    promptPort: reader.promptPort,
+    phase: "retrieve",
+    run: retrieveRun,
+    activeFeature,
+  }, { feature_key: activeFeature.key, query: activeFeature.text });
+
+  assert.equal(retrieved.status, "no_hit");
+  assert.equal(recallCalls, 0);
+  assert.equal(promptPort.retrieveRequests.length, 1);
+  const retrieveRequest = promptPort.retrieveRequests[0];
+  assert.ok(retrieveRequest);
+  assert.equal(retrieveRequest.memoryRef, memoryRef);
+  assert.equal(retrieveRequest.operation, "retrieve");
+  assert.equal(retrieveRequest.featureKey, activeFeature.key);
+  assert.equal(retrieveRequest.prompt.text, sharedMemoryPrompt("retrieve").text);
+  assert.equal(retrieveRequest.prompt.version, sharedMemoryPrompt("retrieve").version);
+  assert.equal(retrieveRequest.prompt.digest, sharedMemoryPrompt("retrieve").digest);
+
+  await assert.rejects(
+    executeMemoryStore({
+      attemptId: "read-only-projection-attempt",
+      reader,
+      promptPort: reader.promptPort,
+      phase: "reflect",
+      run: retrieveRun,
+      activeFeature,
+      activeMemoryHit: {
+        attemptId: "read-only-projection-attempt",
+        featureKey: activeFeature.key,
+        memoryHitId: "foreign-store-hit",
+        providerId: "provider-boundary",
+        text: activeFeature.text,
+        score: null,
+        effect: null,
+      },
+    }, {
+      feature_key: activeFeature.key,
+      memory_hit_id: "foreign-store-hit",
+      effect: "helped",
+      content: "The wall was useful.",
+      triggers: [activeFeature.text],
+      region: "BR",
+    }),
+    (error) => error instanceof Error && /memory_store is not enabled/.test(error.message),
+  );
+  assert.equal(promptPort.storeRequests.length, 0);
+  assert.equal(recallCalls, 0);
 });
 
 test("public reflection cannot store without the resolved MemoryBinding", async () => {
