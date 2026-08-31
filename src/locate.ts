@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import { locateWithRuntime } from "./locate-runtime.internal.ts";
 import {
   createMemorySourceBinding,
@@ -35,6 +36,7 @@ export async function locate(
   }
 
   if (deps.memoryBinding !== undefined) {
+    await access(input.imagePath);
     return locateWithRuntime(input, {
       run: deps.run,
       memoryBinding: deps.memoryBinding,
@@ -84,6 +86,7 @@ export async function locate(
       deps.run,
       createMemorySourceResolver(source),
     );
+    await access(input.imagePath);
     return locateWithRuntime(input, {
       run: deps.run,
       memoryBinding,
@@ -92,6 +95,7 @@ export async function locate(
   }
 
   if (deps.memorySourceResolver !== undefined) {
+    await access(input.imagePath);
     return locateWithRuntime(input, {
       run: deps.run,
       memorySourceResolver: deps.memorySourceResolver,
@@ -100,6 +104,7 @@ export async function locate(
   }
 
   if (deps.run.memoryRef === null) {
+    await access(input.imagePath);
     return locateWithRuntime(input, {
       run: deps.run,
       memoryBinding: createNoopMemoryBinding({ mode: deps.run.mode, snapshotId: deps.run.snapshotId }),
@@ -107,6 +112,7 @@ export async function locate(
     });
   }
 
+  await access(input.imagePath);
   return locateWithRuntime(input, {
     run: deps.run,
     maxToolAttemptsPerFeature: deps.maxToolAttemptsPerFeature,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -40,7 +41,7 @@ import {
 import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
 import { makeMemoryHitId, type FeatureMemoryGroup, type LocateResult, type MemoryHit, type MemoryRunConfig } from "./tools/memory.ts";
 import type { ReflectionEpisodeInput, ReflectionEpisodeResult } from "./reflect.ts";
-import { FileMemory } from "./memory/file/memory.ts";
+import { FileMemory, MEMORY_DIR } from "./memory/file/memory.ts";
 
 const DYNAMIC_FEATURE_KEYS = ["plates", "poles", "vegetation", "roadside_text"] as const;
 
@@ -911,152 +912,160 @@ test("runTask feature-scoped path skips reflection for no-hit, skipped and faile
 
 test("runTask feature-scoped reflection is training-only and memory bindings expose reader-only evaluation and production", async () => {
   const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-memory-"));
-  process.env.MEMORY_DIR = memoryDir;
   const frozenLesson: LessonInput & { id: string; hits: number; wins: number } = {
     id: "lesson-0001",
     content: "Wooden crossarms match the frozen snapshot.",
-    sourceAttemptId: "attempt-frozen",
+    sourceAttemptId: `attempt-frozen-${randomUUID()}`,
     featureKey: "poles",
     memoryHitId: "attempt-frozen/poles/hit",
     effect: "helped",
     triggers: ["wooden crossarms"],
     region: "BR",
-    idempotencyKey: "attempt-frozen:poles:hit",
+    idempotencyKey: `attempt-frozen:${randomUUID()}:hit`,
     hits: 0,
     wins: 0,
   };
-  const frozenSnapshotPath = join(memoryDir, "frozen-snapshot.jsonl");
-  await writeFile(frozenSnapshotPath, `${JSON.stringify(frozenLesson)}\n`, "utf8");
-  const locateResult = (input: { attemptId: string; imagePath: string }): LocateResult => {
-  const polesFeature: FeatureObservation = { key: "poles", text: "wooden poles" };
-    const hit = {
-      attemptId: input.attemptId,
-      featureKey: "poles" as const,
-      memoryHitId: makeMemoryHitId(input.attemptId, "poles", "lesson-source", "wooden poles", 0),
-      providerId: "lesson-source",
-      text: "wooden poles",
-      score: null,
-      effect: null,
-    };
-    const groups = [
-      {
+  let snapshotPath: string | null = null;
+  try {
+    const locateResult = (input: { attemptId: string; imagePath: string }): LocateResult => {
+      const polesFeature: FeatureObservation = { key: "poles", text: "wooden poles" };
+      const hit = {
         attemptId: input.attemptId,
-        feature: polesFeature,
-        query: "wooden poles",
-        status: "hits" as const,
-        hits: [hit],
-        failure: null,
-        retryCount: 0,
-      },
-    ];
-    return {
-      attemptId: input.attemptId,
-      guess: {
-        latitude: 1,
-        longitude: 2,
-        place: "Binding place",
-        confidence: 0.8,
-        reasoning: "Structured binding result.",
-        provider: "fake",
-      },
-      observations: [polesFeature],
-      memoryGroups: groups,
-      episodes: [],
-      trace: { attemptId: input.attemptId, groups, episodes: [], events: [] },
+        featureKey: "poles" as const,
+        memoryHitId: makeMemoryHitId(input.attemptId, "poles", "lesson-source", "wooden poles", 0),
+        providerId: "lesson-source",
+        text: "wooden poles",
+        score: null,
+        effect: null,
+      };
+      const groups = [
+        {
+          attemptId: input.attemptId,
+          feature: polesFeature,
+          query: "wooden poles",
+          status: "hits" as const,
+          hits: [hit],
+          failure: null,
+          retryCount: 0,
+        },
+      ];
+      return {
+        attemptId: input.attemptId,
+        guess: {
+          latitude: 1,
+          longitude: 2,
+          place: "Binding place",
+          confidence: 0.8,
+          reasoning: "Structured binding result.",
+          provider: "fake",
+        },
+        observations: [polesFeature],
+        memoryGroups: groups,
+        episodes: [],
+        trace: { attemptId: input.attemptId, groups, episodes: [], events: [] },
+      };
     };
-  };
-  const locateSpy: LocateFunction = async (input) => locateResult(input);
-  const writer = new MemoryWriterSpy();
+    const locateSpy: LocateFunction = async (input) => locateResult(input);
+    const writer = new MemoryWriterSpy();
 
-  for (const scenario of [
-    { memoryRef: "file", mode: "evaluation" as const, snapshotId: "snapshot", readOnly: true },
-    { memoryRef: "file", mode: "production" as const, snapshotId: null, readOnly: true },
-  ]) {
-    const reflect = new ReflectEpisodeSpy();
-    const input: FeatureScopedTaskRuntimeInput = {
-      imageId: `image-${scenario.mode}`,
-      imagePath: `${scenario.mode}.jpg`,
-      attemptId: "attempt-binding",
-      truth: { latitude: 1, longitude: 2, country: "BR" },
-    };
-    const result = await runTaskWithRuntime(input, {
-      memoryBinding: await makeResolvedBinding(writer, { ...scenario, recallLimit: 5 }),
-      run: { ...scenario, recallLimit: 5 },
-      locate: locateSpy,
-      reflectEpisode: reflect.reflect,
-    });
+    for (const scenario of [
+      { memoryRef: "file", mode: "evaluation" as const, snapshotId: "snapshot", readOnly: true },
+      { memoryRef: "file", mode: "production" as const, snapshotId: null, readOnly: true },
+    ]) {
+      const reflect = new ReflectEpisodeSpy();
+      const input: FeatureScopedTaskRuntimeInput = {
+        imageId: `image-${scenario.mode}`,
+        imagePath: `${scenario.mode}.jpg`,
+        attemptId: "attempt-binding",
+        truth: { latitude: 1, longitude: 2, country: "BR" },
+      };
+      const result = await runTaskWithRuntime(input, {
+        memoryBinding: await makeResolvedBinding(writer, { ...scenario, recallLimit: 5 }),
+        run: { ...scenario, recallLimit: 5 },
+        locate: locateSpy,
+        reflectEpisode: reflect.reflect,
+      });
 
-    assert.equal(result.ok, true);
-    assert.deepEqual(result.episodes, []);
-    assert.deepEqual(reflect.invocations, [], scenario.mode);
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.episodes, []);
+      assert.deepEqual(reflect.invocations, [], scenario.mode);
+    }
+
+    const sourceMemory = new FileMemory(join(memoryDir, "live.jsonl"), "top", false);
+    await sourceMemory.remember(frozenLesson);
+    const snapshotId = await sourceMemory.snapshot();
+    snapshotPath = join(MEMORY_DIR, `${snapshotId}.jsonl`);
+    const resolver = createMemorySourceResolver(createMemorySourceBinding({
+      memoryRef: "file",
+      memory: sourceMemory,
+      provider: "file",
+      loadSnapshot: async (requestedSnapshotId: string) => {
+        const snapshotReader = await sourceMemory.loadSnapshot(requestedSnapshotId);
+        return createFrozenMemorySnapshotBinding({
+          memoryRef: "file",
+          snapshotId: requestedSnapshotId,
+          reader: snapshotReader,
+        });
+      },
+    }));
+    const evaluation = await resolveMemoryBinding({
+      memoryRef: "file",
+      mode: "evaluation",
+      snapshotId,
+      readOnly: true,
+      recallLimit: 5,
+    }, resolver);
+    const production = await resolveMemoryBinding({
+      memoryRef: "file",
+      mode: "production",
+      snapshotId: null,
+      readOnly: true,
+      recallLimit: 5,
+    }, resolver);
+    const training = await resolveMemoryBinding({
+      memoryRef: "file",
+      mode: "training",
+      snapshotId: null,
+      readOnly: false,
+      recallLimit: 5,
+    }, resolver);
+
+    assert.equal(evaluation.mode, "evaluation");
+    assert.equal(Object.prototype.hasOwnProperty.call(evaluation, "writer"), false);
+    assert.equal("remember" in evaluation.reader, false);
+    assert.equal("restore" in evaluation.reader, false);
+    assert.equal(production.mode, "production");
+    assert.equal(Object.prototype.hasOwnProperty.call(production, "writer"), false);
+    assert.equal("remember" in production.reader, false);
+    assert.equal("restore" in production.reader, false);
+    assert.equal(training.mode, "training");
+    assert.equal(typeof training.writer.remember, "function");
+    await assert.rejects(
+      resolveMemoryBinding({ memoryRef: "file", mode: "evaluation", snapshotId: "", readOnly: true, recallLimit: 5 }, resolver),
+      /evaluation memory requires/,
+    );
+    await assert.rejects(
+      resolveMemoryBinding({ memoryRef: "file", mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 }, resolver),
+      /production memory requires/,
+    );
+    await assert.rejects(
+      resolveMemoryBinding({ memoryRef: "file", mode: "training", snapshotId: "snapshot", readOnly: false, recallLimit: 5 }, resolver),
+      /training memory requires/,
+    );
+
+    assert.deepEqual(await evaluation.reader.recall("wooden crossarms", 5), [
+      {
+        lessonId: "lesson-0001",
+        text: "BR: Wooden crossarms match the frozen snapshot.",
+        featureKey: "poles",
+        effect: "helped",
+      },
+    ]);
+    assert.match(await readFile(snapshotPath, "utf8"), /Wooden crossarms match the frozen snapshot/);
+  } finally {
+    if (snapshotPath !== null) await unlink(snapshotPath).catch(() => undefined);
+    await rm(memoryDir, { recursive: true, force: true });
   }
-
-  const resolver = createMemorySourceResolver(createMemorySourceBinding({
-    memoryRef: "file",
-    memory: new FileMemory(join(memoryDir, "live.jsonl"), "top", false),
-    provider: "file",
-    loadSnapshot: async (snapshotId: string) =>
-      createFrozenMemorySnapshotBinding({
-        memoryRef: "file",
-        snapshotId,
-        reader: new FileMemory(join(memoryDir, `${snapshotId}.jsonl`), "top", true),
-      }),
-  }));
-  const evaluation = await resolveMemoryBinding({
-    memoryRef: "file",
-    mode: "evaluation",
-    snapshotId: "frozen-snapshot",
-    readOnly: true,
-    recallLimit: 5,
-  }, resolver);
-  const production = await resolveMemoryBinding({
-    memoryRef: "file",
-    mode: "production",
-    snapshotId: null,
-    readOnly: true,
-    recallLimit: 5,
-  }, resolver);
-  const training = await resolveMemoryBinding({
-    memoryRef: "file",
-    mode: "training",
-    snapshotId: null,
-    readOnly: false,
-    recallLimit: 5,
-  }, resolver);
-
-  assert.equal(evaluation.mode, "evaluation");
-  assert.equal(Object.prototype.hasOwnProperty.call(evaluation, "writer"), false);
-  assert.equal("remember" in evaluation.reader, false);
-  assert.equal("restore" in evaluation.reader, false);
-  assert.equal(production.mode, "production");
-  assert.equal(Object.prototype.hasOwnProperty.call(production, "writer"), false);
-  assert.equal("remember" in production.reader, false);
-  assert.equal("restore" in production.reader, false);
-  assert.equal(training.mode, "training");
-  assert.equal(typeof training.writer.remember, "function");
-  await assert.rejects(
-    resolveMemoryBinding({ memoryRef: "file", mode: "evaluation", snapshotId: "", readOnly: true, recallLimit: 5 }, resolver),
-    /evaluation memory requires/,
-  );
-  await assert.rejects(
-    resolveMemoryBinding({ memoryRef: "file", mode: "production", snapshotId: null, readOnly: false, recallLimit: 5 }, resolver),
-    /production memory requires/,
-  );
-  await assert.rejects(
-    resolveMemoryBinding({ memoryRef: "file", mode: "training", snapshotId: "snapshot", readOnly: false, recallLimit: 5 }, resolver),
-    /training memory requires/,
-  );
-
-  assert.deepEqual(await evaluation.reader.recall("wooden crossarms", 5), [
-    {
-      lessonId: "lesson-0001",
-      text: "BR: Wooden crossarms match the frozen snapshot.",
-      featureKey: "poles",
-      effect: "helped",
-    },
-  ]);
-  assert.equal(await readFile(frozenSnapshotPath, "utf8"), `${JSON.stringify(frozenLesson)}\n`);
-  await rm(memoryDir, { recursive: true, force: true });
 });
 
 test("runTask evaluation and production strip writable methods from read-only adapter projection", async () => {
