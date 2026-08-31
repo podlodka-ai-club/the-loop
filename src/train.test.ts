@@ -12,8 +12,11 @@ import {
 test("training selection excludes eval ids and rows sharing eval sequences", () => {
   const manifest: Manifest = {
     seed: "eval-v1",
+    role: "eval",
     size: 3,
     fingerprint: "fixture",
+    counterpart: null,
+    rejected: 0,
     ids: ["eval-br", "eval-us", "eval-empty-sequence"],
   };
   const pool = [
@@ -41,8 +44,11 @@ test("training selection excludes eval ids and rows sharing eval sequences", () 
 test("training sequence exclusion uses full CSV metadata before image availability filtering", () => {
   const manifest: Manifest = {
     seed: "eval-v1",
+    role: "eval",
     size: 1,
     fingerprint: "fixture",
+    counterpart: null,
+    rejected: 0,
     ids: ["eval-missing-image"],
   };
   const metadataRows = [
@@ -62,8 +68,11 @@ test("training sequence exclusion uses full CSV metadata before image availabili
 test("control and memory-on share the same training sample order and observation cache contract", () => {
   const manifest: Manifest = {
     seed: "eval-v1",
+    role: "eval",
     size: 4,
     fingerprint: "fixture",
+    counterpart: null,
+    rejected: 0,
     ids: ["eval-br-1", "eval-br-2", "eval-us-1", "eval-za-1"],
   };
   const pool = [

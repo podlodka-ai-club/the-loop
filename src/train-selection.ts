@@ -1,5 +1,22 @@
-import { drawSample, fingerprintOf, type Row, type Sample } from "./osv5m.ts";
+import { createHash } from "node:crypto";
+import { fingerprintOf, type Row, type Sample } from "./osv5m.ts";
 import type { Manifest } from "./manifest.ts";
+
+/** Compatibility sampler for the legacy training-selection helper. */
+function drawTrainingSample(rows: readonly Row[], size: number, seed: string): Sample {
+  const selected = [...rows]
+    .map((row) => ({ row, key: createHash("sha256").update(`${seed}:${row.id}`).digest("hex") }))
+    .sort((left, right) => left.key.localeCompare(right.key))
+    .slice(0, Math.max(0, size))
+    .map(({ row }) => row)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return {
+    rows: selected,
+    fingerprint: fingerprintOf(selected.map((row) => row.id)),
+    seed,
+    strata: new Set(selected.map((row) => row.cell)).size,
+  };
+}
 
 export type TrainingSelectionOptions = {
   limit: number;
@@ -73,7 +90,7 @@ export function selectTrainingSample(
   if (!options.matchManifest) {
     return {
       ...selected,
-      sample: drawSample([...selected.trainPool], { size: options.limit, seed: options.seed }),
+      sample: drawTrainingSample(selected.trainPool, options.limit, options.seed),
       quotas: new Map(),
       shortfalls: [],
     };
@@ -89,9 +106,9 @@ export function selectTrainingSample(
   const shortfalls: string[] = [];
   for (const [country, quota] of [...quotas].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const byCountry = selected.trainPool.filter((row) => row.country === country);
-    const drawn = drawSample(byCountry, { size: quota, seed: `${options.seed}:${country}` });
+    const drawn = drawTrainingSample(byCountry, quota, `${options.seed}:${country}`);
     picked.push(...drawn.rows);
-    if (drawn.rows.length < quota) shortfalls.push(`${country} ${drawn.rows.length}/${quota}`);
+    if (drawn.rows.length < quota) shortfalls.push(`${drawn.rows.length}/${quota}`);
   }
   picked.sort((a, b) => (a.id < b.id ? -1 : 1));
   return {
