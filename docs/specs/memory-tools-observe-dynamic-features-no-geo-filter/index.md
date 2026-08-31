@@ -1,5 +1,7 @@
 # Research
 
+> Для memory prompt parity действует более новая итерация [common memory prompts](../memory-tools-observe-common-memory-prompts/index.md).
+
 * [Отказ от geo-фильтрации observations](research.md) - Почему приложение не должно угадывать географические сущности в model-generated features.
 
 # Decision
