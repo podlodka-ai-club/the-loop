@@ -142,6 +142,17 @@ function toolCall(overrides: Partial<{
   };
 }
 
+function toolCallWithArguments(args: Record<string, unknown>): unknown {
+  return {
+    id: "call-store",
+    type: "function",
+    function: {
+      name: "memory_store",
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
 function textPart(request: OpenAI.ChatCompletionCreateParamsNonStreaming): string {
   const content = request.messages[0]?.content;
   assert.ok(Array.isArray(content));
@@ -192,6 +203,25 @@ test("reflectEpisode sends one feature and one memory hit with guess, truth, dis
   assert.equal(prompt.includes("Sao Paulo, Brazil"), true);
   assert.equal(prompt.includes("\"country\":\"BR\""), true);
   assert.equal(prompt.includes("842.250"), true);
+  assert.equal(
+    prompt.includes("- helped: the hit supplied a cue consistent with the revealed location and useful for the answer."),
+    true,
+  );
+  assert.equal(
+    prompt.includes("- irrelevant: the hit was usable data but did not affect this image's location decision."),
+    true,
+  );
+  assert.equal(
+    prompt.includes("- misleading: the hit asserted a wrong cue or pulled the analysis toward the wrong location."),
+    true,
+  );
+  assert.equal(
+    prompt.includes("- insufficient: the hit was partly useful but did not contain enough evidence for this decision."),
+    true,
+  );
+  assert.equal(prompt.includes("content must be one or two grounded sentences"), true);
+  assert.equal(prompt.includes("triggers must be 1-8 short observable noun phrases"), true);
+  assert.equal(prompt.includes("region must be the two-letter uppercase country code of the revealed truth"), true);
   assert.equal(JSON.stringify(request.messages).includes("data:image/jpeg;base64,image-reflect.jpg"), true);
 });
 
@@ -295,6 +325,31 @@ test("reflectEpisode keeps reflection failure distinct from write failure and en
       failure: "invalid_tool_arguments",
     },
     {
+      name: "empty content",
+      toolCalls: [toolCall({ content: " " })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "overlong content",
+      toolCalls: [toolCall({ content: "x".repeat(2_001) })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "unknown effect",
+      toolCalls: [toolCall({ effect: "unknown" })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "empty triggers",
+      toolCalls: [toolCall({ triggers: [] })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "too many triggers",
+      toolCalls: [toolCall({ triggers: Array.from({ length: 9 }, (_value, index) => `trigger ${index}`) })],
+      failure: "invalid_tool_arguments",
+    },
+    {
       name: "bad region",
       toolCalls: [toolCall({ region: "Brazil" })],
       failure: "invalid_tool_arguments",
@@ -307,6 +362,21 @@ test("reflectEpisode keeps reflection failure distinct from write failure and en
     {
       name: "bad trigger",
       toolCalls: [toolCall({ triggers: ["x".repeat(129)] })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "extra provenance",
+      toolCalls: [
+        toolCallWithArguments({
+          feature_key: "road_markings",
+          memory_hit_id: memoryHitId,
+          effect: "misleading",
+          content: "The single yellow center line was too broad for this road type.",
+          triggers: ["single yellow center line"],
+          region: "BR",
+          sourceAttemptId: "model-owned",
+        }),
+      ],
       failure: "invalid_tool_arguments",
     },
   ];
