@@ -6,7 +6,7 @@ import test from "node:test";
 import OpenAI from "openai";
 import { withHints } from "./agent.ts";
 import { FileMemory } from "./memory/file/memory.ts";
-import type { Hint, MemoryReader } from "./memory/memory.ts";
+import type { Hint, LessonInput, MemoryReader, MemoryWriter, MemoryWriteResult } from "./memory/memory.ts";
 import { type FeatureObservation, type ObserveResult } from "./observe.ts";
 import { locate, type LocateDeps } from "./locate.ts";
 import {
@@ -59,6 +59,21 @@ class FakeReader implements MemoryReader {
     if (this.emptyQueries.has(query)) return [];
     return [{ lessonId: `lesson-${this.calls.length}`, text: `memory for ${query}` }];
   }
+}
+
+class FakeWriter extends FakeReader implements MemoryWriter {
+  rememberCalls = 0;
+
+  async remember(_lesson: LessonInput): Promise<MemoryWriteResult> {
+    this.rememberCalls += 1;
+    return { status: "stored", lessonId: "fake-lesson" };
+  }
+
+  async snapshot(): Promise<string> {
+    return "fake-snapshot";
+  }
+
+  async restore(_id: string): Promise<void> {}
 }
 
 class FakeClient implements LocateChatClient {
@@ -193,7 +208,7 @@ class FakeClient implements LocateChatClient {
 }
 
 const _publicLocateDepsRejectRuntimeHooks = {
-  memory: new FakeReader(),
+  memory: new FakeWriter(),
   run,
   // @ts-expect-error client is an internal runtime seam, not public LocateDeps.
   client: new FakeClient(),
@@ -206,7 +221,7 @@ test("public locate ignores runtime hooks on widened deps", async () => {
     let hiddenObserveCalls = 0;
     let hiddenImageDataUriCalls = 0;
     const widenedDeps = {
-      memory: new FakeReader(),
+      memory: new FakeWriter(),
       run,
       observe: async () => {
         hiddenObserveCalls += 1;
@@ -292,7 +307,7 @@ function analyzeObservations(request: OpenAI.ChatCompletionCreateParamsNonStream
 
 test("retrieve loop processes visible features in order, retries once and disables parallel tool calls", async () => {
   await withImage(async (imagePath) => {
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
     const client = new FakeClient();
     client.missingFirstFor.add("poles");
 
@@ -374,7 +389,7 @@ test("retrieve loop processes visible features in order, retries once and disabl
 test("only model-emitted dynamic observations are retrieved and passed to final analyze", async () => {
   await withImage(async (imagePath) => {
     const client = new FakeClient();
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
 
     const result = await locateWithRuntime(
       { attemptId: "attempt-1b", imagePath },
@@ -417,7 +432,7 @@ test("only model-emitted dynamic observations are retrieved and passed to final 
 test("null memory bypasses retrieval model turns, provider calls and memory prompt metadata", async () => {
   await withImage(async (imagePath) => {
     const client = new FakeClient();
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
     const result = await locateWithRuntime(
       { attemptId: "attempt-cold", imagePath },
       {
@@ -431,6 +446,7 @@ test("null memory bypasses retrieval model turns, provider calls and memory prom
 
     assert.equal(client.requests.filter((request) => request.tools !== undefined).length, 0);
     assert.deepEqual(memory.calls, []);
+    assert.equal(memory.rememberCalls, 0);
     assert.deepEqual(result.memoryGroups.map((group) => [group.feature.key, group.status, group.query]), [
       ["poles", "no_hit", null],
     ]);
@@ -447,7 +463,7 @@ test("final analyze sees the original image and stable feature groups without st
     const result = await locateWithRuntime(
       { attemptId: "attempt-2", imagePath },
       {
-        memory: new FakeReader(),
+        memory: new FakeWriter(),
         run,
         client,
         imageDataUri: async (path: string) => {
@@ -485,7 +501,7 @@ test("final analyze sees the original image and stable feature groups without st
 test("final analyze receives one failed group after two missing retrieval calls and keeps no-hit groups", async () => {
   await withImage(async (imagePath) => {
     const client = new FakeClient();
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
     client.missingAlwaysFor.add("plates");
     memory.emptyQueries.add("vegetation visual cue");
 
@@ -552,7 +568,7 @@ test("runtime caps retrieval attempts at two per feature and twenty-four model c
     const result = await locateWithRuntime(
       { attemptId: "attempt-2c", imagePath },
       {
-        memory: new FakeReader(),
+        memory: new FakeWriter(),
         run,
         client,
         maxToolAttemptsPerFeature: 3 as any,
@@ -583,7 +599,7 @@ test("runtime caps retrieval attempts at two per feature and twenty-four model c
 
 test("retrieve loop retries malformed, wrong-feature, multiple and invalid-args tool calls without Memory access on failed attempts", async () => {
   await withImage(async (imagePath) => {
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
     const client = new FakeClient();
     client.wrongFirstFor.add("plates");
     client.malformedFirstFor.add("poles");
@@ -641,7 +657,7 @@ test("retrieve loop retries malformed, wrong-feature, multiple and invalid-args 
 
 test("locate rethrows control-plane memory validation errors instead of recording memory_error", async () => {
   await withImage(async (imagePath) => {
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
     const client = new FakeClient();
     let observeCalls = 0;
     const invalidRun: MemoryRunConfig = {
@@ -683,7 +699,7 @@ test("locate rethrows control-plane memory validation errors instead of recordin
 test("observation failure still reaches analyze with the original image", async () => {
   await withImage(async (imagePath) => {
     const client = new FakeClient();
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
     const imagePaths: string[] = [];
 
     const result = await locateWithRuntime(
@@ -713,7 +729,7 @@ test("observation failure still reaches analyze with the original image", async 
 test("locate rethrows the original final analyze error when partial result cannot be attached", async () => {
   await withImage(async (imagePath) => {
     const client = new FakeClient();
-    const memory = new FakeReader();
+    const memory = new FakeWriter();
     const analyzeError = new Error("final analyze failed");
     Object.preventExtensions(analyzeError);
     client.analyzeErrors.push(analyzeError);

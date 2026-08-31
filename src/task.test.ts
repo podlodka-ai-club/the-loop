@@ -16,12 +16,12 @@ import {
   createFrozenMemorySnapshotBinding,
   createMemorySourceBinding,
   createMemorySourceResolver,
-  markFrozenMemoryReader,
   resolveMemoryBinding,
 } from "./memory/memory.ts";
 import type {
   Hint,
   LessonInput,
+  MemoryAdapterPromptPort,
   MemoryBinding,
   MemoryReader,
   MemoryWriter,
@@ -39,7 +39,7 @@ import {
   type ReflectEpisodeFunction,
 } from "./task-runtime.internal.ts";
 import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
-import { makeMemoryHitId, type FeatureMemoryGroup, type LocateResult, type MemoryHit, type MemoryRunConfig } from "./tools/memory.ts";
+import { makeIdempotencyKey, makeMemoryHitId, type FeatureMemoryGroup, type LocateResult, type MemoryHit, type MemoryRunConfig } from "./tools/memory.ts";
 import type { ReflectionEpisodeInput, ReflectionEpisodeResult } from "./reflect.ts";
 import { FileMemory, MEMORY_DIR } from "./memory/file/memory.ts";
 
@@ -81,6 +81,16 @@ class MemoryReaderSpy implements MemoryReader {
 }
 
 class MemoryWriterSpy extends MemoryReaderSpy implements MemoryWriter {
+  readonly promptPort: MemoryAdapterPromptPort = {
+    retrieve: (request) => {
+      if (request.query === undefined) throw new Error("memory retrieve query is required");
+      return this.recall(request.query, request.limit ?? 5);
+    },
+    store: (request) => {
+      if (request.lesson === undefined) throw new Error("memory store lesson is required");
+      return this.remember(request.lesson);
+    },
+  };
   readonly rememberInvocations: Array<{ lesson: LessonInput }> = [];
   result: MemoryWriteResult = { status: "stored", lessonId: "lesson-written" };
 
@@ -186,6 +196,24 @@ function locateWithHooks(hooks: LocateRuntimeHooks): LocateFunction {
   return (input, deps) => locateWithRuntime(input, { ...deps, ...hooks });
 }
 
+async function makeValidatedSnapshotFixture(): Promise<{ id: string; path: string }> {
+  const sourcePath = join(MEMORY_DIR, `task-snapshot-source-${randomUUID()}.jsonl`);
+  const source = new FileMemory(sourcePath, "top", false);
+  await source.remember({
+    content: "A validated fixture lesson.",
+    sourceAttemptId: "task-fixture",
+    featureKey: "poles",
+    memoryHitId: "task-fixture/poles/hit",
+    effect: "helped",
+    triggers: ["wooden poles"],
+    region: "BR",
+    idempotencyKey: makeIdempotencyKey("task-fixture", "poles", "task-fixture/poles/hit"),
+  });
+  const id = await source.snapshot();
+  await unlink(sourcePath);
+  return { id, path: join(MEMORY_DIR, `${id}.jsonl`) };
+}
+
 async function makeResolvedBinding(
   memory: MemoryWriter,
   config: MemoryRunConfig = run,
@@ -198,14 +226,11 @@ async function makeResolvedBinding(
     loadSnapshot: async (snapshotId) => createFrozenMemorySnapshotBinding({
       memoryRef: config.memoryRef!,
       snapshotId,
-      reader: markFrozenMemoryReader(
-        loadSnapshot === undefined
-          ? memory.loadSnapshot === undefined
-            ? memory
-            : await memory.loadSnapshot(snapshotId)
-          : await loadSnapshot(snapshotId),
-        snapshotId,
-      ),
+      reader: loadSnapshot === undefined
+        ? memory.loadSnapshot === undefined
+          ? (() => { throw new Error("test memory has no validated snapshot loader"); })()
+          : await memory.loadSnapshot(snapshotId)
+        : await loadSnapshot(snapshotId),
     }),
   });
   return resolveMemoryBinding(config, createMemorySourceResolver(source));
@@ -912,20 +937,27 @@ test("runTask feature-scoped path skips reflection for no-hit, skipped and faile
 
 test("runTask feature-scoped reflection is training-only and memory bindings expose reader-only evaluation and production", async () => {
   const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-memory-"));
+  const frozenSourceAttemptId = `attempt-frozen-${randomUUID()}`;
+  const frozenMemoryHitId = "attempt-frozen/poles/hit";
   const frozenLesson: LessonInput & { id: string; hits: number; wins: number } = {
     id: "lesson-0001",
     content: "Wooden crossarms match the frozen snapshot.",
-    sourceAttemptId: `attempt-frozen-${randomUUID()}`,
+    sourceAttemptId: frozenSourceAttemptId,
     featureKey: "poles",
-    memoryHitId: "attempt-frozen/poles/hit",
+    memoryHitId: frozenMemoryHitId,
     effect: "helped",
     triggers: ["wooden crossarms"],
     region: "BR",
-    idempotencyKey: `attempt-frozen:${randomUUID()}:hit`,
+    idempotencyKey: makeIdempotencyKey(
+      frozenSourceAttemptId,
+      "poles",
+      frozenMemoryHitId,
+    ),
     hits: 0,
     wins: 0,
   };
   let snapshotPath: string | null = null;
+  let fixtureSnapshotPath: string | null = null;
   try {
     const locateResult = (input: { attemptId: string; imagePath: string }): LocateResult => {
       const polesFeature: FeatureObservation = { key: "poles", text: "wooden poles" };
@@ -967,9 +999,11 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
     };
     const locateSpy: LocateFunction = async (input) => locateResult(input);
     const writer = new MemoryWriterSpy();
+    const fixture = await makeValidatedSnapshotFixture();
+    fixtureSnapshotPath = fixture.path;
 
     for (const scenario of [
-      { memoryRef: "file", mode: "evaluation" as const, snapshotId: "snapshot", readOnly: true },
+      { memoryRef: "file", mode: "evaluation" as const, snapshotId: fixture.id, readOnly: true },
       { memoryRef: "file", mode: "production" as const, snapshotId: null, readOnly: true },
     ]) {
       const reflect = new ReflectEpisodeSpy();
@@ -980,7 +1014,13 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
         truth: { latitude: 1, longitude: 2, country: "BR" },
       };
       const result = await runTaskWithRuntime(input, {
-        memoryBinding: await makeResolvedBinding(writer, { ...scenario, recallLimit: 5 }),
+        memoryBinding: await makeResolvedBinding(
+          writer,
+          { ...scenario, recallLimit: 5 },
+          scenario.mode === "evaluation"
+            ? async (id) => new FileMemory(join(MEMORY_DIR, `${id}.jsonl`), "top", true).loadSnapshot(id)
+            : undefined,
+        ),
         run: { ...scenario, recallLimit: 5 },
         locate: locateSpy,
         reflectEpisode: reflect.reflect,
@@ -1064,13 +1104,15 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
     assert.match(await readFile(snapshotPath, "utf8"), /Wooden crossarms match the frozen snapshot/);
   } finally {
     if (snapshotPath !== null) await unlink(snapshotPath).catch(() => undefined);
+    if (fixtureSnapshotPath !== null) await unlink(fixtureSnapshotPath).catch(() => undefined);
     await rm(memoryDir, { recursive: true, force: true });
   }
 });
 
 test("runTask evaluation and production strip writable methods from read-only adapter projection", async () => {
+  const fixture = await makeValidatedSnapshotFixture();
   for (const scenario of [
-    { memoryRef: "file", mode: "evaluation" as const, snapshotId: "snapshot-writable-projection", readOnly: true },
+    { memoryRef: "file", mode: "evaluation" as const, snapshotId: fixture.id, readOnly: true },
     { memoryRef: "file", mode: "production" as const, snapshotId: null, readOnly: true },
   ]) {
     const memory = new WritableProjectionMemorySpy();
@@ -1082,8 +1124,12 @@ test("runTask evaluation and production strip writable methods from read-only ad
       assert.equal("remember" in memory, false, scenario.mode);
       assert.equal("restore" in memory, false, scenario.mode);
       assert.deepEqual(await memory.recall("wooden poles", 5), [
-        { lessonId: "lesson-1-a", text: "first memory for wooden poles", effect: "helped" },
-        { lessonId: "lesson-1-b", text: "second memory for wooden poles", effect: "misleading" },
+        ...(scenario.mode === "evaluation"
+          ? [{ lessonId: "lesson-0001", text: "BR: A validated fixture lesson.", featureKey: "poles", effect: "helped" as const }]
+          : [
+              { lessonId: "lesson-1-a", text: "first memory for wooden poles", effect: "helped" as const },
+              { lessonId: "lesson-1-b", text: "second memory for wooden poles", effect: "misleading" as const },
+            ]),
       ]);
       return {
         attemptId: input.attemptId,
@@ -1110,7 +1156,13 @@ test("runTask evaluation and production strip writable methods from read-only ad
         truth: { latitude: 1, longitude: 2, country: "BR" },
       },
       {
-        memoryBinding: await makeResolvedBinding(memory, { ...scenario, recallLimit: 5 }),
+        memoryBinding: await makeResolvedBinding(
+          memory,
+          { ...scenario, recallLimit: 5 },
+          scenario.mode === "evaluation"
+            ? async (id) => new FileMemory(join(MEMORY_DIR, `${id}.jsonl`), "top", true).loadSnapshot(id)
+            : undefined,
+        ),
         run: { ...scenario, recallLimit: 5 },
         locate: locateSpy,
         reflectEpisode: new ReflectEpisodeSpy().reflect,
@@ -1121,16 +1173,19 @@ test("runTask evaluation and production strip writable methods from read-only ad
     assert.ok(receivedMemory, scenario.mode);
     assert.equal("remember" in receivedMemory, false, scenario.mode);
     assert.equal("restore" in receivedMemory, false, scenario.mode);
-    assert.deepEqual(memory.invocations, [{ query: "wooden poles", limit: 5 }], scenario.mode);
+    assert.deepEqual(
+      memory.invocations,
+      scenario.mode === "evaluation" ? [] : [{ query: "wooden poles", limit: 5 }],
+      scenario.mode,
+    );
     assert.deepEqual(memory.rememberInvocations, [], scenario.mode);
   }
+  await unlink(fixture.path).catch(() => undefined);
 });
 
 test("runTask evaluation uses the frozen MemoryBinding before feature-scoped retrieval", async () => {
   const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-direct-file-memory-"));
   const memoryPath = join(memoryDir, "live.jsonl");
-  const snapshotId = "snapshot-direct";
-  const snapshotPath = join(memoryDir, `${snapshotId}.jsonl`);
   const storedLesson: LessonInput & { id: string; hits: number; wins: number } = {
     id: "lesson-0001",
     content: "Wooden poles line up with the revealed country.",
@@ -1140,20 +1195,25 @@ test("runTask evaluation uses the frozen MemoryBinding before feature-scoped ret
     effect: "helped",
     triggers: ["wooden poles"],
     region: "BR",
-    idempotencyKey: "attempt-file-memory:poles:hit",
+    idempotencyKey: makeIdempotencyKey(
+      "attempt-file-memory",
+      "poles",
+      "attempt-file-memory/poles/hit",
+    ),
     hits: 0,
     wins: 0,
   };
   await writeFile(memoryPath, `${JSON.stringify(storedLesson)}\n`, "utf8");
-  await writeFile(snapshotPath, `${JSON.stringify(storedLesson)}\n`, "utf8");
   const client = new LocateClientSpy();
 
   try {
     const sourceMemory = new FileMemory(memoryPath, "top", false);
+    const snapshotId = await sourceMemory.snapshot();
+    const snapshotPath = join(MEMORY_DIR, `${snapshotId}.jsonl`);
     const binding = await makeResolvedBinding(
       sourceMemory,
       { memoryRef: "file", mode: "evaluation", snapshotId, readOnly: true, recallLimit: 5 },
-      async (requestedSnapshotId) => new FileMemory(join(memoryDir, `${requestedSnapshotId}.jsonl`), "top", true),
+      async (requestedSnapshotId) => sourceMemory.loadSnapshot(requestedSnapshotId),
     );
     const result = await runTaskWithRuntime(
       {
@@ -1181,7 +1241,57 @@ test("runTask evaluation uses the frozen MemoryBinding before feature-scoped ret
       [["poles", "hits", 1]],
     );
     assert.equal(await readFile(memoryPath, "utf8"), `${JSON.stringify(storedLesson)}\n`);
+    await unlink(snapshotPath).catch(() => undefined);
   } finally {
+    await rm(memoryDir, { recursive: true, force: true });
+  }
+});
+
+test("locateWithRuntime direct evaluation preserves the FileMemory loadSnapshot receiver", async () => {
+  const memoryDir = await mkdtemp(join(tmpdir(), "loci-locate-direct-evaluation-"));
+  const memoryPath = join(memoryDir, "live.jsonl");
+  const lesson: LessonInput & { id: string; hits: number; wins: number } = {
+    id: "lesson-0001",
+    content: "Wooden poles are a useful regional cue.",
+    sourceAttemptId: "attempt-direct-evaluation",
+    featureKey: "poles",
+    memoryHitId: "attempt-direct-evaluation/poles/hit",
+    effect: "helped",
+    triggers: ["wooden poles"],
+    region: "BR",
+    idempotencyKey: makeIdempotencyKey(
+      "attempt-direct-evaluation",
+      "poles",
+      "attempt-direct-evaluation/poles/hit",
+    ),
+    hits: 0,
+    wins: 0,
+  };
+  await writeFile(memoryPath, `${JSON.stringify(lesson)}\n`, "utf8");
+  let snapshotPath: string | null = null;
+  try {
+    const memory = new FileMemory(memoryPath, "top", false);
+    const snapshotId = await memory.snapshot();
+    snapshotPath = join(MEMORY_DIR, `${snapshotId}.jsonl`);
+    const client = new LocateClientSpy();
+    const result = await locateWithRuntime(
+      { attemptId: "attempt-direct-evaluation", imagePath: "direct-evaluation.jpg" },
+      {
+        memory,
+        run: { memoryRef: "file", mode: "evaluation", snapshotId, readOnly: true, recallLimit: 5 },
+        client,
+        imageDataUri: async () => "data:image/jpeg;base64,AA==",
+        observe: async () => observed({ poles: { text: "wooden poles" } }),
+      },
+    );
+
+    assert.deepEqual(
+      result.memoryGroups.map((group) => [group.feature.key, group.status, group.hits.length]),
+      [["poles", "hits", 1]],
+    );
+    assert.equal(client.invocations.length, 2);
+  } finally {
+    if (snapshotPath !== null) await unlink(snapshotPath).catch(() => undefined);
     await rm(memoryDir, { recursive: true, force: true });
   }
 });
@@ -1248,4 +1358,27 @@ test("runTask legacy path rejects a feature-scoped MemoryReader when deps.run is
     () => runTask({ imageId: "image-legacy-reader", imagePath: "legacy-reader.jpg" }, deps),
     /legacy runTask path requires LegacyMemory; pass deps\.run for feature-scoped MemoryReader/,
   );
+});
+
+test("runTask legacy recall failures become structured TaskResult values", async () => {
+  const result = await runTask(
+    { imageId: "image-legacy-memory-error", imagePath: "legacy-memory-error.jpg" },
+    {
+      memory: {
+        recall: async () => {
+          throw new Error("provider unavailable");
+        },
+        remember: async () => ({ status: "stored", lessonId: "unused" }),
+        snapshot: async () => "unused",
+        restore: async () => undefined,
+      },
+    },
+  );
+
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("expected structured memory failure");
+  assert.equal(result.failure, "unavailable");
+  assert.equal(result.message, "provider unavailable");
+  assert.deepEqual(result.hints, []);
+  assert.equal(result.attemptMetrics.toolCalls, 0);
 });

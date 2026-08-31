@@ -35,6 +35,8 @@ export type AttemptMetricsInput = {
   memoryGroups: readonly FeatureMemoryGroup[];
   episodes: readonly EpisodeTrace[];
   events?: readonly ToolEvent[];
+  /** Successful legacy recall/store operations when no dynamic events exist. */
+  successfulMemoryCalls?: number;
   validOutput: boolean;
   latencyMs: number;
   guess?: Guess;
@@ -42,6 +44,27 @@ export type AttemptMetricsInput = {
   fixture?: readonly RetrievalFixtureCase[];
   legacyGlobalProviderIds?: readonly string[];
 };
+
+function isSuccessfulMemoryToolEvent(event: ToolEvent): boolean {
+  // A provider-backed call must carry an explicit binding reference. Both
+  // `null` and the legacy omitted field are bookkeeping/ambiguous events and
+  // must not inflate the memory-call metric.
+  if (typeof event.memoryRef !== "string" || event.memoryRef.trim() === "") return false;
+  if (event.operation === "memory_retrieve") {
+    return event.status === "hits" || event.status === "no_hit";
+  }
+  if (event.operation === "memory_store") {
+    return event.status === "stored" || event.status === "already_stored";
+  }
+  return false;
+}
+
+function successfulMemoryCallsWithoutEvents(input: AttemptMetricsInput): number {
+  // Without events there is no binding provenance to distinguish a real
+  // provider operation from synthetic/no-memory groups. Legacy callers must
+  // opt in with the explicit successful call count.
+  return input.successfulMemoryCalls ?? 0;
+}
 
 export type BenchmarkExperimentMetadata = {
   model: string;
@@ -226,7 +249,12 @@ export function buildAttemptMetrics(input: AttemptMetricsInput): AttemptMetrics 
     featureScopedRareCueHitRate: hitRate(featureScopedMetrics, "rare"),
     geoscore,
     validOutput: input.validOutput,
-    toolCalls: input.events?.length ?? input.memoryGroups.length + input.episodes.length,
+    // Count only successful provider-backed memory operations. Failed retries,
+    // budget outcomes and `memoryRef: null` synthetic events are bookkeeping,
+    // not successful memory calls.
+    toolCalls: input.events === undefined
+      ? successfulMemoryCallsWithoutEvents(input)
+      : input.events.filter(isSuccessfulMemoryToolEvent).length,
     latencyMs: Math.max(0, Math.floor(input.latencyMs)),
   };
 }

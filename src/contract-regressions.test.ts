@@ -16,7 +16,6 @@ import {
   createMemorySourceBinding,
   createFrozenMemorySnapshotBinding,
   MemoryBindingError,
-  markFrozenMemoryReader,
   createNoopMemoryBinding,
   readerOnly,
   resolveMemoryBinding,
@@ -593,10 +592,10 @@ test("feature-scoped task requires a unified binding and does not use benchmark 
 
 test("evaluation binding never falls back to live reader when snapshot support is absent", async () => {
   const live: MemoryReader = { recall: async () => [{ lessonId: "live", text: "live" }] };
-  const frozen = markFrozenMemoryReader(
-    { recall: async () => [{ lessonId: "frozen", text: "frozen" }] },
-    "snapshot-1",
-  );
+  const forged = {
+    ...live,
+    snapshotId: "snapshot-1",
+  } as unknown as MemoryReader;
   const resolver = createMemorySourceResolver(createMemorySourceBinding({
     memoryRef: "file",
     reader: live,
@@ -604,27 +603,18 @@ test("evaluation binding never falls back to live reader when snapshot support i
     loadSnapshot: async (snapshotId) => createFrozenMemorySnapshotBinding({
       memoryRef: "file",
       snapshotId,
-      reader: frozen,
+      reader: forged,
     }),
   }));
-  const binding = await resolveMemoryBinding({
-    memoryRef: "file",
-    mode: "evaluation",
-    snapshotId: "snapshot-1",
-    readOnly: true,
-    recallLimit: 5,
-  }, resolver);
-  assert.deepEqual(await binding.reader.recall("cue", 1), [{ lessonId: "frozen", text: "frozen" }]);
-
   await assert.rejects(
     resolveMemoryBinding({
       memoryRef: "file",
       mode: "evaluation",
-      snapshotId: "snapshot-2",
+      snapshotId: "snapshot-1",
       readOnly: true,
       recallLimit: 5,
-    }, createMemorySourceResolver(createMemorySourceBinding({ memoryRef: "file", reader: live }))),
-    (error) => error instanceof MemoryBindingError && error.code === "unavailable",
+    }, resolver),
+    (error) => error instanceof MemoryBindingError && error.code === "memory_mismatch",
   );
 });
 

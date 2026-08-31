@@ -8,6 +8,10 @@
  */
 import type { FeatureKey } from "../observe.ts";
 import { loadPromptMetadata } from "../promts.ts";
+import {
+  isTrustedFrozenMemoryReader,
+  trustedFrozenSnapshotId,
+} from "./file/memory.ts";
 
 /** Default number of lessons a single recall may put into the prompt. */
 export type RecallLimit = 1 | 2 | 3 | 4 | 5;
@@ -33,6 +37,9 @@ export type ReflectionEffect =
   | "insufficient";
 
 export type MemoryOperation = "retrieve" | "store";
+
+/** Snapshot validation mode. Dynamic snapshots require complete provenance. */
+export type MemorySnapshotMode = "dynamic" | "legacy";
 
 export type MemoryPrompt = {
   operation: MemoryOperation;
@@ -270,45 +277,17 @@ export interface MemoryReader {
    */
   asReadOnlyReader?(): MemoryReader;
   /** Optional frozen-reader factory used by evaluation bindings. */
-  loadSnapshot?(snapshotId: string): Promise<MemoryReader>;
+  loadSnapshot?(snapshotId: string, mode?: MemorySnapshotMode): Promise<MemoryReader>;
   /** Feature-scoped dispatcher path: one query for one active feature. */
   recall(query: string, limit: number, prompt?: MemoryPrompt): Promise<Hint[]>;
 }
 
-type FrozenMemoryReaderMetadata = {
-  snapshotId: string;
-  readOnly: true;
-};
-
-const FROZEN_MEMORY_READERS = new WeakSet<object>();
-const FROZEN_MEMORY_READER_METADATA = new WeakMap<object, FrozenMemoryReaderMetadata>();
-
-/**
- * Marks a backend-created reader as the immutable reader for one snapshot.
- * The runtime brand is intentionally not structural: a caller cannot turn a
- * live reader into an evaluation reader by merely adding `snapshotId` fields.
- */
-export function markFrozenMemoryReader(reader: MemoryReader, snapshotId: string): MemoryReader {
-  if (typeof reader !== "object" || reader === null || typeof reader.recall !== "function") {
-    throw new MemoryBindingError("memory_mismatch", "frozen snapshot reader is invalid");
-  }
-  if (snapshotId.trim() === "") {
-    throw new MemoryBindingError("memory_not_found", "frozen snapshot id is empty");
-  }
-  FROZEN_MEMORY_READERS.add(reader);
-  FROZEN_MEMORY_READER_METADATA.set(reader, { snapshotId, readOnly: true });
-  return reader;
-}
-
 export function isFrozenMemoryReader(reader: unknown, snapshotId: string): reader is MemoryReader {
-  if (typeof reader !== "object" || reader === null || !FROZEN_MEMORY_READERS.has(reader)) return false;
-  const metadata = FROZEN_MEMORY_READER_METADATA.get(reader);
-  return metadata?.snapshotId === snapshotId && metadata.readOnly === true;
+  return isTrustedFrozenMemoryReader(reader, snapshotId);
 }
 
 function frozenReaderSnapshotId(reader: unknown): string | null {
-  if (typeof reader !== "object" || reader === null || !FROZEN_MEMORY_READERS.has(reader)) return null;
-  return FROZEN_MEMORY_READER_METADATA.get(reader)?.snapshotId ?? null;
+  return trustedFrozenSnapshotId(reader);
 }
 
 /**
@@ -364,7 +343,7 @@ export async function rememberWithMemoryPrompt(
 
 export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
   const frozenSnapshotId = frozenReaderSnapshotId(reader);
-  const scoped = reader.featureScope === "global" ? reader.asFeatureScopedReader?.() : reader;
+  const scoped = reader.asFeatureScopedReader?.() ?? reader;
   if (scoped === undefined || scoped.featureScope === "global") {
     throw new MemoryBindingError(
       "memory_mismatch",
@@ -376,6 +355,24 @@ export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
       "memory_mismatch",
       "feature-scoped reader projection dropped the adapter prompt port",
     );
+  }
+  if (frozenSnapshotId !== null && !isFrozenMemoryReader(scoped, frozenSnapshotId)) {
+    throw new MemoryBindingError(
+      "memory_mismatch",
+      "feature-scoped reader projection dropped the frozen snapshot identity",
+    );
+  }
+  if (frozenSnapshotId !== null) {
+    if (scoped.promptPort === undefined) {
+      throw new MemoryBindingError(
+        "memory_mismatch",
+        "frozen feature-scoped reader has no adapter prompt port",
+      );
+    }
+    // A trusted frozen projection is constructed by the backend's snapshot
+    // loader. Returning it directly preserves its module-private capability;
+    // wrapping it here would create an untrusted reader.
+    return scoped;
   }
   const wrapped: MemoryReader = {
     featureScope: scoped.featureScope,
@@ -392,7 +389,6 @@ export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
         retrieve: (request) => adapterPromptPort.retrieve(request),
         store: (request) => adapterPromptPort.store(request),
       };
-  if (frozenSnapshotId !== null) markFrozenMemoryReader(wrapped, frozenSnapshotId);
   return wrapped;
 }
 
@@ -404,6 +400,23 @@ export function readerOnly(memory: MemoryReader): MemoryReader {
       "memory_mismatch",
       "read-only reader projection dropped the adapter prompt port",
     );
+  }
+  if (frozenSnapshotId !== null && !isFrozenMemoryReader(source, frozenSnapshotId)) {
+    throw new MemoryBindingError(
+      "memory_mismatch",
+      "read-only reader projection dropped the frozen snapshot identity",
+    );
+  }
+  if (frozenSnapshotId !== null) {
+    if (source.promptPort === undefined) {
+      throw new MemoryBindingError(
+        "memory_mismatch",
+        "frozen read-only reader has no adapter prompt port",
+      );
+    }
+    // The backend returns a read-only frozen projection with the capability
+    // already attached. Do not replace it with a structural wrapper.
+    return source;
   }
   const reader: MemoryReader =
     source.featureScope === undefined
@@ -417,7 +430,8 @@ export function readerOnly(memory: MemoryReader): MemoryReader {
     reader.asFeatureScopedReader = () => readerOnly(source.asFeatureScopedReader?.() ?? source);
   }
   if (source.loadSnapshot !== undefined) {
-    reader.loadSnapshot = async (snapshotId: string) => readerOnly(await source.loadSnapshot!(snapshotId));
+    reader.loadSnapshot = async (snapshotId: string, mode?: MemorySnapshotMode) =>
+      readerOnly(await source.loadSnapshot!(snapshotId, mode));
   }
   const sourcePromptPort = source.promptPort;
   reader.promptPort = sourcePromptPort === undefined
@@ -428,23 +442,23 @@ export function readerOnly(memory: MemoryReader): MemoryReader {
           throw new MemoryWriteError("write_failed", "reader-only memory cannot store lessons");
         },
       };
-  if (frozenSnapshotId !== null) markFrozenMemoryReader(reader, frozenSnapshotId);
   return reader;
 }
 
 export interface MemoryWriter extends MemoryReader {
   remember(lesson: LessonInput, prompt?: MemoryPrompt): Promise<MemoryWriteResult>;
   /** Freezes the current store to its own file and returns that file's id. */
-  snapshot(): Promise<string>;
+  snapshot(mode?: MemorySnapshotMode): Promise<string>;
   /** Replaces the working store with a frozen one. */
   restore(id: string): Promise<void>;
 }
 
 export function isMemoryWriter(value: unknown): value is MemoryWriter {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Partial<MemoryWriter>;
+  const candidate = value as Partial<MemoryWriter> & { readOnly?: unknown };
   return (
     typeof candidate.recall === "function" &&
+    candidate.readOnly !== true &&
     typeof candidate.remember === "function" &&
     typeof candidate.snapshot === "function" &&
     typeof candidate.restore === "function"
@@ -544,7 +558,7 @@ function markFrozenSnapshotBinding(binding: MemorySnapshotBinding): MemorySnapsh
     readOnly: true,
     frozen: true,
   });
-  return binding;
+  return Object.freeze(binding);
 }
 
 function validateFrozenSnapshotBinding(
@@ -603,7 +617,12 @@ export function createFrozenMemorySnapshotBinding(input: {
     );
   }
   const reader = readerOnly(bindFeatureScopedReader(input.reader));
-  markFrozenMemoryReader(reader, input.snapshotId);
+  if (!isFrozenMemoryReader(reader, input.snapshotId)) {
+    throw new MemoryBindingError(
+      "memory_mismatch",
+      "frozen snapshot projection did not preserve its snapshot identity",
+    );
+  }
   if (reader.promptPort === undefined) {
     throw new MemoryBindingError("memory_mismatch", "frozen snapshot reader has no prompt boundary");
   }
@@ -659,17 +678,28 @@ export function createMemorySourceBinding(input: MemorySourceBindingInput): Memo
   const reader = bindFeatureScopedReader(memory);
   const adapterPromptPort = memory.promptPort ?? fallbackPromptPort(memory, writer);
   const readerPort = reader.promptPort;
-  const fallbackReaderPort = readerPromptPort(reader);
-  const promptPort: MemoryAdapterPromptPort = {
-    retrieve: (request) => readerPort === undefined
-      ? fallbackReaderPort.retrieve(request)
-      : readerPort.retrieve(request),
-    store: (request) => adapterPromptPort.store(request),
-  };
+  const promptPort = frozenReaderSnapshotId(memory) !== null
+    ? (() => {
+        if (readerPort === undefined) {
+          throw new MemoryBindingError("memory_mismatch", "frozen memory reader has no prompt boundary");
+        }
+        // A trusted frozen reader owns an immutable prompt port. Replacing it
+        // would invalidate the module-private capability before evaluation.
+        return readerPort;
+      })()
+    : (() => {
+        const fallbackReaderPort = readerPromptPort(reader);
+        return {
+          retrieve: (request: MemoryBindingRequest) => readerPort === undefined
+            ? fallbackReaderPort.retrieve(request)
+            : readerPort.retrieve(request),
+          store: (request: MemoryBindingRequest) => adapterPromptPort.store(request),
+        } satisfies MemoryAdapterPromptPort;
+      })();
   if (typeof promptPort.retrieve !== "function" || typeof promptPort.store !== "function") {
     throw new Error("memory adapter prompt boundary is invalid");
   }
-  reader.promptPort = promptPort;
+  if (frozenReaderSnapshotId(memory) === null) reader.promptPort = promptPort;
   const binding: MemorySourceBinding = {
     identity: Symbol(`memory-binding:${input.memoryRef}`),
     memoryRef: input.memoryRef,
@@ -826,7 +856,7 @@ export interface LegacyMemory {
   recall(features: string[], limit?: number): Promise<Hint[]>;
   remember(lesson: LegacyLessonInput): Promise<MemoryWriteResult | void>;
   /** Freezes the current store to its own file and returns that file's id. */
-  snapshot(): Promise<string>;
+  snapshot(mode?: MemorySnapshotMode): Promise<string>;
   /** Replaces the working store with a frozen one. */
   restore(id: string): Promise<void>;
 }

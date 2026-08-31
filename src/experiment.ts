@@ -66,10 +66,11 @@ const backend = parseBackend(readCliOption("backend", "file"));
 const recallFlag = recallMode;
 const legacySelection =
   flow === "legacy"
-    ? selectMemory({
+    ? await selectMemory({
         backend: memoryMode === "cold" ? "file" : backend,
         snapshotId: memoryMode === "cold" ? "" : snapshotId,
         recall: recallFlag,
+        snapshotMode: "legacy",
       })
     : null;
 const featureScopedSelection =

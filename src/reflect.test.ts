@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import OpenAI from "openai";
 import {
@@ -20,10 +23,10 @@ import {
   createFrozenMemorySnapshotBinding,
   createMemorySourceBinding,
   createMemorySourceResolver,
-  markFrozenMemoryReader,
   MemoryWriteError,
   resolveMemoryBinding,
 } from "./memory/memory.ts";
+import { FileMemory, MEMORY_DIR } from "./memory/file/memory.ts";
 import {
   makeIdempotencyKey,
   makeMemoryHitId,
@@ -181,11 +184,6 @@ async function makeResolvedBinding(
   const source = createMemorySourceBinding({
     memoryRef: config.memoryRef,
     memory: writer,
-    loadSnapshot: async (snapshotId) => createFrozenMemorySnapshotBinding({
-      memoryRef: config.memoryRef!,
-      snapshotId,
-      reader: markFrozenMemoryReader(writer, snapshotId),
-    }),
   });
   return resolveMemoryBinding(config, createMemorySourceResolver(source));
 }
@@ -429,30 +427,60 @@ test("reflectEpisode keeps reflection failure distinct from write failure and en
 });
 
 test("reflectEpisode preflights writable training runtime before image/model access", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "loci-reflect-evaluation-"));
+  const sourcePath = join(MEMORY_DIR, `reflect-snapshot-source-${Date.now()}.jsonl`);
+  const source = new FileMemory(sourcePath, "top", false);
+  await source.remember({
+    content: "A validated reflection fixture.",
+    sourceAttemptId: "reflect-fixture",
+    featureKey: "road_markings",
+    memoryHitId: "reflect-fixture/road_markings/hit",
+    effect: "helped",
+    triggers: ["road marking"],
+    region: "BR",
+    idempotencyKey: makeIdempotencyKey(
+      "reflect-fixture",
+      "road_markings",
+      "reflect-fixture/road_markings/hit",
+    ),
+  });
+  const snapshotId = await source.snapshot();
+  const snapshotPath = join(MEMORY_DIR, `${snapshotId}.jsonl`);
   const writer = new WriterSpy();
   const client = new ReflectClientSpy();
+  try {
+    const binding = await resolveMemoryBinding(
+      { memoryRef: "file", mode: "evaluation", snapshotId, readOnly: true, recallLimit: 5 },
+      createMemorySourceResolver(createMemorySourceBinding({
+        memoryRef: "file",
+        memory: source,
+        loadSnapshot: async (id) => createFrozenMemorySnapshotBinding({
+          memoryRef: "file",
+          snapshotId: id,
+          reader: await source.loadSnapshot(id),
+        }),
+      })),
+    );
+    const result = await reflectEpisodeWithRuntime(makeInput(), {
+      memoryBinding: binding,
+      run: { memoryRef: "file", mode: "evaluation", snapshotId, readOnly: true, recallLimit: 5 },
+      client,
+      imageDataUri: async () => assert.fail("image must not be loaded for read-only reflection"),
+    });
 
-  const result = await reflectEpisodeWithRuntime(makeInput(), {
-    memoryBinding: await makeResolvedBinding(writer, {
-      memoryRef: "file",
-      mode: "evaluation",
-      snapshotId: "snapshot-1",
-      readOnly: true,
-      recallLimit: 5,
-    }),
-    run: { memoryRef: "file", mode: "evaluation", snapshotId: "snapshot-1", readOnly: true, recallLimit: 5 },
-    client,
-    imageDataUri: async () => assert.fail("image must not be loaded for read-only reflection"),
-  });
-
-  assert.deepEqual(result, {
-    status: "reflection_failed",
-    effect: null,
-    lessonId: null,
-    failure: "invalid_tool_arguments",
-  });
-  assert.deepEqual(client.invocations, []);
-  assert.deepEqual(writer.invocations, []);
+    assert.deepEqual(result, {
+      status: "reflection_failed",
+      effect: null,
+      lessonId: null,
+      failure: "invalid_tool_arguments",
+    });
+    assert.deepEqual(client.invocations, []);
+    assert.deepEqual(writer.invocations, []);
+  } finally {
+    await unlink(snapshotPath).catch(() => undefined);
+    await unlink(sourcePath).catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
 
 });
 

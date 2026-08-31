@@ -9,11 +9,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, readFile, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { dirname, join } from "node:path";
+import { isNormalizedFeatureKey } from "../../observe.ts";
+import { makeMemoryIdempotencyKey } from "../provenance.ts";
 import {
   isSharedMemoryPrompt,
   MemoryBindingError,
   MemoryWriteError,
-  markFrozenMemoryReader,
   RECALL_LIMIT,
   renderHint,
   sharedMemoryPrompt,
@@ -32,12 +33,60 @@ import type {
   MemoryWriteResult,
   MemoryAdapterPromptPort,
   MemoryPrompt,
+  MemorySnapshotMode,
 } from "../memory.ts";
 
 export const MEMORY_DIR = process.env.MEMORY_DIR ?? join("data", "memory");
 const SNAPSHOT_ID_PATTERN = /^[a-f0-9]{12}$/;
 const LOCK_WAIT_MS = 5;
 const LOCK_HEARTBEAT_MS = 5_000;
+
+function currentMemoryDir(): string {
+  // Tests and embedded callers may set MEMORY_DIR after module loading. Keep
+  // the exported legacy constant for compatibility, but resolve filesystem
+  // operations against the current process configuration.
+  return process.env.MEMORY_DIR ?? MEMORY_DIR;
+}
+
+type FrozenReaderMetadata = {
+  snapshotId: string;
+  recall: MemoryReader["recall"];
+  promptPort: MemoryAdapterPromptPort | undefined;
+};
+
+// The marker is deliberately private to this module. There is no exported
+// token or marking function, so importing an internal helper cannot turn a live
+// reader (or arbitrary lesson array) into a frozen reader.
+const TRUSTED_FROZEN_READERS = new WeakSet<object>();
+const TRUSTED_FROZEN_METADATA = new WeakMap<object, FrozenReaderMetadata>();
+
+function markTrustedFrozenReader(reader: MemoryReader, snapshotId: string): MemoryReader {
+  if (reader.promptPort !== undefined) Object.freeze(reader.promptPort);
+  TRUSTED_FROZEN_READERS.add(reader);
+  TRUSTED_FROZEN_METADATA.set(reader, {
+    snapshotId,
+    recall: reader.recall,
+    promptPort: reader.promptPort,
+  });
+  return reader;
+}
+
+export function isTrustedFrozenMemoryReader(
+  reader: unknown,
+  snapshotId: string,
+): reader is MemoryReader {
+  if (typeof reader !== "object" || reader === null || !TRUSTED_FROZEN_READERS.has(reader)) return false;
+  const metadata = TRUSTED_FROZEN_METADATA.get(reader);
+  const candidate = reader as MemoryReader;
+  return metadata?.snapshotId === snapshotId &&
+    metadata.recall === candidate.recall &&
+    metadata.promptPort === candidate.promptPort;
+}
+
+export function trustedFrozenSnapshotId(reader: unknown): string | null {
+  if (typeof reader !== "object" || reader === null || !TRUSTED_FROZEN_READERS.has(reader)) return null;
+  return TRUSTED_FROZEN_METADATA.get(reader)?.snapshotId ?? null;
+}
 
 type LockOwner = {
   pid: number;
@@ -144,6 +193,7 @@ function normalizeRecallInput(value: string | string[]): string[] {
 }
 
 type StoredLesson = Lesson | LegacyLesson;
+export type SnapshotLesson = StoredLesson;
 
 function parseLessons(text: string): StoredLesson[] {
   const lessons: StoredLesson[] = [];
@@ -152,6 +202,188 @@ function parseLessons(text: string): StoredLesson[] {
     lessons.push(JSON.parse(line) as StoredLesson);
   }
   return lessons;
+}
+
+const SNAPSHOT_REQUIRED_KEYS = [
+  "id",
+  "content",
+  "sourceAttemptId",
+  "triggers",
+  "region",
+  "hits",
+  "wins",
+] as const;
+const SNAPSHOT_PROVENANCE_KEYS = ["featureKey", "memoryHitId", "effect", "idempotencyKey"] as const;
+const SNAPSHOT_OPTIONAL_KEYS = SNAPSHOT_PROVENANCE_KEYS;
+const SNAPSHOT_EFFECTS = ["helped", "irrelevant", "misleading", "insufficient"] as const;
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function unicodeCodePointLength(value: string): number {
+  return [...value].length;
+}
+
+function sentenceCount(content: string): number {
+  const segments = content.match(/[^.!?]+(?:[.!?]+(?:\s+|$)|$)/g) ?? [];
+  return segments.map((segment) => segment.trim()).filter((segment) => segment !== "").length;
+}
+
+function hasAllSnapshotProvenance(record: Record<string, unknown>): boolean {
+  return SNAPSHOT_PROVENANCE_KEYS.every((key) => Object.hasOwn(record, key));
+}
+
+function validateSnapshotLesson(
+  value: unknown,
+  index: number,
+  mode: MemorySnapshotMode,
+): asserts value is StoredLesson {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`snapshot record ${index + 1} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const allowedKeys = new Set<string>([...SNAPSHOT_REQUIRED_KEYS, ...SNAPSHOT_OPTIONAL_KEYS]);
+  for (const key of Object.keys(record)) {
+    if (!allowedKeys.has(key)) throw new Error(`snapshot record ${index + 1} has unknown field ${key}`);
+  }
+  for (const key of SNAPSHOT_REQUIRED_KEYS) {
+    if (!Object.hasOwn(record, key)) throw new Error(`snapshot record ${index + 1} is missing ${key}`);
+  }
+  if (!isNonEmptyString(record.id)) throw new Error(`snapshot record ${index + 1}.id is invalid`);
+  if (
+    !isNonEmptyString(record.content) ||
+    unicodeCodePointLength(record.content) > 2_000 ||
+    sentenceCount(record.content) > 2
+  ) {
+    throw new Error(`snapshot record ${index + 1}.content is invalid`);
+  }
+  if (!isNonEmptyString(record.sourceAttemptId)) {
+    throw new Error(`snapshot record ${index + 1}.sourceAttemptId is invalid`);
+  }
+  if (
+    !Array.isArray(record.triggers) ||
+    record.triggers.length < 1 ||
+    record.triggers.length > 8 ||
+    record.triggers.some(
+      (trigger) =>
+        !isNonEmptyString(trigger) ||
+        unicodeCodePointLength(trigger) > 128,
+    )
+  ) {
+    throw new Error(`snapshot record ${index + 1}.triggers is invalid`);
+  }
+  if (typeof record.region !== "string" || !/^[A-Z]{2}$/.test(record.region)) {
+    throw new Error(`snapshot record ${index + 1}.region is invalid`);
+  }
+  if (!Number.isSafeInteger(record.hits) || (record.hits as number) < 0) {
+    throw new Error(`snapshot record ${index + 1}.hits is invalid`);
+  }
+  if (!Number.isSafeInteger(record.wins) || (record.wins as number) < 0) {
+    throw new Error(`snapshot record ${index + 1}.wins is invalid`);
+  }
+  const hasProvenance = hasAllSnapshotProvenance(record);
+  if (mode === "dynamic" && !hasProvenance) {
+    throw new Error(`snapshot record ${index + 1} is missing dynamic provenance`);
+  }
+  if (mode === "legacy" && Object.keys(record).some((key) => SNAPSHOT_PROVENANCE_KEYS.includes(key as typeof SNAPSHOT_PROVENANCE_KEYS[number])) && !hasProvenance) {
+    throw new Error(`snapshot record ${index + 1} has partial provenance`);
+  }
+  if (Object.hasOwn(record, "featureKey") && !isNormalizedFeatureKey(record.featureKey)) {
+    throw new Error(`snapshot record ${index + 1}.featureKey is invalid`);
+  }
+  for (const key of ["memoryHitId", "idempotencyKey"] as const) {
+    if (Object.hasOwn(record, key) && !isNonEmptyString(record[key])) {
+      throw new Error(`snapshot record ${index + 1}.${key} is invalid`);
+    }
+  }
+  if (
+    Object.hasOwn(record, "effect") &&
+    !(SNAPSHOT_EFFECTS as readonly unknown[]).includes(record.effect)
+  ) {
+    throw new Error(`snapshot record ${index + 1}.effect is invalid`);
+  }
+  if (mode === "dynamic" && hasProvenance) {
+    if (record.idempotencyKey !== makeMemoryIdempotencyKey(
+      record.sourceAttemptId as string,
+      record.featureKey as string,
+      record.memoryHitId as string,
+    )) {
+      throw new Error(`snapshot record ${index + 1}.idempotencyKey is not deterministic`);
+    }
+  }
+}
+
+function snapshotContentHash(text: string): string {
+  // snapshot() hashes the JSONL body without its single terminal newline. An
+  // extra newline is intentionally left in the hashed content and therefore
+  // fails integrity validation instead of being silently normalized away.
+  const body = text.endsWith("\n") ? text.slice(0, -1) : text;
+  return createHash("sha256").update(body).digest("hex").slice(0, 12);
+}
+
+function validateSnapshotContent(snapshotId: string, text: string, mode: MemorySnapshotMode): StoredLesson[] {
+  const lessons = parseLessons(text);
+  const ids = new Set<string>();
+  const idempotencyKeys = new Set<string>();
+  lessons.forEach((lesson, index) => {
+    validateSnapshotLesson(lesson, index, mode);
+    if (ids.has(lesson.id)) throw new Error(`snapshot contains duplicate lesson id ${lesson.id}`);
+    ids.add(lesson.id);
+    if (lesson.idempotencyKey !== undefined) {
+      if (idempotencyKeys.has(lesson.idempotencyKey)) {
+        throw new Error(`snapshot contains duplicate idempotency key ${lesson.idempotencyKey}`);
+      }
+      idempotencyKeys.add(lesson.idempotencyKey);
+    }
+  });
+  const actualId = snapshotContentHash(text);
+  if (actualId !== snapshotId) {
+    throw new Error(`snapshot content hash ${actualId} does not match requested id ${snapshotId}`);
+  }
+  return lessons;
+}
+
+function freezeSnapshotLessons(lessons: readonly StoredLesson[]): readonly StoredLesson[] {
+  const frozen = lessons.map((lesson) => Object.freeze({
+    ...lesson,
+    // The public lesson type predates immutable snapshots and uses a mutable
+    // array. Keep the runtime array frozen while retaining that compatibility
+    // type at the adapter boundary.
+    triggers: Object.freeze([...lesson.triggers]) as unknown as string[],
+  }));
+  return Object.freeze(frozen) as unknown as readonly StoredLesson[];
+}
+
+async function readValidatedSnapshot(
+  snapshotId: string,
+  snapshotPath: string,
+  mode: MemorySnapshotMode,
+): Promise<StoredLesson[]> {
+  let text: string;
+  try {
+    text = await readFile(snapshotPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new MemoryBindingError("memory_not_found", `memory snapshot ${snapshotId} does not exist`, { cause: error });
+    }
+    throw new MemoryBindingError("unavailable", `memory snapshot ${snapshotId} is unavailable`, { cause: error });
+  }
+  try {
+    return validateSnapshotContent(snapshotId, text, mode);
+  } catch (error) {
+    throw new MemoryBindingError("memory_mismatch", `memory snapshot ${snapshotId} is invalid`, { cause: error });
+  }
+}
+
+export async function loadValidatedSnapshotLessons(
+  snapshotId: string,
+  mode: MemorySnapshotMode = "dynamic",
+): Promise<SnapshotLesson[]> {
+  if (!SNAPSHOT_ID_PATTERN.test(snapshotId)) {
+    throw new MemoryBindingError("memory_not_found", `invalid memory snapshot id ${snapshotId}`);
+  }
+  return readValidatedSnapshot(snapshotId, join(currentMemoryDir(), `${snapshotId}.jsonl`), mode);
 }
 
 /**
@@ -182,11 +414,18 @@ export class FileMemory implements Memory, LegacyMemory {
   /** A read-only store never writes back, not even usage counters. */
   readonly readOnly: boolean;
   protected snapshotId: string | null = null;
+  protected readonly snapshotLessons: readonly StoredLesson[] | null;
 
-  constructor(path = join(MEMORY_DIR, "live.jsonl"), mode: RecallMode = "all", readOnly = false) {
+  constructor(
+    path = join(currentMemoryDir(), "live.jsonl"),
+    mode: RecallMode = "all",
+    readOnly = false,
+    snapshotLessons: readonly StoredLesson[] | null = null,
+  ) {
     this.path = path;
     this.mode = mode;
     this.readOnly = readOnly;
+    this.snapshotLessons = snapshotLessons === null ? null : freezeSnapshotLessons(snapshotLessons);
   }
 
   get featureScope(): MemoryReaderFeatureScope {
@@ -194,15 +433,41 @@ export class FileMemory implements Memory, LegacyMemory {
   }
 
   asFeatureScopedReader(): MemoryReader {
-    if (this.mode === "all") return new FileMemory(this.path, "top", this.readOnly);
+    if (this.mode === "all") {
+      const reader = this.snapshotId !== null && this.snapshotLessons !== null
+        ? createTrustedFrozenProjection(
+            new FrozenMemory(this.snapshotId, "top", this.snapshotLessons),
+            this.snapshotId,
+          )
+        : new FileMemory(this.path, "top", this.readOnly, this.snapshotLessons);
+      if (this.snapshotId !== null && this.snapshotLessons === null) {
+        (reader as FileMemory).snapshotId = this.snapshotId;
+      }
+      return reader;
+    }
     return this;
   }
 
   asReadOnlyReader(): MemoryReader {
-    return new FileMemory(this.path, this.mode, true);
+    const reader = this.snapshotId !== null && this.snapshotLessons !== null
+      ? createTrustedFrozenProjection(
+          new FrozenMemory(this.snapshotId, this.mode, this.snapshotLessons),
+          this.snapshotId,
+        )
+      : new FileMemory(this.path, this.mode, true, this.snapshotLessons);
+    if (this.snapshotId !== null && this.snapshotLessons === null) {
+      (reader as FileMemory).snapshotId = this.snapshotId;
+    }
+    return reader;
   }
 
   private async load(): Promise<StoredLesson[]> {
+    if (this.snapshotId !== null) {
+      if (this.snapshotLessons !== null) {
+        return this.snapshotLessons.map((lesson) => ({ ...lesson, triggers: [...lesson.triggers] }));
+      }
+      return readValidatedSnapshot(this.snapshotId, this.path, "dynamic");
+    }
     try {
       return parseLessons(await readFile(this.path, "utf8"));
     } catch (error) {
@@ -302,6 +567,7 @@ export class FileMemory implements Memory, LegacyMemory {
         hits: 0,
         wins: 0,
       };
+      validateSnapshotLesson(lesson, existing.length, "legacy");
       await mkdir(dirname(this.path), { recursive: true });
       await appendFile(this.path, `${JSON.stringify(lesson)}\n`, "utf8");
       return { status: "stored", lessonId: lesson.id };
@@ -393,12 +659,17 @@ export class FileMemory implements Memory, LegacyMemory {
    * The snapshot id is the hash of the content, not a counter, so two runs that
    * produced identical memory are provably the same state.
    */
-  async snapshot(): Promise<string> {
+  async snapshot(mode: MemorySnapshotMode = "dynamic"): Promise<string> {
     const lessons = await this.load();
     const body = lessons.map((lesson) => JSON.stringify(lesson)).join("\n");
     const id = createHash("sha256").update(body).digest("hex").slice(0, 12);
-    await mkdir(MEMORY_DIR, { recursive: true });
-    await writeFile(join(MEMORY_DIR, `${id}.jsonl`), body === "" ? "" : `${body}\n`, "utf8");
+    try {
+      validateSnapshotContent(id, body === "" ? "" : `${body}\n`, mode);
+    } catch (error) {
+      throw new MemoryBindingError("memory_mismatch", "cannot create a snapshot from invalid lessons", { cause: error });
+    }
+    await mkdir(currentMemoryDir(), { recursive: true });
+    await writeFile(join(currentMemoryDir(), `${id}.jsonl`), body === "" ? "" : `${body}\n`, "utf8");
     return id;
   }
 
@@ -406,25 +677,17 @@ export class FileMemory implements Memory, LegacyMemory {
     if (this.readOnly) {
       throw new Error("FileMemory is read-only: evaluation and production must not restore lessons");
     }
-    const frozen = await readFile(join(MEMORY_DIR, `${id}.jsonl`), "utf8");
+    const frozen = await readFile(join(currentMemoryDir(), `${id}.jsonl`), "utf8");
     await mkdir(dirname(this.path), { recursive: true });
     await writeFile(this.path, frozen, "utf8");
   }
 
-  async loadSnapshot(snapshotId: string): Promise<MemoryReader> {
-    if (!SNAPSHOT_ID_PATTERN.test(snapshotId)) {
-      throw new MemoryBindingError("memory_not_found", `invalid memory snapshot id ${snapshotId}`);
-    }
-    const snapshotPath = join(MEMORY_DIR, `${snapshotId}.jsonl`);
-    try {
-      parseLessons(await readFile(snapshotPath, "utf8"));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new MemoryBindingError("memory_not_found", `memory snapshot ${snapshotId} does not exist`, { cause: error });
-      }
-      throw new MemoryBindingError("unavailable", `memory snapshot ${snapshotId} is unavailable`, { cause: error });
-    }
-    return new FrozenMemory(snapshotId, this.mode === "all" ? "top" : this.mode);
+  async loadSnapshot(
+    snapshotId: string,
+    mode: MemorySnapshotMode = "dynamic",
+  ): Promise<FrozenMemory> {
+    const lessons = await loadValidatedSnapshotLessons(snapshotId, mode);
+    return createTrustedFrozenMemory(snapshotId, this.mode, lessons);
   }
 
   async size(): Promise<number> {
@@ -433,11 +696,14 @@ export class FileMemory implements Memory, LegacyMemory {
 }
 
 /** Reads a frozen snapshot without touching the working store. Used by eval runs. */
-export class FrozenMemory extends FileMemory {
-  constructor(snapshotId: string, mode: RecallMode = "all") {
-    super(join(MEMORY_DIR, `${snapshotId}.jsonl`), mode, true);
+class FrozenMemory extends FileMemory {
+  constructor(
+    snapshotId: string,
+    mode: RecallMode = "all",
+    snapshotLessons: readonly StoredLesson[] = [],
+  ) {
+    super(join(currentMemoryDir(), `${snapshotId}.jsonl`), mode, true, snapshotLessons);
     this.snapshotId = snapshotId;
-    markFrozenMemoryReader(this, snapshotId);
   }
   override async remember(
     _input?: LessonInput | LegacyLessonInput,
@@ -445,6 +711,36 @@ export class FrozenMemory extends FileMemory {
   ): Promise<MemoryWriteResult> {
     throw new MemoryWriteError("write_failed", "FrozenMemory is read-only: evaluation must not write lessons");
   }
+}
+
+function createTrustedFrozenMemory(
+  snapshotId: string,
+  mode: RecallMode,
+  lessons: readonly StoredLesson[],
+): FrozenMemory {
+  const reader = new FrozenMemory(snapshotId, mode, lessons);
+  markTrustedFrozenReader(reader, snapshotId);
+  return reader;
+}
+
+function createTrustedFrozenProjection(backing: FrozenMemory, snapshotId: string): MemoryReader {
+  const promptPort: MemoryAdapterPromptPort = {
+    retrieve: (request) => {
+      if (request.query === undefined) throw new Error("memory retrieve query is required");
+      return backing.recall(request.query, request.limit ?? RECALL_LIMIT, request.prompt);
+    },
+    store: async () => {
+      throw new MemoryWriteError("write_failed", "frozen memory cannot store lessons");
+    },
+  };
+  const reader: MemoryReader = {
+    featureScope: backing.featureScope,
+    promptMetadata: backing.promptMetadata,
+    recall: (query, limit, prompt) => backing.recall(query, limit, prompt),
+    promptPort,
+  };
+  markTrustedFrozenReader(reader, snapshotId);
+  return reader;
 }
 
 export function featureScopedFileMemoryReader(memory: FileMemory): MemoryReader {

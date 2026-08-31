@@ -238,18 +238,17 @@ function resolverForDeps(deps: LocateRuntimeDeps): MemorySourceResolver {
   if (memory === undefined) {
     throw new MemoryBindingError("memory_not_found", `no memory binding for ${deps.run.memoryRef}`);
   }
-  const loadSnapshot = memory.loadSnapshot;
   return createMemorySourceResolver(createMemorySourceBinding({
     memoryRef: deps.run.memoryRef,
     memory,
     provider: null,
-    ...(loadSnapshot === undefined
+    ...(memory.loadSnapshot === undefined
       ? {}
       : {
           loadSnapshot: async (snapshotId: string) => createFrozenMemorySnapshotBinding({
             memoryRef: deps.run.memoryRef!,
             snapshotId,
-            reader: await loadSnapshot(snapshotId),
+            reader: await memory.loadSnapshot!(snapshotId),
           }),
         }),
   }));
@@ -478,6 +477,8 @@ async function locateAttempt(
     for (const feature of observations) {
       const group = noMemoryGroup(feature);
       groups.push(group);
+      sequence += 1;
+      events.push(toolEvent(input.attemptId, group, sequence, null));
     }
   }
 

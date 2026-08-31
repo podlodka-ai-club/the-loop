@@ -1,4 +1,3 @@
-import type { Hint, MemoryReader } from "../memory/memory.ts";
 import {
   executeMemoryRetrieve,
   validateMemoryRunConfig,
@@ -37,32 +36,6 @@ function finiteFloor(value: number | undefined): number | undefined {
   return Math.floor(value);
 }
 
-function capReader(reader: MemoryReader, remainingHits: number | undefined): MemoryReader {
-  if (remainingHits === undefined) return reader;
-  const basePromptPort = reader.promptPort;
-  const capped: MemoryReader = {
-    featureScope: reader.featureScope,
-    promptMetadata: reader.promptMetadata,
-    recall: async (query: string, limit: number, prompt): Promise<Hint[]> => {
-      const hints = await reader.recall(query, limit, prompt);
-      return hints.slice(0, remainingHits);
-    },
-  };
-  capped.promptPort = {
-    retrieve: async (request) => {
-      if (request.query === undefined) throw new Error("memory retrieve query is required");
-      const hints = basePromptPort === undefined
-        ? await capped.recall(request.query, request.limit ?? 5, request.prompt)
-        : await basePromptPort.retrieve(request);
-      return hints.slice(0, remainingHits);
-    },
-    store: async () => {
-      throw new Error("capped retrieve reader cannot store lessons");
-    },
-  };
-  return capped;
-}
-
 export async function executeMemoryRetrieveWithRuntimeBudget(
   context: MemoryRetrieveRuntimeContext,
   args: unknown,
@@ -79,11 +52,12 @@ export async function executeMemoryRetrieveWithRuntimeBudget(
     return failedGroup(context, "budget_exhausted");
   }
 
-  const reader = capReader(context.reader, memoryHitsRemaining);
+  const recallLimit = memoryHitsRemaining === undefined
+    ? context.run.recallLimit
+    : Math.min(context.run.recallLimit, memoryHitsRemaining) as 1 | 2 | 3 | 4 | 5;
   const group = await executeMemoryRetrieve({
     ...context,
-    reader,
-    ...(reader.promptPort === undefined ? {} : { promptPort: reader.promptPort }),
+    run: { ...context.run, recallLimit },
   }, args);
   if (memoryHitsRemaining === undefined || group.hits.length <= memoryHitsRemaining) return group;
   const hits = group.hits.slice(0, memoryHitsRemaining);

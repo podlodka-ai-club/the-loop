@@ -20,7 +20,7 @@ import {
   RECALL_LIMIT,
   resolveMemoryBinding,
 } from "./memory/memory.ts";
-import { FileMemory, FrozenMemory, parseRecallMode } from "./memory/file/memory.ts";
+import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
 import { loadCsvRows, loadRows } from "./osv5m.ts";
 import { runTrainingTaskWithRuntime } from "./task-runtime.internal.ts";
 import type { MemoryRunConfig } from "./tools/memory.ts";
@@ -91,7 +91,7 @@ const memoryBinding = run.memoryRef === null
       loadSnapshot: async (snapshotId) => createFrozenMemorySnapshotBinding({
         memoryRef: "file",
         snapshotId,
-        reader: new FrozenMemory(snapshotId, "top"),
+        reader: await memory.loadSnapshot!(snapshotId),
       }),
     })));
 

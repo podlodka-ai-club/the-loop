@@ -12,7 +12,7 @@ import type { LocateDeps } from "./locate.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import { observe } from "./observe.ts";
 import type { FeatureObservation } from "./observe.ts";
-import { RECALL_LIMIT, parseRecallLimit } from "./memory/memory.ts";
+import { memoryBindingFailureCode, RECALL_LIMIT, parseRecallLimit } from "./memory/memory.ts";
 import type {
   Hint,
   LegacyMemory,
@@ -191,7 +191,15 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
           .map((item) => item.text)
       : []);
 
-  const hints = await memory.recall(features, recallLimit);
+  let hints: Hint[] = [];
+  let successfulMemoryCalls = 0;
+  let recallError: unknown = null;
+  try {
+    hints = await memory.recall(features, recallLimit);
+    successfulMemoryCalls = memory instanceof NullMemory ? 0 : 1;
+  } catch (error) {
+    recallError = error;
+  }
   const use: MemoryUse = {
     observations: [],
     memoryGroups: [],
@@ -208,12 +216,22 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
       episodes: [],
       validOutput: false,
       latencyMs: Date.now() - startedAt,
+      successfulMemoryCalls,
       truth: input.truth,
       fixture: deps.benchmark?.retrievalFixture,
       legacyGlobalProviderIds: deps.benchmark?.legacyGlobalProviderIds ?? hints.map((hint) => hint.lessonId),
     }),
     features,
   };
+  if (recallError !== null) {
+    const message = recallError instanceof Error ? recallError.message : String(recallError);
+    return {
+      ok: false,
+      failure: memoryBindingFailureCode(recallError),
+      message,
+      ...use,
+    };
+  }
   try {
     const guess = await geolocateWithBackoff(input.imagePath, hints);
     if (deps.learn) await deps.learn(guess, input, hints);
@@ -228,6 +246,7 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
         episodes: [],
         validOutput: true,
         latencyMs: Date.now() - startedAt,
+        successfulMemoryCalls,
         guess,
         truth: input.truth,
         fixture: deps.benchmark?.retrievalFixture,

@@ -7,7 +7,7 @@
  * backend is reproducible only by convention - nobody wrote to the namespace in
  * between - and that has to be visible at the call site.
  */
-import { FrozenMemory, parseRecallMode, type RecallMode } from "./file/memory.ts";
+import { FileMemory, parseRecallMode, type RecallMode } from "./file/memory.ts";
 import { createMem0Memory, loadMem0MemoryConfig } from "./mem0/memory.ts";
 import { NullMemory } from "./null/memory.ts";
 import {
@@ -20,6 +20,7 @@ import {
   type LegacyMemory,
   type MemoryBinding,
   type MemoryReader,
+  type MemorySnapshotMode,
   type MemorySourceResolver,
 } from "./memory.ts";
 import type { BenchmarkMemoryMode } from "../benchmark-metrics.ts";
@@ -54,13 +55,16 @@ export type FeatureScopedMemorySelection = {
   recallLimit: MemoryRunConfig["recallLimit"];
 };
 
-export function selectMemory(options: {
+export async function selectMemory(options: {
   backend: Backend;
   snapshotId: string;
   recall: string;
-}): MemorySelection {
+  /** Legacy callers must opt into legacy snapshots explicitly. */
+  snapshotMode?: MemorySnapshotMode;
+}): Promise<MemorySelection> {
   const recallMode = parseRecallMode(options.recall);
-  if (options.snapshotId === "" && options.backend === "file") {
+  const snapshotId = options.snapshotId.trim();
+  if (snapshotId === "" && options.backend === "file") {
     return {
       memory: new NullMemory(),
       describe: "off (baseline)",
@@ -81,13 +85,24 @@ export function selectMemory(options: {
     };
   }
 
-  return {
-    memory: new FrozenMemory(options.snapshotId, recallMode),
-    describe: `file snapshot ${options.snapshotId}, recall ${recallMode}`,
-    frozen: true,
-    recallMode,
-    recallLimit: RECALL_LIMIT,
-  };
+  if (options.backend === "file") {
+    // Legacy evaluation uses this selector directly. Validate the complete
+    // snapshot before returning a FrozenMemory so no task/evaluation can start
+    // with a missing, malformed or edited file and discover it only at recall.
+    const memory = await new FileMemory(undefined, recallMode, true).loadSnapshot(
+      snapshotId,
+      options.snapshotMode ?? "dynamic",
+    );
+    return {
+      memory,
+      describe: `file snapshot ${snapshotId}, recall ${recallMode}`,
+      frozen: true,
+      recallMode,
+      recallLimit: RECALL_LIMIT,
+    };
+  }
+
+  throw new Error(`unsupported memory backend ${options.backend}`);
 }
 
 export async function selectFeatureScopedEvaluationMemory(options: {
@@ -122,7 +137,11 @@ export async function selectFeatureScopedEvaluationMemory(options: {
     throw new Error("feature-scoped warm evaluation requires a backend with frozen snapshots");
   }
   const snapshotId = options.snapshotId.trim();
-  const memory = new FrozenMemory(snapshotId, recallMode).asFeatureScopedReader();
+  // Validate and materialize the snapshot at selection time, before evaluation
+  // can make any model/provider call.
+  const snapshotStore = new FileMemory(undefined, recallMode, true);
+  const snapshotReader = await snapshotStore.loadSnapshot(snapshotId);
+  const memory = snapshotReader;
   const run = { memoryRef: "file", mode: "evaluation" as const, snapshotId, readOnly: true as const, recallLimit: RECALL_LIMIT };
   const sourceResolver = createMemorySourceResolver(createMemorySourceBinding({
     memoryRef: "file",
@@ -131,7 +150,7 @@ export async function selectFeatureScopedEvaluationMemory(options: {
     loadSnapshot: async (id) => createFrozenMemorySnapshotBinding({
       memoryRef: "file",
       snapshotId: id,
-      reader: new FrozenMemory(id, recallMode),
+      reader: id === snapshotId ? snapshotReader : await snapshotStore.loadSnapshot(id),
     }),
   }));
   return {

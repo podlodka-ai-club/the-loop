@@ -9,7 +9,9 @@ import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption, read
 import type { FeatureObservation } from "./observe.ts";
 import { createMem0Memory } from "./memory/mem0/memory.ts";
 import type { Mem0PlatformPort, Mem0SearchRequest } from "./memory/mem0/platform.ts";
-import { selectFeatureScopedEvaluationMemory } from "./memory/select.ts";
+import { selectFeatureScopedEvaluationMemory, selectMemory } from "./memory/select.ts";
+import { encodeMemoryRetrieveQuery, MemoryBindingError, sharedMemoryPrompt } from "./memory/memory.ts";
+import { locateWithRuntime, type LocateRuntimeChatClient } from "./locate-runtime.internal.ts";
 import { executeMemoryRetrieve, type FeatureMemoryGroup } from "./tools/memory.ts";
 
 test("experiment metrics use fixed fixture labels and compare feature-scoped with legacy global rare cue rates", () => {
@@ -45,8 +47,8 @@ test("experiment metrics use fixed fixture labels and compare feature-scoped wit
       },
     ],
     events: [
-      { attemptId: "attempt-metrics", phase: "retrieve", operation: "memory_retrieve", featureKey: "visible_text", memoryHitId: null, status: "hits", sequence: 1 },
-      { attemptId: "attempt-metrics", phase: "retrieve", operation: "memory_retrieve", featureKey: "road_surface", memoryHitId: null, status: "hits", sequence: 2 },
+      { attemptId: "attempt-metrics", phase: "retrieve", operation: "memory_retrieve", featureKey: "visible_text", memoryHitId: null, status: "hits", sequence: 1, memoryRef: "file" },
+      { attemptId: "attempt-metrics", phase: "retrieve", operation: "memory_retrieve", featureKey: "road_surface", memoryHitId: null, status: "hits", sequence: 2, memoryRef: "file" },
     ],
     validOutput: true,
     latencyMs: 42,
@@ -76,6 +78,129 @@ test("experiment metrics use fixed fixture labels and compare feature-scoped wit
   assert.equal(summary.featureScopedRareCueHitRate, 1);
   assert.equal(summary.legacyGlobalTopKRareCueHitRate, 0);
   assert.equal(Object.prototype.hasOwnProperty.call(groups[0], "hints"), false);
+});
+
+test("benchmark toolCalls ignore no-memory bookkeeping events", () => {
+  const metrics = buildAttemptMetrics({
+    attemptId: "attempt-cold-metrics",
+    observations: [],
+    memoryGroups: [],
+    episodes: [],
+    events: [
+      {
+        attemptId: "attempt-cold-metrics",
+        phase: "retrieve",
+        operation: "memory_retrieve",
+        featureKey: "road_surface",
+        memoryHitId: null,
+        status: "no_hit",
+        sequence: 1,
+        memoryRef: null,
+      },
+      {
+        attemptId: "attempt-cold-metrics",
+        phase: "retrieve",
+        operation: "memory_retrieve",
+        featureKey: "road_surface",
+        memoryHitId: null,
+        status: "hits",
+        sequence: 2,
+        memoryRef: "file",
+      },
+    ],
+    validOutput: true,
+    latencyMs: 1,
+  });
+
+  assert.equal(metrics.toolCalls, 1);
+});
+
+test("benchmark toolCalls count only successful provider-backed memory operations", () => {
+  const event = (operation: "memory_retrieve" | "memory_store", status: string, memoryRef: string | null = "file") => ({
+    attemptId: "attempt-call-metrics",
+    phase: operation === "memory_retrieve" ? "retrieve" as const : "reflect" as const,
+    operation,
+    featureKey: "road_surface",
+    memoryHitId: null,
+    status,
+    sequence: 1,
+    memoryRef,
+  });
+  const metrics = buildAttemptMetrics({
+    attemptId: "attempt-call-metrics",
+    observations: [],
+    memoryGroups: [],
+    episodes: [],
+    events: [
+      event("memory_retrieve", "hits"),
+      event("memory_retrieve", "no_hit"),
+      event("memory_retrieve", "memory_error"),
+      event("memory_retrieve", "budget_exhausted"),
+      event("memory_retrieve", "no_hit", null),
+      event("memory_store", "stored"),
+      event("memory_store", "already_stored"),
+      event("memory_store", "write_failed"),
+    ],
+    validOutput: true,
+    latencyMs: 1,
+  });
+
+  assert.equal(metrics.toolCalls, 4);
+
+  const ambiguous = buildAttemptMetrics({
+    attemptId: "attempt-ambiguous-event",
+    observations: [],
+    memoryGroups: [],
+    episodes: [],
+    events: [{
+      attemptId: "attempt-ambiguous-event",
+      phase: "retrieve",
+      operation: "memory_retrieve",
+      featureKey: "road_surface",
+      memoryHitId: null,
+      status: "hits",
+      sequence: 1,
+    }],
+    validOutput: true,
+    latencyMs: 1,
+  });
+  assert.equal(ambiguous.toolCalls, 0);
+});
+
+test("benchmark fallback metrics ignore synthetic no-hit groups and preserve legacy recall calls", () => {
+  const groupWithNoMemory: FeatureMemoryGroup = {
+    attemptId: "attempt-cold-fallback",
+    feature: { key: "road_surface", text: "paved road" },
+    query: null,
+    status: "no_hit",
+    hits: [],
+    failure: null,
+    retryCount: 0,
+  };
+  assert.equal(buildAttemptMetrics({
+    attemptId: "attempt-cold-fallback",
+    observations: [groupWithNoMemory.feature],
+    memoryGroups: [groupWithNoMemory],
+    episodes: [],
+    validOutput: true,
+    latencyMs: 1,
+  }).toolCalls, 0);
+  assert.equal(buildAttemptMetrics({
+    attemptId: "attempt-legacy-warm",
+    observations: [],
+    memoryGroups: [],
+    episodes: [],
+    successfulMemoryCalls: 1,
+    validOutput: true,
+    latencyMs: 1,
+  }).toolCalls, 1);
+});
+
+test("legacy warm file selection rejects a missing snapshot before evaluation starts", async () => {
+  await assert.rejects(
+    selectMemory({ backend: "file", snapshotId: "ffffffffffff", recall: "top", snapshotMode: "legacy" }),
+    (error) => error instanceof MemoryBindingError && error.code === "memory_not_found",
+  );
 });
 
 test("benchmark pair contract pins sample order cache key and explicit cold or warm mode", () => {
@@ -133,7 +258,7 @@ test("retrieval fixture loader requires fixed rare and broad provider ids", asyn
   }
 });
 
-test("benchmark CLI numeric and memory-mode contracts fail fast", () => {
+test("benchmark CLI numeric and memory-mode contracts fail fast", async () => {
   assert.equal(parsePositiveSafeIntegerOption("limit", "1"), 1);
   assert.equal(parsePositiveSafeIntegerOption("concurrency", "8"), 8);
   assert.equal(parseNonNegativeSafeIntegerOption("head", "0"), 0);
@@ -148,18 +273,61 @@ test("benchmark CLI numeric and memory-mode contracts fail fast", () => {
     /--concurrency requires a value/,
   );
 
-  assert.throws(
+  await assert.rejects(
     () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "snapshot", recall: "off", memoryMode: "warm" }),
     /warm evaluation requires --recall top/,
   );
-  assert.throws(
+  await assert.rejects(
     () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "", recall: "top", memoryMode: "warm" }),
     /warm evaluation requires --snapshot/,
   );
-  assert.throws(
+  await assert.rejects(
     () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "", recall: "top", memoryMode: "cold" }),
     /cold evaluation requires --recall off/,
   );
+});
+
+test("feature-scoped warm evaluation rejects a missing snapshot before provider calls", async () => {
+  let providerCalls = 0;
+  const client: LocateRuntimeChatClient = {
+    chat: {
+      completions: {
+        create: async () => {
+          providerCalls += 1;
+          return { choices: [{ message: { content: JSON.stringify({
+            latitude: 1,
+            longitude: 2,
+            place: "should not run",
+            confidence: 0.5,
+            reasoning: "should not run",
+          }) } }] };
+        },
+      },
+    },
+  };
+
+  await assert.rejects(
+    async () => {
+      const selection = await selectFeatureScopedEvaluationMemory({
+        backend: "file",
+        snapshotId: "deadbeefdead",
+        recall: "top",
+        memoryMode: "warm",
+      });
+      await locateWithRuntime(
+        { attemptId: "missing-snapshot", imagePath: "missing-snapshot.jpg" },
+        {
+          memoryBinding: selection.memoryBinding,
+          run: selection.run,
+          client,
+          observe: async () => ({ features: [{ key: "road_surface", text: "paved road" }], error: null }),
+          imageDataUri: async () => "data:image/jpeg;base64,AA==",
+        },
+      );
+    },
+    (error) => error instanceof Error && "code" in error && (error as { code?: unknown }).code === "memory_not_found",
+  );
+  assert.equal(providerCalls, 0);
 });
 
 test("experiment metadata reports requested and effective memory backends", () => {
@@ -240,7 +408,7 @@ test("FileMemory and Mem0 readers both enter feature-scoped retrieval through th
   assert.deepEqual(fileReader.recallCalls, [{ query: "wooden poles", limit: 5 }]);
   assert.deepEqual(mem0Platform.searchInvocations, [
     {
-      query: "wooden poles",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "wooden poles"),
       filters: { agent_id: "agent" },
       topK: 5,
       threshold: 0.1,

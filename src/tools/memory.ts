@@ -17,6 +17,7 @@ import {
   type ReflectionEffect,
 } from "../memory/memory.ts";
 import { loadPrompt } from "../promts.ts";
+import { makeMemoryIdempotencyKey } from "../memory/provenance.ts";
 export {
   resolveMemoryBinding,
   type MemorySourceBinding,
@@ -387,8 +388,11 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
   }
   if (!isReflectionEffect(value.effect)) throw new MemoryToolValidationError("invalid_tool_arguments");
   if (typeof value.content !== "string") throw new MemoryToolValidationError("invalid_tool_arguments");
+  if (value.content.trim() === "" || unicodeCodePointLength(value.content) > 2_000) {
+    throw new MemoryToolValidationError("invalid_tool_arguments");
+  }
   const content = value.content.trim().replace(/\s+/g, " ");
-  if (content === "" || unicodeCodePointLength(content) > 2_000 || sentenceCount(content) > 2) {
+  if (sentenceCount(content) > 2) {
     throw new MemoryToolValidationError("invalid_tool_arguments");
   }
   if (!Array.isArray(value.triggers) || value.triggers.length < 1 || value.triggers.length > 8) {
@@ -396,10 +400,10 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
   }
   const triggers = value.triggers.map((trigger) => {
     if (typeof trigger !== "string") throw new MemoryToolValidationError("invalid_tool_arguments");
-    const normalized = trigger.trim().replace(/\s+/g, " ");
-    if (normalized === "" || unicodeCodePointLength(normalized) > 128) {
+    if (trigger.trim() === "" || unicodeCodePointLength(trigger) > 128) {
       throw new MemoryToolValidationError("invalid_tool_arguments");
     }
+    const normalized = trigger.trim().replace(/\s+/g, " ");
     return normalized;
   });
   if (typeof value.region !== "string" || !/^[A-Z]{2}$/.test(value.region)) {
@@ -565,7 +569,7 @@ export function makeIdempotencyKey(
   featureKey: FeatureKey,
   memoryHitId: string,
 ): string {
-  return stableHash(attemptId, featureKey, memoryHitId).slice(0, 32);
+  return makeMemoryIdempotencyKey(attemptId, featureKey, memoryHitId);
 }
 
 export function memoryToolsForPhase(
