@@ -5,7 +5,7 @@ description: Актуальный контракт model-generated набора 
 timestamp: 2026-08-31T00:00:00+03:00
 date: 2026-08-31
 model: gpt-5
-version: 1
+version: 2
 tags: [loci, memory, tools, observe, reflection, dynamic-features, specification]
 ---
 
@@ -20,7 +20,8 @@ tags: [loci, memory, tools, observe, reflection, dynamic-features, specification
 
 Из v1 удалены `src/observe-geo-entities.json`, `ObservationGeoPolicy`, `loadEntities`,
 `buildEntityPattern`, `entityPattern`, `implicationPattern`, geo-policy version и geo-entity digest
-из cache identity. `text` проверяется только структурно.
+из cache identity. `text` проверяется только структурно. Все статические инструкции agent flow вынесены
+из TypeScript в отдельные Markdown prompt assets под `src/promts/`.
 
 ## Goal
 
@@ -122,7 +123,40 @@ The cache key is exactly:
 hits do not call the model. Changing a geo dictionary cannot affect the cache because no geo artifact
 is loaded or consulted.
 
-### 2. Memory, tools and runtime
+### 2. Prompt assets — `src/promts/`
+
+Every static instruction sent to an OpenAI model in the agent flow MUST live in its own Markdown file:
+
+```text
+src/promts/agent.md
+src/promts/observe.md
+src/promts/retrieve.md
+src/promts/analyze.md
+src/promts/reflect.md
+```
+
+```ts
+export type PromptName = "agent" | "observe" | "retrieve" | "analyze" | "reflect";
+
+export const PROMPT_FILES: Record<PromptName, string> = {
+  agent: "src/promts/agent.md",
+  observe: "src/promts/observe.md",
+  retrieve: "src/promts/retrieve.md",
+  analyze: "src/promts/analyze.md",
+  reflect: "src/promts/reflect.md",
+};
+
+export function loadPrompt(name: PromptName): string;
+```
+
+The loader resolves paths relative to the source module and returns UTF-8 Markdown. It MUST fail fast
+when a required asset is missing or empty. Runtime interpolation may append serialized image, feature,
+hit or answer data, but static instruction prose MUST NOT be duplicated in `.ts` prompt constants.
+Prompt files MUST be included in package/runtime distribution and their contents MUST be covered by
+unit tests. `OBSERVE_PROMPT_VERSION` and other cache/trace versions remain explicit TypeScript constants;
+the prompt body itself is read from `observe.md`.
+
+### 3. Memory, tools and runtime
 
 The following contracts are inherited unchanged from the predecessor spec:
 
@@ -151,6 +185,16 @@ Implementers MUST read the inherited contracts before coding:
 | O5 | Malformed model output returns `features: []` and non-null `error`; it never fabricates observations. |
 | O6 | Cache identity contains schema version, prompt version, model, seed, image path and current image digest, and no geo-policy input. |
 | O7 | A cache hit returns the cached successful observations without a model call; failed parses are not cached. |
+
+### Prompt assets
+
+| ID | Rule |
+| --- | --- |
+| P1 | Every static model instruction used by `agent`, `observe`, `retrieve`, `analyze` or `reflect` is stored in the matching `src/promts/*.md` file. |
+| P2 | TypeScript contains no duplicate static prompt body; it only loads an asset and performs runtime interpolation. |
+| P3 | Missing or empty prompt assets fail before the corresponding model request. |
+| P4 | Prompt assets are shipped with the runtime and are read as UTF-8 Markdown from a path relative to the module, not the caller working directory. |
+| P5 | Prompt asset content is covered by tests for file existence, non-empty content and usage by the corresponding model request. |
 
 ### Retrieval and analysis
 
@@ -214,6 +258,10 @@ Implementers MUST read the inherited contracts before coding:
 | 22 | `src/locate-runtime.internal.test.ts` | Final result uses canonical `LocateResult` groups and trace. | B1, B3 |
 | 23 | `src/observe.test.ts` | No fixed twelve-key list or mandatory placeholder is required. | O1, O2 |
 | 24 | `src/observe.test.ts` | No runtime geo dictionary read or semantic content rejection occurs. | O4, O6 |
+| 25 | `src/prompts.test.ts` | All five prompt assets exist, are non-empty UTF-8 Markdown and map to unique prompt names. | P1, P4, P5 |
+| 26 | `src/observe.test.ts` | Observe request uses the contents of `src/promts/observe.md`. | P2, P5 |
+| 27 | `src/agent.test.ts` | Solve request uses `src/promts/agent.md` and appends runtime hints without inline replacement prose. | P2, P5 |
+| 28 | `src/locate-runtime.internal.test.ts`, `src/reflect.test.ts` | Retrieve/analyze/reflect requests use their corresponding Markdown assets. | P1, P2, P5 |
 
 ## Execution
 
@@ -224,18 +272,22 @@ Implementers MUST read the inherited contracts before coding:
 
 ### Phase 1 — Dynamic observe без geo-policy
 
-**Objective.** Replace fixed observation registry and remove geo dictionary/policy from parser and cache.
+**Objective.** Replace fixed observation registry, remove geo dictionary/policy from parser and cache,
+and externalize every static agent prompt.
 
 **Work.** Migrate `src/observe.ts` to dynamic string keys; preserve structural validation and bounds;
-remove `src/observe-geo-entities.json` and all geo imports; update cache identity, prompt, fixtures and tests.
+remove `src/observe-geo-entities.json` and all geo imports; move static instructions to
+`src/promts/agent.md`, `observe.md`, `retrieve.md`, `analyze.md` and `reflect.md`; add a UTF-8 loader;
+update cache identity, prompt versions, fixtures and tests.
 
 **Dependencies.** None.
 
 **Risks.** Existing tests may encode fixed slots or geo rejection; update only those assertions to the new contract.
 
-**Validation.** Tests 1–10, 23–24; typecheck; full suite green.
+**Validation.** Tests 1–10, 23–28; typecheck; full suite green.
 
-**Done.** A structurally valid feature containing geographic-looking text is returned unchanged and is cacheable.
+**Done.** A structurally valid feature containing geographic-looking text is returned unchanged and is
+cacheable, and every static model instruction is loaded from a non-empty Markdown asset.
 
 ### Phase 2 — Dynamic memory tools
 
@@ -292,7 +344,7 @@ keep evaluation read-only.
 
 **Risks.** External dataset or credentials may be unavailable; report the exact blocked check without weakening local acceptance.
 
-**Validation.** Tests 1–24; `npm run typecheck`; `npm run sample`; OKF validation; `git diff --check`.
+**Validation.** Tests 1–28; `npm run typecheck`; `npm run sample`; OKF validation; `git diff --check`.
 
 **Done.** All local dynamic-feature tests and type checks pass, with external blockers explicitly reported.
 
@@ -302,6 +354,7 @@ keep evaluation read-only.
 - Structural validation rejects malformed, oversized, invalid or duplicate-key responses without fabricating records.
 - Structurally valid geographic-looking text is preserved; no geo dictionary or semantic content filter is loaded.
 - Cache identity includes schema, prompt, model, seed, image path and image digest only.
+- All static agent instructions are separate non-empty Markdown assets under `src/promts/` and are loaded by name.
 - Retrieval, reflection and lessons retain dynamic feature provenance and explicit outcomes.
 - `memoryRef:null` performs no memory model/provider/write calls and creates per-feature no-hit groups.
 - Blind/reveal boundaries and training/evaluation isolation remain enforced.
