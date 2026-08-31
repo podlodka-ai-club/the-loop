@@ -1,5 +1,7 @@
 # Research
 
+> Предыдущая итерация. Актуальный контракт — [dynamic features без geo-policy](../memory-tools-observe-dynamic-features-no-geo-filter/index.md).
+
 * [Динамическое извлечение признаков фотографии](research.md) - Исследование model-generated features без фиксированного registry.
 
 # Decision
