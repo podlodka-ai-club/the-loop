@@ -6,6 +6,7 @@
  */
 import { UnparseableOutputError, geolocate } from "./agent.ts";
 import type { Guess } from "./agent.ts";
+import { buildAttemptMetrics } from "./benchmark-metrics.ts";
 import type { LocateDeps } from "./locate.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import { observe } from "./observe.ts";
@@ -15,6 +16,7 @@ import type { Hint, LegacyMemory, MemoryReader } from "./memory/memory.ts";
 import { runFeatureScopedTask } from "./task-feature-scoped.internal.ts";
 import type {
   AttemptTrace,
+  AttemptMetrics,
   EpisodeTrace,
   FeatureMemoryGroup,
   MemoryRunConfig,
@@ -36,6 +38,7 @@ export type MemoryUse = {
   hintCount: number;
   hintIds: string[];
   hintTokens: number;
+  attemptMetrics: AttemptMetrics;
   /** The query recall was given. Empty means the search ran blind. */
   features: string[];
 };
@@ -132,6 +135,7 @@ export function estimateHintTokens(hints: readonly Hint[]): number {
 }
 
 export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise<TaskResult> {
+  const startedAt = Date.now();
   if (deps.run !== undefined) {
     const featureScopedDeps: FeatureScopedTaskDeps = { run: deps.run };
     if (deps.memory !== undefined) featureScopedDeps.memory = deps.memory;
@@ -165,21 +169,46 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
     hintCount: hints.length,
     hintIds: hints.map((hint) => hint.lessonId),
     hintTokens: estimateHintTokens(hints),
+    attemptMetrics: buildAttemptMetrics({
+      attemptId: input.attemptId ?? input.imageId,
+      observations: [],
+      memoryGroups: [],
+      episodes: [],
+      validOutput: false,
+      latencyMs: Date.now() - startedAt,
+      legacyGlobalProviderIds: hints.map((hint) => hint.lessonId),
+    }),
     features,
   };
   try {
     const guess = await geolocateWithBackoff(input.imagePath, hints);
     if (deps.learn) await deps.learn(guess, input, hints);
-    return { ok: true, guess, ...use };
+    return {
+      ok: true,
+      guess,
+      ...use,
+      attemptMetrics: {
+        ...use.attemptMetrics,
+        validOutput: true,
+        latencyMs: Date.now() - startedAt,
+      },
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const failedUse = {
+      ...use,
+      attemptMetrics: {
+        ...use.attemptMetrics,
+        latencyMs: Date.now() - startedAt,
+      },
+    };
     if (error instanceof UnparseableOutputError) {
-      return { ok: false, failure: "unparseable", message, ...use };
+      return { ok: false, failure: "unparseable", message, ...failedUse };
     }
     if (message.includes("ENOENT")) {
-      return { ok: false, failure: "missing_image", message, ...use };
+      return { ok: false, failure: "missing_image", message, ...failedUse };
     }
-    return { ok: false, failure: "api_error", message, ...use };
+    return { ok: false, failure: "api_error", message, ...failedUse };
   }
 }
 

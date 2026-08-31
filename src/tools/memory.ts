@@ -11,6 +11,8 @@ import {
   type MemoryWriter,
   type ReflectionEffect,
 } from "../memory/memory.ts";
+export { resolveMemoryBinding } from "../memory/memory.ts";
+export type { MemoryBinding } from "../memory/memory.ts";
 
 export type { ReflectionEffect };
 

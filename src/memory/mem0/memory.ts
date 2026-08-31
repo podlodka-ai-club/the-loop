@@ -11,6 +11,7 @@ import {
   type LegacyMemory,
   type LessonInput,
   type Memory,
+  type MemoryReader,
   type MemoryWriteResult,
   type ReflectionEffect,
 } from "../memory.ts";
@@ -210,6 +211,10 @@ export class Mem0Memory implements Memory, LegacyMemory {
         ? {}
         : { onRememberCompleted: dependencies.onRememberCompleted }),
     };
+  }
+
+  asReadOnlyReader(): MemoryReader {
+    return { recall: (query, limit) => this.recall(query, limit) };
   }
 
   remember(lesson: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {

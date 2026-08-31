@@ -14,10 +14,11 @@ import { readManifest, DEFAULT_MANIFEST } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
 import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
-import { drawSample, fingerprintOf, loadRows } from "./osv5m.ts";
-import type { Row } from "./osv5m.ts";
+import { loadRows } from "./osv5m.ts";
 import { runTrainingTaskWithRuntime } from "./task-runtime.internal.ts";
 import type { MemoryRunConfig } from "./tools/memory.ts";
+import { parseBenchmarkMemoryMode } from "./benchmark-metrics.ts";
+import { selectTrainingSample } from "./train-selection.ts";
 
 function flag(name: string, fallback: string): string {
   const index = process.argv.indexOf(`--${name}`);
@@ -27,55 +28,11 @@ function flag(name: string, fallback: string): string {
 const limit = Number(flag("limit", "30"));
 const snapshotEvery = Number(flag("snapshot-every", "10"));
 const seed = flag("seed", "train-v1");
-const recallMode = parseRecallMode(flag("recall", "all"));
+const memoryMode = parseBenchmarkMemoryMode(flag("memory-mode", "warm"));
+const recallMode = parseRecallMode(flag("recall", memoryMode === "cold" ? "off" : "all"));
 
 const { rows: pool } = await loadRows();
 const manifest = await readManifest(flag("manifest", DEFAULT_MANIFEST));
-
-const evalIds = new Set(manifest.ids);
-const evalSequences = new Set(
-  pool.filter((row) => evalIds.has(row.id)).map((row) => row.sequence).filter((s) => s !== ""),
-);
-const trainPool: Row[] = pool.filter(
-  (row) => !evalIds.has(row.id) && !evalSequences.has(row.sequence),
-);
-
-/**
- * Country quotas copied from the evaluation manifest, by largest remainder.
- *
- * A dataset-weighted draw would track the whole OSV-5M split, not the 200 frames the
- * benchmark actually scores. Those differ: the manifest is 72 countries with a long
- * tail of single frames. Lessons about countries the benchmark never shows cannot
- * move the number, they only add tokens - which is exactly what the shuffled control
- * is meant to isolate, so it must not be what the real run is doing too.
- */
-function manifestQuotas(evalRows: readonly Row[], total: number): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const row of evalRows) {
-    if (row.country === "") continue;
-    counts.set(row.country, (counts.get(row.country) ?? 0) + 1);
-  }
-  const denominator = [...counts.values()].reduce((a, b) => a + b, 0);
-
-  const exact = [...counts.entries()].map(([country, count]) => ({
-    country,
-    share: (count / denominator) * total,
-  }));
-  const quotas = new Map<string, number>();
-  for (const { country, share } of exact) quotas.set(country, Math.floor(share));
-
-  // Hand the leftover slots to the largest fractional parts, ties by country code.
-  let remaining = total - [...quotas.values()].reduce((a, b) => a + b, 0);
-  const byRemainder = exact
-    .map((entry) => ({ ...entry, fraction: entry.share - Math.floor(entry.share) }))
-    .sort((a, b) => b.fraction - a.fraction || (a.country < b.country ? -1 : 1));
-  for (const entry of byRemainder) {
-    if (remaining <= 0) break;
-    quotas.set(entry.country, (quotas.get(entry.country) ?? 0) + 1);
-    remaining--;
-  }
-  return new Map([...quotas].filter(([, quota]) => quota > 0));
-}
 
 const matchManifest = !process.argv.includes("--no-match-manifest");
 
@@ -94,35 +51,18 @@ const onlyCountries = new Set(
     .filter((code) => code !== ""),
 );
 
-let sample: ReturnType<typeof drawSample>;
+const selection = selectTrainingSample(pool, manifest, {
+  limit,
+  seed,
+  matchManifest,
+  onlyCountries,
+});
+const { trainPool, sample } = selection;
 if (matchManifest) {
-  const evalRows = pool.filter((row) => evalIds.has(row.id));
-  const allQuotas = manifestQuotas(evalRows, limit);
-  const quotas =
-    onlyCountries.size === 0
-      ? allQuotas
-      : new Map([...allQuotas].filter(([country]) => onlyCountries.has(country)));
-  const picked: Row[] = [];
-  const shortfalls: string[] = [];
-  for (const [country, quota] of [...quotas].sort(([a], [b]) => (a < b ? -1 : 1))) {
-    const byCountry = trainPool.filter((row) => row.country === country);
-    const drawn = drawSample(byCountry, { size: quota, seed: `${seed}:${country}` });
-    picked.push(...drawn.rows);
-    if (drawn.rows.length < quota) shortfalls.push(`${country} ${drawn.rows.length}/${quota}`);
+  console.log(`quotas   ${selection.quotas.size} countries matched to the eval manifest`);
+  if (selection.shortfalls.length > 0) {
+    console.log(`short    train pool could not fill: ${selection.shortfalls.join(", ")}`);
   }
-  picked.sort((a, b) => (a.id < b.id ? -1 : 1));
-  sample = {
-    rows: picked,
-    fingerprint: fingerprintOf(picked.map((row) => row.id)),
-    seed,
-    strata: new Set(picked.map((row) => row.cell)).size,
-  };
-  console.log(`quotas   ${quotas.size} countries matched to the eval manifest`);
-  if (shortfalls.length > 0) {
-    console.log(`short    train pool could not fill: ${shortfalls.join(", ")}`);
-  }
-} else {
-  sample = drawSample(trainPool, { size: limit, seed });
 }
 const memory = new FileMemory(undefined, recallMode);
 const run = {
@@ -134,6 +74,7 @@ const run = {
 
 console.log(`pool     ${trainPool.length} train-eligible of ${pool.length} on disk`);
 console.log(`sample   n=${sample.rows.length} seed=${seed} fp=${sample.fingerprint}`);
+console.log(`mode     ${memoryMode} training stream, observations use the versioned image cache`);
 console.log(
   `memory   ${memory.path}, ${await memory.size()} lessons, ` +
     `recall ${recallMode} (limit ${RECALL_LIMIT} applies to top only)`,

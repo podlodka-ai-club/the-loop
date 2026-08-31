@@ -1,5 +1,6 @@
 import { UnparseableOutputError } from "./agent.ts";
 import type { Guess } from "./agent.ts";
+import { buildAttemptMetrics } from "./benchmark-metrics.ts";
 import { haversineKm } from "./geo.ts";
 import { locate } from "./locate.ts";
 import type { LocateDeps } from "./locate.ts";
@@ -80,6 +81,14 @@ function emptyMemoryUse(): MemoryUse {
     hintCount: 0,
     hintIds: [],
     hintTokens: 0,
+    attemptMetrics: buildAttemptMetrics({
+      attemptId: "",
+      observations: [],
+      memoryGroups: [],
+      episodes: [],
+      validOutput: false,
+      latencyMs: 0,
+    }),
     features: [],
   };
 }
@@ -100,6 +109,13 @@ function projectLegacyHints(groups: readonly FeatureMemoryGroup[]): Hint[] {
 
 function memoryUseFromLocate(
   result: Pick<LocateResult, "observations" | "memoryGroups" | "episodes" | "trace">,
+  options: {
+    attemptId: string;
+    validOutput: boolean;
+    latencyMs: number;
+    guess?: Guess;
+    truth?: { latitude: number; longitude: number };
+  },
 ): MemoryUse {
   const hints = projectLegacyHints(result.memoryGroups);
   return {
@@ -111,6 +127,17 @@ function memoryUseFromLocate(
     hintCount: hints.length,
     hintIds: hints.map((hint) => hint.lessonId),
     hintTokens: estimateHintTokens(hints),
+    attemptMetrics: buildAttemptMetrics({
+      attemptId: options.attemptId,
+      observations: result.observations,
+      memoryGroups: result.memoryGroups,
+      episodes: result.episodes,
+      events: result.trace?.events,
+      validOutput: options.validOutput,
+      latencyMs: options.latencyMs,
+      guess: options.guess,
+      truth: options.truth,
+    }),
     features: result.observations
       .filter((item) => item.state === "visible")
       .map((item) => item.text)
@@ -262,9 +289,11 @@ export async function runFeatureScopedTask(
   input: FeatureScopedTaskRuntimeInput,
   deps: FeatureScopedTaskRuntimeDeps,
 ): Promise<TaskResult> {
+  const startedAt = Date.now();
+  const attemptId = input.attemptId ?? input.imageId;
   try {
     const result = await (deps.locate ?? locate)(
-      { attemptId: input.attemptId ?? input.imageId, imagePath: input.imagePath },
+      { attemptId, imagePath: input.imagePath },
       {
         ...deps.locateDeps,
         memory: memoryReaderForRun(deps),
@@ -274,12 +303,35 @@ export async function runFeatureScopedTask(
     if (shouldReflect(input, deps)) {
       await reflectEpisodesAfterReveal(input, result, deps as FeatureScopedTaskRuntimeDeps & { writer: MemoryWriter });
     }
-    const use = memoryUseFromLocate(result);
+    const use = memoryUseFromLocate(result, {
+      attemptId: result.attemptId,
+      validOutput: true,
+      latencyMs: Date.now() - startedAt,
+      guess: result.guess as Guess,
+      truth: input.truth,
+    });
     return { ok: true, guess: result.guess as Guess, ...use };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const partial = readLocatePartialResult(error);
-    const use = partial === null ? emptyMemoryUse() : memoryUseFromLocate(partial);
+    const use = partial === null
+      ? {
+          ...emptyMemoryUse(),
+          attemptMetrics: buildAttemptMetrics({
+            attemptId,
+            observations: [],
+            memoryGroups: [],
+            episodes: [],
+            validOutput: false,
+            latencyMs: Date.now() - startedAt,
+          }),
+        }
+      : memoryUseFromLocate(partial, {
+          attemptId: partial.attemptId,
+          validOutput: false,
+          latencyMs: Date.now() - startedAt,
+          truth: input.truth,
+        });
     if (error instanceof UnparseableOutputError) {
       return { ok: false, failure: "unparseable", message, ...use };
     }
