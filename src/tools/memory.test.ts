@@ -1476,3 +1476,20 @@ test("store dispatcher rejects bounded payload violations before writing", async
     assert.deepEqual(writer.lessons, []);
   }
 });
+
+test("store dispatcher shares sentence validation for abbreviations and compact boundaries", async () => {
+  for (const content of ["One sentence.", "One sentence. Two sentence!", "Use e.g. this. Fine."]) {
+    const writer = new FakeWriter();
+    await assert.doesNotReject(executeMemoryStore(storeContext(writer), { ...validStoreArgs, content }));
+    assert.equal(writer.lessons.length, 1);
+  }
+
+  for (const content of ["One. Two.Three.", "One. two.three."]) {
+    const writer = new FakeWriter();
+    await assert.rejects(
+      executeMemoryStore(storeContext(writer), { ...validStoreArgs, content }),
+      MemoryToolValidationError,
+    );
+    assert.deepEqual(writer.lessons, []);
+  }
+});

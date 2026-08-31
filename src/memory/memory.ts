@@ -455,6 +455,7 @@ export interface MemoryWriter extends MemoryReader {
 
 export function isMemoryWriter(value: unknown): value is MemoryWriter {
   if (typeof value !== "object" || value === null) return false;
+  if (frozenReaderSnapshotId(value) !== null) return false;
   const candidate = value as Partial<MemoryWriter> & { readOnly?: unknown };
   return (
     typeof candidate.recall === "function" &&

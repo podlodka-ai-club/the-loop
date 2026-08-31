@@ -5,11 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  bindFeatureScopedReader,
   createFrozenMemorySnapshotBinding,
+  isMemoryWriter,
   MemoryBindingError,
   MemoryWriteError,
-  readerOnly,
   sharedMemoryPromptMetadata,
 } from "../memory.ts";
 import type { LegacyLesson, LegacyLessonInput, LessonInput } from "../memory.ts";
@@ -512,7 +511,97 @@ test("FrozenMemory recalls without changing the snapshot and rejects remember", 
   assert.equal(await readFile(snapshotPath, "utf8"), before);
 });
 
-test("frozen capability rejects forged readers and projections that lose identity", async () => {
+test("FrozenMemory state cannot be changed through runtime property mutation", async () => {
+  const source = makeSUT();
+  await source.sut.remember(makeInput({ content: "immutable lesson", triggers: ["immutable cue"] }));
+  const snapshotId = await source.sut.snapshot("legacy");
+  const frozen = await source.sut.loadSnapshot(snapshotId, "legacy");
+
+  assert.equal(Object.isFrozen(frozen), true);
+  assert.equal(Reflect.set(frozen, "readOnly", false), false);
+  assert.equal(Reflect.set(frozen, "snapshotLessons", []), false);
+  assert.equal(Reflect.set(frozen, "snapshotId", "other-snapshot"), false);
+  assert.throws(
+    () => Object.defineProperty(frozen, "readOnly", { value: false }),
+    TypeError,
+  );
+
+  assert.deepEqual(await frozen.recall("immutable cue", 1), [
+    { lessonId: "lesson-0001", text: "XX: immutable lesson" },
+  ]);
+  await assert.rejects(frozen.remember(), /FrozenMemory is read-only/);
+});
+
+test("frozen readers deeply freeze prompts, lessons, and write capabilities", async () => {
+  const source = makeSUT();
+  await source.sut.remember(makeInput({ content: "nested immutable lesson", triggers: ["nested cue"] }));
+  const snapshotId = await source.sut.snapshot("legacy");
+  const frozen = await source.sut.loadSnapshot(snapshotId, "legacy");
+  const featureScoped = frozen.asFeatureScopedReader();
+  const readOnly = frozen.asReadOnlyReader();
+
+  assert.equal(isMemoryWriter(frozen), false);
+  for (const reader of [frozen, featureScoped, readOnly]) {
+    const metadata = reader.promptMetadata!;
+    assert.equal(Object.isFrozen(metadata), true);
+    assert.equal(Object.isFrozen(metadata.retrieve), true);
+    assert.equal(Object.isFrozen(metadata.store), true);
+    assert.equal(Object.isFrozen(reader.promptPort), true);
+    assert.equal(Object.isFrozen(reader.promptPort!.retrieve), true);
+    assert.equal(Object.isFrozen(reader.promptPort!.store), true);
+    assert.equal(isMemoryWriter(reader), false);
+    assert.equal(Reflect.set(metadata.retrieve, "text", "tampered"), false);
+    assert.equal(Reflect.set(metadata.store, "digest", "tampered"), false);
+    assert.throws(
+      () => Object.defineProperty(metadata.retrieve, "version", { value: "tampered" }),
+      TypeError,
+    );
+    await assert.rejects(reader.promptPort!.store({
+      memoryRef: "file",
+      operation: "store",
+      prompt: metadata.store,
+      featureKey: "nested",
+      lesson: makeInput({ content: "must not store" }) as LessonInput,
+    }), MemoryWriteError);
+  }
+
+  assert.notEqual(featureScoped.promptMetadata, frozen.promptMetadata);
+  assert.notEqual(readOnly.promptMetadata, frozen.promptMetadata);
+  const lessons = (frozen as unknown as {
+    snapshotLessons: readonly [{ triggers: readonly string[]; content: string }];
+  }).snapshotLessons;
+  assert.equal(Object.isFrozen(lessons), true);
+  assert.equal(Object.isFrozen(lessons[0]), true);
+  assert.equal(Object.isFrozen(lessons[0].triggers), true);
+  assert.equal(Reflect.set(lessons[0], "content", "tampered"), false);
+  assert.equal(Reflect.set(lessons[0].triggers, "0", "tampered"), false);
+
+  await assert.rejects(frozen.snapshot("legacy"), MemoryWriteError);
+  await unlink(join(memoryDir, snapshotId + ".jsonl"));
+  await assert.rejects(frozen.snapshot("legacy"), MemoryWriteError);
+  await assert.rejects(readFile(join(memoryDir, snapshotId + ".jsonl"), "utf8"), { code: "ENOENT" });
+  await assert.rejects(frozen.remember(), MemoryWriteError);
+  await assert.rejects(frozen.restore(snapshotId), /FileMemory is read-only/);
+});
+
+test("FileMemory shares sentence validation for abbreviations and compact boundaries", async () => {
+  const accepted = ["One sentence.", "One sentence. Two sentence!", "Use e.g. this. Fine."];
+  for (const content of accepted) {
+    const { sut } = makeSUT();
+    await assert.doesNotReject(sut.remember(makeInput({ content })));
+  }
+
+  const { sut, path } = makeSUT();
+  for (const content of ["One. Two.Three.", "One. two.three."]) {
+    await assert.rejects(
+      sut.remember(makeInput({ content })),
+      /snapshot record .*content is invalid/,
+    );
+  }
+  await assert.rejects(readFile(path, "utf8"), { code: "ENOENT" });
+});
+
+test("frozen capability rejects forged readers", async () => {
   const snapshotId = "0123456789ab";
   const live = makeSUT({ mode: "top" }).sut;
   const forged = {
@@ -522,19 +611,6 @@ test("frozen capability rejects forged readers and projections that lose identit
 
   const source = makeSUT();
   await writeLessons(source.path, [makeLesson({ id: "lesson-frozen" })]);
-  const realFrozen = await source.sut.loadSnapshot(await source.sut.snapshot("legacy"), "legacy");
-  realFrozen.asFeatureScopedReader = () => live;
-  assert.throws(
-    () => bindFeatureScopedReader(realFrozen),
-    (error) => error instanceof MemoryBindingError && error.code === "memory_mismatch",
-  );
-
-  const realFrozenReadOnly = await source.sut.loadSnapshot(await source.sut.snapshot("legacy"), "legacy");
-  realFrozenReadOnly.asReadOnlyReader = () => live;
-  assert.throws(
-    () => readerOnly(realFrozenReadOnly),
-    (error) => error instanceof MemoryBindingError && error.code === "memory_mismatch",
-  );
 
   assert.throws(
     () => createFrozenMemorySnapshotBinding({

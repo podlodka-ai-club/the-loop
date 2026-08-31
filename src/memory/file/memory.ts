@@ -10,6 +10,7 @@ import { appendFile, mkdir, open, readFile, rename, unlink, writeFile, type File
 import { setTimeout as delay } from "node:timers/promises";
 import { dirname, join } from "node:path";
 import { isNormalizedFeatureKey } from "../../observe.ts";
+import { countSentences } from "../../sentence-count.ts";
 import { makeMemoryIdempotencyKey } from "../provenance.ts";
 import {
   isSharedMemoryPrompt,
@@ -60,15 +61,61 @@ type FrozenReaderMetadata = {
 const TRUSTED_FROZEN_READERS = new WeakSet<object>();
 const TRUSTED_FROZEN_METADATA = new WeakMap<object, FrozenReaderMetadata>();
 
+function cloneFrozenPrompt(prompt: MemoryPrompt): MemoryPrompt {
+  return Object.freeze({
+    operation: prompt.operation,
+    text: prompt.text,
+    version: prompt.version,
+    digest: prompt.digest,
+  });
+}
+
+function cloneFrozenPromptMetadata(
+  metadata: MemoryReader["promptMetadata"],
+): MemoryReader["promptMetadata"] {
+  if (metadata === undefined) return undefined;
+  return Object.freeze({
+    retrieve: cloneFrozenPrompt(metadata.retrieve),
+    store: cloneFrozenPrompt(metadata.store),
+  });
+}
+
+function freezePromptPort(port: MemoryAdapterPromptPort): MemoryAdapterPromptPort {
+  for (const value of Object.values(port)) {
+    if (typeof value === "function") Object.freeze(value);
+  }
+  return Object.freeze(port);
+}
+
 function markTrustedFrozenReader(reader: MemoryReader, snapshotId: string): MemoryReader {
-  if (reader.promptPort !== undefined) Object.freeze(reader.promptPort);
+  if (reader.promptMetadata !== undefined) {
+    Object.defineProperty(reader, "promptMetadata", {
+      configurable: false,
+      enumerable: true,
+      value: cloneFrozenPromptMetadata(reader.promptMetadata),
+      writable: false,
+    });
+  }
+  if (reader.promptPort !== undefined) {
+    freezePromptPort(reader.promptPort);
+    Object.defineProperty(reader, "promptPort", {
+      configurable: false,
+      enumerable: true,
+      value: reader.promptPort,
+      writable: false,
+    });
+  }
   TRUSTED_FROZEN_READERS.add(reader);
   TRUSTED_FROZEN_METADATA.set(reader, {
     snapshotId,
     recall: reader.recall,
     promptPort: reader.promptPort,
   });
-  return reader;
+  // The trusted marker alone is not enough: callers can still mutate a
+  // structural reader with Reflect or Object.defineProperty after it has been
+  // accepted. Freeze the reader itself so its frozen identity and methods stay
+  // immutable for the lifetime of the binding.
+  return Object.freeze(reader);
 }
 
 export function isTrustedFrozenMemoryReader(
@@ -225,11 +272,6 @@ function unicodeCodePointLength(value: string): number {
   return [...value].length;
 }
 
-function sentenceCount(content: string): number {
-  const segments = content.match(/[^.!?]+(?:[.!?]+(?:\s+|$)|$)/g) ?? [];
-  return segments.map((segment) => segment.trim()).filter((segment) => segment !== "").length;
-}
-
 function hasAllSnapshotProvenance(record: Record<string, unknown>): boolean {
   return SNAPSHOT_PROVENANCE_KEYS.every((key) => Object.hasOwn(record, key));
 }
@@ -254,7 +296,7 @@ function validateSnapshotLesson(
   if (
     !isNonEmptyString(record.content) ||
     unicodeCodePointLength(record.content) > 2_000 ||
-    sentenceCount(record.content) > 2
+    countSentences(record.content) > 2
   ) {
     throw new Error(`snapshot record ${index + 1}.content is invalid`);
   }
@@ -394,7 +436,7 @@ export async function loadValidatedSnapshotLessons(
  * same lessons every time.
  */
 export class FileMemory implements Memory, LegacyMemory {
-  readonly promptMetadata = sharedMemoryPromptMetadata();
+  readonly promptMetadata = cloneFrozenPromptMetadata(sharedMemoryPromptMetadata());
   readonly promptPort: MemoryAdapterPromptPort = {
     retrieve: (request) => {
       if (request.operation !== "retrieve" || typeof request.query !== "string") {
@@ -711,6 +753,10 @@ class FrozenMemory extends FileMemory {
   ): Promise<MemoryWriteResult> {
     throw new MemoryWriteError("write_failed", "FrozenMemory is read-only: evaluation must not write lessons");
   }
+
+  override async snapshot(_mode?: MemorySnapshotMode): Promise<string> {
+    throw new MemoryWriteError("write_failed", "FrozenMemory is read-only: evaluation must not write snapshots");
+  }
 }
 
 function createTrustedFrozenMemory(
@@ -735,7 +781,7 @@ function createTrustedFrozenProjection(backing: FrozenMemory, snapshotId: string
   };
   const reader: MemoryReader = {
     featureScope: backing.featureScope,
-    promptMetadata: backing.promptMetadata,
+    promptMetadata: cloneFrozenPromptMetadata(backing.promptMetadata),
     recall: (query, limit, prompt) => backing.recall(query, limit, prompt),
     promptPort,
   };

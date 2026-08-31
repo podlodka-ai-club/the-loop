@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Guess } from "../agent.ts";
 import { isNormalizedFeatureKey, unicodeCodePointLength } from "../observe.ts";
+import { countSentences } from "../sentence-count.ts";
 import type { FeatureKey, FeatureObservation } from "../observe.ts";
 import {
   MemoryWriteError,
@@ -392,7 +393,7 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
     throw new MemoryToolValidationError("invalid_tool_arguments");
   }
   const content = value.content.trim().replace(/\s+/g, " ");
-  if (sentenceCount(content) > 2) {
+  if (countSentences(content) > 2) {
     throw new MemoryToolValidationError("invalid_tool_arguments");
   }
   if (!Array.isArray(value.triggers) || value.triggers.length < 1 || value.triggers.length > 8) {
@@ -417,11 +418,6 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
     triggers,
     region: value.region,
   };
-}
-
-function sentenceCount(content: string): number {
-  const segments = content.match(/[^.!?]+(?:[.!?]+(?:\s+|$)|$)/g) ?? [];
-  return segments.map((segment) => segment.trim()).filter((segment) => segment !== "").length;
 }
 
 export function validateMemoryRunConfig(run: MemoryRunConfig): void {
