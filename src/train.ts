@@ -19,18 +19,13 @@ import { runTrainingTaskWithRuntime } from "./task-runtime.internal.ts";
 import type { MemoryRunConfig } from "./tools/memory.ts";
 import { parseBenchmarkMemoryMode } from "./benchmark-metrics.ts";
 import { selectTrainingSample } from "./train-selection.ts";
-import { parsePositiveSafeIntegerOption } from "./cli-options.ts";
+import { parsePositiveSafeIntegerOption, readCliOption } from "./cli-options.ts";
 
-function flag(name: string, fallback: string): string {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? fallback : (process.argv[index + 1] ?? fallback);
-}
-
-const limit = parsePositiveSafeIntegerOption("limit", flag("limit", "30"));
-const snapshotEvery = parsePositiveSafeIntegerOption("snapshot-every", flag("snapshot-every", "10"));
-const seed = flag("seed", "train-v1");
-const memoryMode = parseBenchmarkMemoryMode(flag("memory-mode", "warm"));
-const recallMode = parseRecallMode(flag("recall", memoryMode === "cold" ? "off" : "top"));
+const limit = parsePositiveSafeIntegerOption("limit", readCliOption("limit", "30"));
+const snapshotEvery = parsePositiveSafeIntegerOption("snapshot-every", readCliOption("snapshot-every", "10"));
+const seed = readCliOption("seed", "train-v1");
+const memoryMode = parseBenchmarkMemoryMode(readCliOption("memory-mode", "warm"));
+const recallMode = parseRecallMode(readCliOption("recall", memoryMode === "cold" ? "off" : "top"));
 if (memoryMode === "cold" && recallMode !== "off") {
   throw new Error("cold training requires --recall off");
 }
@@ -39,7 +34,7 @@ if (memoryMode === "warm" && recallMode !== "top") {
 }
 
 const [{ rows: pool }, { rows: metadataRows }] = await Promise.all([loadRows(), loadCsvRows()]);
-const manifest = await readManifest(flag("manifest", DEFAULT_MANIFEST));
+const manifest = await readManifest(readCliOption("manifest", DEFAULT_MANIFEST));
 
 const matchManifest = !process.argv.includes("--no-match-manifest");
 
@@ -52,7 +47,7 @@ const matchManifest = !process.argv.includes("--no-match-manifest");
  * again.
  */
 const onlyCountries = new Set(
-  flag("only", "")
+  readCliOption("only", "")
     .split(",")
     .map((code) => code.trim().toUpperCase())
     .filter((code) => code !== ""),

@@ -43,6 +43,25 @@ export type AttemptMetricsInput = {
   legacyGlobalProviderIds?: readonly string[];
 };
 
+export type BenchmarkExperimentMetadata = {
+  model: string;
+  seed: string;
+  fingerprint: string;
+  sampleSize: number;
+  memoryBackend: string;
+  requestedMemoryBackend: string;
+  effectiveMemoryBackend: string;
+  memorySnapshot: string;
+  memoryFrozen: boolean;
+  memoryMode: BenchmarkMemoryMode;
+  flow: string;
+  observationCacheKey: string;
+  recallMode: string;
+  twoStep: boolean;
+  recallLimit: number;
+  retrievalFixture: string;
+};
+
 export async function loadRetrievalFixture(
   path = DEFAULT_RETRIEVAL_FIXTURE,
 ): Promise<RetrievalFixtureCase[]> {
@@ -59,6 +78,12 @@ export async function loadRetrievalFixture(
     cases.push(parseRetrievalFixtureCase(parsed, `${path}:${index + 1}`));
   }
   if (cases.length === 0) throw new Error(`${path} must contain at least one retrieval fixture case`);
+  if (!cases.some((item) => item.class === "rare")) {
+    throw new Error(`${path} must contain at least one rare retrieval fixture case`);
+  }
+  if (!cases.some((item) => item.class === "broad")) {
+    throw new Error(`${path} must contain at least one broad retrieval fixture case`);
+  }
   return cases;
 }
 
@@ -100,6 +125,43 @@ export function buildBenchmarkPairContract(input: {
     memoryMode: input.memoryMode,
     control: { sampleIds: [...sampleIds], observationCacheKey },
     memoryOn: { sampleIds: [...sampleIds], observationCacheKey },
+  };
+}
+
+export function buildBenchmarkExperimentMetadata(input: {
+  model: string;
+  seed: string;
+  fingerprint: string;
+  sampleSize: number;
+  requestedMemoryBackend: string;
+  snapshotId: string;
+  memoryFrozen: boolean;
+  memoryMode: BenchmarkMemoryMode;
+  flow: string;
+  observationCacheKey: string;
+  recallMode: string;
+  twoStep: boolean;
+  recallLimit: number;
+  retrievalFixturePath: string;
+}): BenchmarkExperimentMetadata {
+  const effectiveMemoryBackend = input.memoryMode === "cold" ? "off" : input.requestedMemoryBackend;
+  return {
+    model: input.model,
+    seed: input.seed,
+    fingerprint: input.fingerprint,
+    sampleSize: input.sampleSize,
+    memoryBackend: input.requestedMemoryBackend,
+    requestedMemoryBackend: input.requestedMemoryBackend,
+    effectiveMemoryBackend,
+    memorySnapshot: input.snapshotId === "" ? "none" : input.snapshotId,
+    memoryFrozen: input.memoryFrozen,
+    memoryMode: input.memoryMode,
+    flow: input.flow,
+    observationCacheKey: input.observationCacheKey,
+    recallMode: input.recallMode,
+    twoStep: input.twoStep,
+    recallLimit: input.recallLimit,
+    retrievalFixture: input.retrievalFixturePath,
   };
 }
 

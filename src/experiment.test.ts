@@ -3,9 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildBenchmarkPairContract, buildAttemptMetrics, loadRetrievalFixture, parseBenchmarkMemoryMode, retrievalMetricsFromGroups, retrievalMetricsFromLegacyGlobalProviderIds, summarizeAttemptMetrics } from "./benchmark-metrics.ts";
+import { buildBenchmarkPairContract, buildAttemptMetrics, buildBenchmarkExperimentMetadata, loadRetrievalFixture, parseBenchmarkMemoryMode, retrievalMetricsFromGroups, retrievalMetricsFromLegacyGlobalProviderIds, summarizeAttemptMetrics } from "./benchmark-metrics.ts";
 import type { RetrievalFixtureCase } from "./benchmark-metrics.ts";
-import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption } from "./cli-options.ts";
+import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption, readCliOption } from "./cli-options.ts";
 import type { FeatureObservation } from "./observe.ts";
 import { createMem0Memory } from "./memory/mem0/memory.ts";
 import type { Mem0PlatformPort, Mem0SearchRequest } from "./memory/mem0/platform.ts";
@@ -116,6 +116,18 @@ test("retrieval fixture loader requires fixed rare and broad provider ids", asyn
     ]);
     await writeFile(path, "", "utf8");
     await assert.rejects(() => loadRetrievalFixture(path), /at least one retrieval fixture case/);
+    await writeFile(
+      path,
+      JSON.stringify({ featureKey: "visible_text", class: "rare", expectedProviderIds: ["rare-1"] }) + "\n",
+      "utf8",
+    );
+    await assert.rejects(() => loadRetrievalFixture(path), /at least one broad retrieval fixture case/);
+    await writeFile(
+      path,
+      JSON.stringify({ featureKey: "vegetation", class: "broad", expectedProviderIds: ["broad-1"] }) + "\n",
+      "utf8",
+    );
+    await assert.rejects(() => loadRetrievalFixture(path), /at least one rare retrieval fixture case/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -128,6 +140,13 @@ test("benchmark CLI numeric and memory-mode contracts fail fast", () => {
   assert.throws(() => parsePositiveSafeIntegerOption("limit", "-1"), /--limit must be a safe integer/);
   assert.throws(() => parsePositiveSafeIntegerOption("snapshot-every", "0"), /--snapshot-every must be a safe integer/);
   assert.throws(() => parseNonNegativeSafeIntegerOption("head", "-1"), /--head must be a safe integer/);
+  for (const name of ["limit", "snapshot-every", "concurrency", "head", "size"]) {
+    assert.throws(() => readCliOption(name, "fallback", ["node", "script.ts", `--${name}`]), new RegExp(`--${name} requires a value`));
+  }
+  assert.throws(
+    () => readCliOption("concurrency", "8", ["node", "src/experiment.ts", "--concurrency", "--head", "10"]),
+    /--concurrency requires a value/,
+  );
 
   assert.throws(
     () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "snapshot", recall: "off", memoryMode: "warm" }),
@@ -141,6 +160,41 @@ test("benchmark CLI numeric and memory-mode contracts fail fast", () => {
     () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "", recall: "top", memoryMode: "cold" }),
     /cold evaluation requires --recall off/,
   );
+});
+
+test("experiment metadata reports requested and effective memory backends", () => {
+  const metadataInput = {
+    model: "model",
+    seed: "seed",
+    fingerprint: "fingerprint",
+    sampleSize: 2,
+    requestedMemoryBackend: "mem0",
+    snapshotId: "",
+    memoryFrozen: true,
+    memoryMode: "cold",
+    flow: "feature-scoped",
+    observationCacheKey: "cache",
+    recallMode: "off",
+    twoStep: false,
+    recallLimit: 5,
+    retrievalFixturePath: "fixture.jsonl",
+  } as const;
+  const cold = buildBenchmarkExperimentMetadata(metadataInput);
+  const warm = buildBenchmarkExperimentMetadata({
+    ...metadataInput,
+    requestedMemoryBackend: "file",
+    snapshotId: "snapshot-1",
+    memoryMode: "warm",
+    recallMode: "top",
+  });
+
+  assert.equal(cold.memoryBackend, "mem0");
+  assert.equal(cold.requestedMemoryBackend, "mem0");
+  assert.equal(cold.effectiveMemoryBackend, "off");
+  assert.equal(cold.memorySnapshot, "none");
+  assert.equal(warm.requestedMemoryBackend, "file");
+  assert.equal(warm.effectiveMemoryBackend, "file");
+  assert.equal(warm.memorySnapshot, "snapshot-1");
 });
 
 test("FileMemory and Mem0 readers both enter feature-scoped retrieval through the dispatcher", async () => {

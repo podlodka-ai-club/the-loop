@@ -16,10 +16,11 @@ import { MODEL } from "./agent.ts";
 import {
   DEFAULT_RETRIEVAL_FIXTURE,
   buildBenchmarkPairContract,
+  buildBenchmarkExperimentMetadata,
   loadRetrievalFixture,
   parseBenchmarkMemoryMode,
 } from "./benchmark-metrics.ts";
-import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption } from "./cli-options.ts";
+import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption, readCliOption } from "./cli-options.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
 import type { LegacyMemory } from "./memory/memory.ts";
@@ -31,24 +32,19 @@ import type { ExampleInput } from "./task.ts";
 
 const PHOENIX_URL = process.env.PHOENIX_BASE_URL ?? "http://localhost:6006";
 
-function flag(name: string, fallback: string): string {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? fallback : (process.argv[index + 1] ?? fallback);
-}
-
-const manifestPath = flag("manifest", DEFAULT_MANIFEST);
-const concurrency = parsePositiveSafeIntegerOption("concurrency", flag("concurrency", "8"));
-const label = flag("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
+const manifestPath = readCliOption("manifest", DEFAULT_MANIFEST);
+const concurrency = parsePositiveSafeIntegerOption("concurrency", readCliOption("concurrency", "8"));
+const label = readCliOption("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
 
 // Memory is read-only here on purpose. Evaluation that writes lessons is training
 // with extra steps, and the held-out numbers stop meaning anything.
-const snapshotId = flag("snapshot", "");
-const flow = flag("flow", "legacy");
+const snapshotId = readCliOption("snapshot", "");
+const flow = readCliOption("flow", "legacy");
 if (flow !== "legacy" && flow !== "feature-scoped") {
   throw new Error(`unknown flow "${flow}", expected legacy|feature-scoped`);
 }
-const memoryMode = parseBenchmarkMemoryMode(flag("memory-mode", snapshotId === "" ? "cold" : "warm"));
-const recallMode = parseRecallMode(flag("recall", memoryMode === "cold" ? "off" : "top"));
+const memoryMode = parseBenchmarkMemoryMode(readCliOption("memory-mode", snapshotId === "" ? "cold" : "warm"));
+const recallMode = parseRecallMode(readCliOption("recall", memoryMode === "cold" ? "off" : "top"));
 if (memoryMode === "cold" && recallMode !== "off") {
   throw new Error("cold benchmark requires --recall off");
 }
@@ -66,7 +62,7 @@ if (memoryMode === "warm" && snapshotId.trim() === "") {
 // mandatory with a ranked or query-based backend, which has nothing to rank on
 // otherwise.
 const twoStep = process.argv.includes("--two-step");
-const backend = parseBackend(flag("backend", "file"));
+const backend = parseBackend(readCliOption("backend", "file"));
 const recallFlag = recallMode;
 const legacySelection =
   flow === "legacy"
@@ -82,7 +78,7 @@ const featureScopedSelection =
     : null;
 const activeSelection = featureScopedSelection ?? legacySelection;
 if (activeSelection === null) throw new Error("memory selection is missing");
-const retrievalFixturePath = flag("retrieval-fixture", DEFAULT_RETRIEVAL_FIXTURE);
+const retrievalFixturePath = readCliOption("retrieval-fixture", DEFAULT_RETRIEVAL_FIXTURE);
 const retrievalFixture = await loadRetrievalFixture(retrievalFixturePath);
 const legacyGlobalMemory: LegacyMemory | undefined =
   memoryMode === "warm" && flow === "feature-scoped"
@@ -103,7 +99,7 @@ const legacyGlobalMemory: LegacyMemory | undefined =
  * time, and it gets its own fingerprint - a partial run is a different benchmark and
  * must never be filed under the full one's numbers.
  */
-const head = parseNonNegativeSafeIntegerOption("head", flag("head", "0"));
+const head = parseNonNegativeSafeIntegerOption("head", readCliOption("head", "0"));
 
 const { rows: pool, csvRowCount } = await loadRows();
 const full = await loadFrozenSample(pool, manifestPath);
@@ -181,13 +177,13 @@ try {
 const experiment = await runExperiment({
   dataset: { datasetId },
   experimentName: label,
-  experimentMetadata: {
+  experimentMetadata: buildBenchmarkExperimentMetadata({
     model: MODEL,
     seed,
     fingerprint: sample.fingerprint,
     sampleSize: sample.rows.length,
-    memoryBackend: backend,
-    memorySnapshot: snapshotId === "" ? "none" : snapshotId,
+    requestedMemoryBackend: backend,
+    snapshotId,
     memoryFrozen: activeSelection.frozen,
     memoryMode,
     flow,
@@ -195,8 +191,8 @@ const experiment = await runExperiment({
     recallMode: activeSelection.recallMode,
     twoStep,
     recallLimit: activeSelection.recallLimit,
-    retrievalFixture: retrievalFixturePath,
-  },
+    retrievalFixturePath,
+  }),
   task: (example) => {
     const input = example.input as ExampleInput;
     const expected = example.output as { latitude?: unknown; longitude?: unknown; country?: unknown } | undefined;

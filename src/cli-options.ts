@@ -1,3 +1,17 @@
+export function readCliOption(
+  name: string,
+  fallback: string,
+  argv: readonly string[] = process.argv,
+): string {
+  const index = argv.indexOf(`--${name}`);
+  if (index === -1) return fallback;
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`--${name} requires a value`);
+  }
+  return value;
+}
+
 export function parsePositiveSafeIntegerOption(
   name: string,
   raw: string,
