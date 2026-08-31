@@ -4,9 +4,12 @@
  * feature-scoped callers.
  */
 export {
+  runFeatureScopedTrainingTask as runTrainingTaskWithRuntime,
   runFeatureScopedTask as runTaskWithRuntime,
   type FeatureScopedTaskRuntimeDeps,
   type FeatureScopedTaskRuntimeInput,
+  type FeatureScopedTrainingTaskRuntimeDeps,
+  type FeatureScopedTrainingTaskRuntimeInput,
   type LocateFunction,
   type ReflectEpisodeFunction,
 } from "./task-feature-scoped.internal.ts";

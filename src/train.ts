@@ -16,7 +16,7 @@ import { RECALL_LIMIT } from "./memory/memory.ts";
 import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
 import { drawSample, fingerprintOf, loadRows } from "./osv5m.ts";
 import type { Row } from "./osv5m.ts";
-import { runTaskWithRuntime } from "./task-runtime.internal.ts";
+import { runTrainingTaskWithRuntime } from "./task-runtime.internal.ts";
 import type { MemoryRunConfig } from "./tools/memory.ts";
 
 function flag(name: string, fallback: string): string {
@@ -125,12 +125,12 @@ if (matchManifest) {
   sample = drawSample(trainPool, { size: limit, seed });
 }
 const memory = new FileMemory(undefined, recallMode);
-const run: MemoryRunConfig = {
+const run = {
   mode: "training",
   snapshotId: null,
   readOnly: false,
   recallLimit: boundedRecallLimit(RECALL_LIMIT),
-};
+} satisfies MemoryRunConfig;
 
 console.log(`pool     ${trainPool.length} train-eligible of ${pool.length} on disk`);
 console.log(`sample   n=${sample.rows.length} seed=${seed} fp=${sample.fingerprint}`);
@@ -145,7 +145,7 @@ const distances: number[] = [];
 
 for (const [index, row] of sample.rows.entries()) {
   const attemptId = `${seed}:${row.id}`;
-  const result = await runTaskWithRuntime({
+  const result = await runTrainingTaskWithRuntime({
     imageId: row.id,
     imagePath: row.imagePath,
     attemptId,

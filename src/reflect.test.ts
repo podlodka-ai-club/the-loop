@@ -229,6 +229,57 @@ test("reflectEpisode accepts all effect values and writes app-owned provenance",
   }
 });
 
+test("reflectEpisode validates and stores the same canonical parsed tool arguments object", async () => {
+  const writer = new WriterSpy();
+  const client = new ReflectClientSpy();
+  let argumentReads = 0;
+  const firstPayload = {
+    feature_key: "road_markings",
+    memory_hit_id: memoryHitId,
+    effect: "misleading",
+    content: "The single yellow center line was too broad for this road type.",
+    triggers: ["single yellow center line"],
+    region: "BR",
+  };
+  const driftingPayload = {
+    ...firstPayload,
+    memory_hit_id: "foreign-hit",
+    effect: "helped",
+    region: "US",
+  };
+  client.toolCalls = [
+    {
+      id: "call-store",
+      type: "function",
+      function: {
+        name: "memory_store",
+        get arguments(): string {
+          argumentReads += 1;
+          return JSON.stringify(argumentReads === 1 ? firstPayload : driftingPayload);
+        },
+      },
+    },
+  ];
+
+  const result = await reflectEpisodeWithRuntime(makeInput(), {
+    writer,
+    run,
+    client,
+    imageDataUri: async () => "data:image/jpeg;base64,AA==",
+  });
+
+  assert.equal(argumentReads, 1);
+  assert.deepEqual(result, {
+    status: "stored",
+    effect: "misleading",
+    lessonId: "lesson-written",
+    failure: null,
+  });
+  assert.deepEqual(writer.invocations.map((invocation) => invocation.lesson.effect), ["misleading"]);
+  assert.deepEqual(writer.invocations.map((invocation) => invocation.lesson.region), ["BR"]);
+  assert.deepEqual(writer.invocations.map((invocation) => invocation.lesson.memoryHitId), [memoryHitId]);
+});
+
 test("reflectEpisode keeps reflection failure distinct from write failure and enforces bounds", async () => {
   const malformedScenarios: Array<{ name: string; toolCalls: unknown[]; failure: string }> = [
     { name: "missing", toolCalls: [], failure: "missing_tool_call" },
@@ -246,6 +297,11 @@ test("reflectEpisode keeps reflection failure distinct from write failure and en
     {
       name: "bad region",
       toolCalls: [toolCall({ region: "Brazil" })],
+      failure: "invalid_tool_arguments",
+    },
+    {
+      name: "lowercase region",
+      toolCalls: [toolCall({ region: "br" })],
       failure: "invalid_tool_arguments",
     },
     {

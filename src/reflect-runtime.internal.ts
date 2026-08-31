@@ -181,18 +181,18 @@ function parsedToolArguments(toolCalls: readonly unknown[]): unknown {
   if (call.function.name !== "memory_store") {
     throw new MemoryToolValidationError("missing_tool_call");
   }
-  if (typeof call.function.arguments !== "string") {
+  const rawArgs = call.function.arguments;
+  if (typeof rawArgs !== "string") {
     throw new MemoryToolValidationError("malformed_tool_json");
   }
   try {
-    return JSON.parse(call.function.arguments) as unknown;
+    return JSON.parse(rawArgs) as unknown;
   } catch {
     throw new MemoryToolValidationError("malformed_tool_json");
   }
 }
 
-function effectFromToolCalls(toolCalls: readonly unknown[]): ReflectionEffect | null {
-  const parsed = parsedToolArguments(toolCalls);
+function effectFromParsedToolArguments(parsed: unknown): ReflectionEffect | null {
   if (!isRecord(parsed) || !isReflectionEffect(parsed.effect)) return null;
   return parsed.effect;
 }
@@ -211,8 +211,7 @@ function normalizedCountry(value: unknown): string | null {
   return /^[A-Z]{2}$/.test(normalized) ? normalized : null;
 }
 
-function regionFromToolCalls(toolCalls: readonly unknown[]): string | null {
-  const parsed = parsedToolArguments(toolCalls);
+function regionFromParsedToolArguments(parsed: unknown): string | null {
   if (!isRecord(parsed) || typeof parsed.region !== "string") return null;
   return normalizedCountry(parsed.region);
 }
@@ -278,8 +277,9 @@ export async function reflectEpisodeWithRuntime(
       }
 
       const toolCalls = response.choices[0]?.message.tool_calls ?? [];
-      const effect = effectFromToolCalls(toolCalls);
-      const region = regionFromToolCalls(toolCalls);
+      const parsedArgs = parsedToolArguments(toolCalls);
+      const effect = effectFromParsedToolArguments(parsedArgs);
+      const region = regionFromParsedToolArguments(parsedArgs);
       if (region === null || region !== truthCountry) return failureResult("invalid_tool_arguments");
       const store = await executeMemoryStore(
         {
@@ -291,7 +291,7 @@ export async function reflectEpisodeWithRuntime(
           activeFeature: input.feature,
           activeMemoryHit: input.memoryHit,
         },
-        toolCalls,
+        parsedArgs,
       );
 
       if (effect === null) return failureResult("invalid_tool_arguments");

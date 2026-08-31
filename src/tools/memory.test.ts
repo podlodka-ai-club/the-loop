@@ -182,7 +182,27 @@ test("tool definitions are strict, complete and phase gated", () => {
     "misleading",
     "insufficient",
   ]);
-  assert.equal(MEMORY_STORE_TOOL.function.parameters.properties.triggers.items.type, "string");
+  assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.memory_hit_id, {
+    type: "string",
+    minLength: 1,
+  });
+  assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.content, {
+    type: "string",
+    minLength: 1,
+    maxLength: 2_000,
+  });
+  assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.triggers, {
+    type: "array",
+    minItems: 1,
+    maxItems: 8,
+    items: { type: "string", minLength: 1, maxLength: 128 },
+  });
+  assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.region, {
+    type: "string",
+    minLength: 2,
+    maxLength: 2,
+    pattern: "^[A-Z]{2}$",
+  });
   assert.equal(Object.prototype.hasOwnProperty.call(MEMORY_RETRIEVE_TOOL.function.parameters.properties, "memory_ref"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(MEMORY_STORE_TOOL.function.parameters.properties, "sourceAttemptId"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(MEMORY_STORE_TOOL.function.parameters.properties, "idempotencyKey"), false);

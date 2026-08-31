@@ -22,6 +22,7 @@ import type {
 import { FEATURE_KEYS, type FeatureObservation, type ObserveResult } from "./observe.ts";
 import { runTask, type FeatureScopedTaskDeps } from "./task.ts";
 import {
+  runTrainingTaskWithRuntime,
   runTaskWithRuntime,
   type FeatureScopedTaskRuntimeInput,
   type LocateFunction,
@@ -31,12 +32,12 @@ import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts"
 import { makeMemoryHitId, type LocateResult, type MemoryRunConfig } from "./tools/memory.ts";
 import type { ReflectionEpisodeInput, ReflectionEpisodeResult } from "./reflect.ts";
 
-const run: MemoryRunConfig = {
+const run = {
   mode: "training",
   snapshotId: null,
   readOnly: false,
   recallLimit: 5,
-};
+} satisfies MemoryRunConfig;
 
 function observed(
   overrides: Partial<Record<(typeof FEATURE_KEYS)[number], Partial<FeatureObservation>>>,
@@ -656,6 +657,72 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
   assert.deepEqual(writer.rememberInvocations, []);
 });
 
+test("runTask feature-scoped training keeps the first stored episode when the next reflection runtime fails", async () => {
+  const memory = new MemoryReaderSpy();
+  const writer = new MemoryWriterSpy();
+  const client = new LocateClientSpy();
+  const reflectInvocations: Array<{ input: ReflectionEpisodeInput }> = [];
+  const reflect: ReflectEpisodeFunction = async (input) => {
+    reflectInvocations.push({ input });
+    if (reflectInvocations.length === 2) throw new Error("model_failed");
+    return { status: "stored", effect: "helped", lessonId: "lesson-first", failure: null };
+  };
+
+  const result = await runTrainingTaskWithRuntime(
+    {
+      imageId: "image-reflect-runtime-failed",
+      imagePath: "reflect-runtime-failed.jpg",
+      attemptId: "attempt-reflect-runtime-failed",
+      truth: { latitude: -30.03, longitude: -51.23, country: "BR" },
+    },
+    {
+      memory,
+      writer,
+      run,
+      reflectEpisode: reflect,
+      locate: locateWithHooks({
+        client,
+        imageDataUri: async () => "data:image/jpeg;base64,AA==",
+        observe: async () =>
+          observed({
+            poles: { state: "visible", text: "wooden poles" },
+          }),
+      }),
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(reflectInvocations.length, 2);
+  assert.deepEqual(result.episodes, [
+    {
+      attemptId: "attempt-reflect-runtime-failed",
+      featureKey: "poles",
+      memoryHitId: result.memoryGroups[0]?.hits[0]?.memoryHitId,
+      effect: "helped",
+      reflectionStatus: "stored",
+      lessonId: "lesson-first",
+    },
+    {
+      attemptId: "attempt-reflect-runtime-failed",
+      featureKey: "poles",
+      memoryHitId: result.memoryGroups[0]?.hits[1]?.memoryHitId,
+      effect: null,
+      reflectionStatus: "reflection_failed",
+      lessonId: null,
+    },
+  ]);
+  assert.deepEqual(result.trace?.episodes, result.episodes);
+  assert.deepEqual(
+    result.trace?.events.map((event) => [event.phase, event.operation, event.featureKey, event.memoryHitId, event.status]),
+    [
+      ["retrieve", "memory_retrieve", "poles", null, "hits"],
+      ["reflect", "memory_store", "poles", result.memoryGroups[0]?.hits[0]?.memoryHitId, "stored"],
+      ["reflect", "memory_store", "poles", result.memoryGroups[0]?.hits[1]?.memoryHitId, "reflection_failed"],
+    ],
+  );
+  assert.deepEqual(writer.rememberInvocations, []);
+});
+
 test("runTask feature-scoped path skips reflection for no-hit, not-visible and failed retrieval outcomes", async () => {
   const client = new LocateClientSpy();
   client.missingAlwaysFor.add("plates");
@@ -838,6 +905,60 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
   await rm(memoryDir, { recursive: true, force: true });
 });
 
+test("runTask evaluation and production reject direct writable adapters without a read-only projection", async () => {
+  for (const scenario of [
+    { mode: "evaluation" as const, snapshotId: "snapshot-direct-writer", readOnly: true },
+    { mode: "production" as const, snapshotId: null, readOnly: true },
+  ]) {
+    const memory = new MemoryWriterSpy();
+    const reflect = new ReflectEpisodeSpy();
+    let locateCalls = 0;
+    const locateSpy: LocateFunction = async (input): Promise<LocateResult> => {
+      locateCalls += 1;
+      return {
+        attemptId: input.attemptId,
+        guess: {
+          latitude: 1,
+          longitude: 2,
+          place: "Should not run",
+          confidence: 0.1,
+          reasoning: "A direct writable adapter without projection must be rejected first.",
+          provider: "fake",
+        },
+        observations: [],
+        memoryGroups: [],
+        episodes: [],
+        trace: { attemptId: input.attemptId, groups: [], episodes: [], events: [] },
+      };
+    };
+
+    const result = await runTaskWithRuntime(
+      {
+        imageId: `image-direct-writer-${scenario.mode}`,
+        imagePath: `direct-writer-${scenario.mode}.jpg`,
+        attemptId: `attempt-direct-writer-${scenario.mode}`,
+        truth: { latitude: 1, longitude: 2, country: "BR" },
+      },
+      {
+        memory,
+        writer: memory,
+        run: { ...scenario, recallLimit: 5 },
+        locate: locateSpy,
+        reflectEpisode: reflect.reflect,
+      },
+    );
+
+    assert.equal(result.ok, false, scenario.mode);
+    if (result.ok) assert.fail("expected read-only projection rejection");
+    assert.equal(result.failure, "api_error", scenario.mode);
+    assert.match(result.message, /feature-scoped evaluation\/production memory must be reader-only/, scenario.mode);
+    assert.equal(locateCalls, 0, scenario.mode);
+    assert.deepEqual(memory.invocations, [], scenario.mode);
+    assert.deepEqual(memory.rememberInvocations, [], scenario.mode);
+    assert.deepEqual(reflect.invocations, [], scenario.mode);
+  }
+});
+
 test("runTask evaluation wraps direct writable FileMemory before feature-scoped retrieval", async () => {
   const { FileMemory } = await import("./memory/file/memory.ts");
   const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-direct-file-memory-"));
@@ -868,6 +989,58 @@ test("runTask evaluation wraps direct writable FileMemory before feature-scoped 
       {
         memory: new FileMemory(memoryPath, "all", false),
         run: { mode: "evaluation", snapshotId: "snapshot-direct", readOnly: true, recallLimit: 5 },
+        locate: locateWithHooks({
+          client,
+          imageDataUri: async () => "data:image/jpeg;base64,AA==",
+          observe: async () =>
+            observed({
+              poles: { state: "visible", text: "wooden poles" },
+            }),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      result.memoryGroups.map((group) => [group.feature.key, group.status, group.hits.length]),
+      [["poles", "hits", 1]],
+    );
+    assert.equal(await readFile(memoryPath, "utf8"), `${JSON.stringify(storedLesson)}\n`);
+  } finally {
+    await rm(memoryDir, { recursive: true, force: true });
+  }
+});
+
+test("runTask production wraps direct writable FileMemory before feature-scoped retrieval", async () => {
+  const { FileMemory } = await import("./memory/file/memory.ts");
+  const memoryDir = await mkdtemp(join(tmpdir(), "loci-task-production-file-memory-"));
+  const memoryPath = join(memoryDir, "live.jsonl");
+  const storedLesson: LessonInput & { id: string; hits: number; wins: number } = {
+    id: "lesson-0001",
+    content: "Wooden poles line up with the production reader.",
+    sourceAttemptId: "attempt-file-memory-production",
+    featureKey: "poles",
+    memoryHitId: "attempt-file-memory-production/poles/hit",
+    effect: "helped",
+    triggers: ["wooden poles"],
+    region: "BR",
+    idempotencyKey: "attempt-file-memory-production:poles:hit",
+    hits: 0,
+    wins: 0,
+  };
+  await writeFile(memoryPath, `${JSON.stringify(storedLesson)}\n`, "utf8");
+  const client = new LocateClientSpy();
+
+  try {
+    const result = await runTaskWithRuntime(
+      {
+        imageId: "image-production-file-memory",
+        imagePath: "production-file-memory.jpg",
+        attemptId: "attempt-production-file-memory",
+      },
+      {
+        memory: new FileMemory(memoryPath, "all", false),
+        run: { mode: "production", snapshotId: null, readOnly: true, recallLimit: 5 },
         locate: locateWithHooks({
           client,
           imageDataUri: async () => "data:image/jpeg;base64,AA==",

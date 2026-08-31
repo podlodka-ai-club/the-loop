@@ -127,14 +127,19 @@ export const MEMORY_STORE_TOOL = {
       type: "object",
       properties: {
         feature_key: { type: "string", enum: FEATURE_KEYS },
-        memory_hit_id: { type: "string" },
+        memory_hit_id: { type: "string", minLength: 1 },
         effect: {
           type: "string",
           enum: ["helped", "irrelevant", "misleading", "insufficient"],
         },
-        content: { type: "string" },
-        triggers: { type: "array", items: { type: "string" } },
-        region: { type: "string" },
+        content: { type: "string", minLength: 1, maxLength: 2_000 },
+        triggers: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          items: { type: "string", minLength: 1, maxLength: 128 },
+        },
+        region: { type: "string", minLength: 2, maxLength: 2, pattern: "^[A-Z]{2}$" },
       },
       required: ["feature_key", "memory_hit_id", "effect", "content", "triggers", "region"],
       additionalProperties: false,

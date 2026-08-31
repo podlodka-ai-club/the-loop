@@ -227,6 +227,9 @@ export class FileMemory implements Memory, LegacyMemory {
   }
 
   async restore(id: string): Promise<void> {
+    if (this.readOnly) {
+      throw new Error("FileMemory is read-only: evaluation and production must not restore lessons");
+    }
     const frozen = await readFile(join(MEMORY_DIR, `${id}.jsonl`), "utf8");
     await mkdir(dirname(this.path), { recursive: true });
     await writeFile(this.path, frozen, "utf8");

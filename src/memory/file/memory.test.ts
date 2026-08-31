@@ -261,6 +261,20 @@ test("read-only FileMemory rejects direct remember without changing the store", 
   assert.equal(await readFile(path, "utf8"), before);
 });
 
+test("read-only FileMemory rejects direct restore without changing the store", async () => {
+  const source = makeSUT();
+  const frozen = makeLesson({ id: "lesson-0001", content: "frozen" });
+  await writeLessons(source.path, [frozen]);
+  const snapshotId = await source.sut.snapshot();
+  const { sut, path } = makeSUT({ readOnly: true });
+  const existing = makeLesson({ id: "lesson-0002", content: "existing" });
+  await writeLessons(path, [existing]);
+  const before = await readFile(path, "utf8");
+
+  await assert.rejects(sut.restore(snapshotId), /FileMemory is read-only/);
+  assert.equal(await readFile(path, "utf8"), before);
+});
+
 test("recall propagates malformed JSON from the store", async () => {
   const { sut, path } = makeSUT();
   await writeFile(path, "{not-json}\n", "utf8");
@@ -311,4 +325,6 @@ test("FrozenMemory recalls without changing the snapshot and rejects remember", 
   assert.deepEqual(await frozen.recall([]), [{ lessonId: "lesson-0001", text: `XX: ${input.content}` }]);
   assert.equal(await readFile(snapshotPath, "utf8"), before);
   await assert.rejects(frozen.remember(), /FrozenMemory is read-only/);
+  await assert.rejects(frozen.restore(snapshotId), /FileMemory is read-only/);
+  assert.equal(await readFile(snapshotPath, "utf8"), before);
 });

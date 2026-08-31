@@ -46,6 +46,24 @@ export type FeatureScopedTaskRuntimeDeps = FeatureScopedTaskDeps & {
   reflectEpisode?: ReflectEpisodeFunction;
 };
 
+export type FeatureScopedTrainingRunConfig = FeatureScopedTaskDeps["run"] & {
+  mode: "training";
+  snapshotId: null;
+  readOnly: false;
+};
+
+export type FeatureScopedTrainingTaskRuntimeInput = FeatureScopedTaskRuntimeInput & {
+  truth: { latitude: number; longitude: number; country: string };
+};
+
+export type FeatureScopedTrainingTaskRuntimeDeps = Omit<
+  FeatureScopedTaskRuntimeDeps,
+  "run" | "writer"
+> & {
+  run: FeatureScopedTrainingRunConfig;
+  writer: MemoryWriter;
+};
+
 function estimateHintTokens(hints: readonly Hint[]): number {
   return Math.ceil(hints.reduce((sum, hint) => sum + hint.text.length, 0) / 4);
 }
@@ -150,6 +168,22 @@ function reflectionEvent(
   };
 }
 
+function failedReflectionEvent(
+  attemptId: string,
+  hit: MemoryHit,
+  sequence: number,
+): ToolEvent {
+  return {
+    attemptId,
+    phase: "reflect",
+    operation: "memory_store",
+    featureKey: hit.featureKey,
+    memoryHitId: hit.memoryHitId,
+    status: "reflection_failed",
+    sequence,
+  };
+}
+
 async function reflectEpisodesAfterReveal(
   input: FeatureScopedTaskRuntimeInput & {
     truth: { latitude: number; longitude: number; country: string };
@@ -172,35 +206,50 @@ async function reflectEpisodesAfterReveal(
     if (group.status !== "hits") continue;
     for (const hit of group.hits) {
       if (!candidates.has(`${hit.featureKey}\0${hit.memoryHitId}`)) continue;
-      const reflection = await reflect(
-        {
-          attemptId: result.attemptId,
-          imagePath: input.imagePath,
-          feature: group.feature,
-          memoryHit: hit,
-          guess: {
-            latitude: result.guess.latitude,
-            longitude: result.guess.longitude,
-            place: result.guess.place,
-            reasoning: result.guess.reasoning,
+      try {
+        const reflection = await reflect(
+          {
+            attemptId: result.attemptId,
+            imagePath: input.imagePath,
+            feature: group.feature,
+            memoryHit: hit,
+            guess: {
+              latitude: result.guess.latitude,
+              longitude: result.guess.longitude,
+              place: result.guess.place,
+              reasoning: result.guess.reasoning,
+            },
+            truth: input.truth,
+            distanceKm,
           },
-          truth: input.truth,
-          distanceKm,
-        },
-        { writer: deps.writer, run: deps.run },
-      );
-      const episode: EpisodeTrace = {
-        attemptId: result.attemptId,
-        featureKey: hit.featureKey,
-        memoryHitId: hit.memoryHitId,
-        effect: reflection.effect,
-        reflectionStatus: reflection.status,
-        lessonId: reflection.lessonId,
-      };
-      result.episodes.push(episode);
-      if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
-      sequence += 1;
-      result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence));
+          { writer: deps.writer, run: deps.run },
+        );
+        const episode: EpisodeTrace = {
+          attemptId: result.attemptId,
+          featureKey: hit.featureKey,
+          memoryHitId: hit.memoryHitId,
+          effect: reflection.effect,
+          reflectionStatus: reflection.status,
+          lessonId: reflection.lessonId,
+        };
+        result.episodes.push(episode);
+        if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
+        sequence += 1;
+        result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence));
+      } catch {
+        const episode: EpisodeTrace = {
+          attemptId: result.attemptId,
+          featureKey: hit.featureKey,
+          memoryHitId: hit.memoryHitId,
+          effect: null,
+          reflectionStatus: "reflection_failed",
+          lessonId: null,
+        };
+        result.episodes.push(episode);
+        if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
+        sequence += 1;
+        result.trace.events.push(failedReflectionEvent(result.attemptId, hit, sequence));
+      }
     }
   }
 }
@@ -235,4 +284,11 @@ export async function runFeatureScopedTask(
     }
     return { ok: false, failure: "api_error", message, ...use };
   }
+}
+
+export function runFeatureScopedTrainingTask(
+  input: FeatureScopedTrainingTaskRuntimeInput,
+  deps: FeatureScopedTrainingTaskRuntimeDeps,
+): Promise<TaskResult> {
+  return runFeatureScopedTask(input, deps);
 }
