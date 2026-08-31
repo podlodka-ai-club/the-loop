@@ -7,11 +7,12 @@
 import { UnparseableOutputError, geolocate } from "./agent.ts";
 import type { Guess } from "./agent.ts";
 import { buildAttemptMetrics } from "./benchmark-metrics.ts";
+import type { RetrievalFixtureCase } from "./benchmark-metrics.ts";
 import type { LocateDeps } from "./locate.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import { observe } from "./observe.ts";
 import type { FeatureObservation } from "./observe.ts";
-import { RECALL_LIMIT } from "./memory/memory.ts";
+import { RECALL_LIMIT, parseRecallLimit } from "./memory/memory.ts";
 import type { Hint, LegacyMemory, MemoryReader } from "./memory/memory.ts";
 import { runFeatureScopedTask } from "./task-feature-scoped.internal.ts";
 import type {
@@ -51,12 +52,19 @@ export type ExampleInput = {
   imageId: string;
   imagePath: string;
   attemptId?: string;
+  truth?: { latitude: number; longitude: number; country: string };
   /**
    * Observed features to rank lessons against, when something has already looked at
    * the image. The single-call agent has none, and recall falls back to a global
    * prior - see `FileMemory.recall`.
    */
   features?: string[];
+};
+
+export type BenchmarkTaskMetricsConfig = {
+  retrievalFixture: readonly RetrievalFixtureCase[];
+  legacyGlobalProviderIds?: readonly string[];
+  legacyGlobalMemory?: LegacyMemory;
 };
 
 /**
@@ -71,6 +79,7 @@ export type FeatureScopedTaskDeps = {
   run: MemoryRunConfig;
   memory?: MemoryReader;
   locateDeps?: Partial<Pick<LocateDeps, "maxToolAttemptsPerFeature">>;
+  benchmark?: BenchmarkTaskMetricsConfig;
   recallLimit?: never;
   twoStep?: never;
   learn?: never;
@@ -79,6 +88,7 @@ export type FeatureScopedTaskDeps = {
 export type LegacyTaskDeps = {
   memory?: LegacyMemory;
   recallLimit?: number;
+  benchmark?: BenchmarkTaskMetricsConfig;
   /**
    * Look at the image first and use what it sees as the recall query.
    *
@@ -140,6 +150,7 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
     const featureScopedDeps: FeatureScopedTaskDeps = { run: deps.run };
     if (deps.memory !== undefined) featureScopedDeps.memory = deps.memory;
     if (deps.locateDeps !== undefined) featureScopedDeps.locateDeps = deps.locateDeps;
+    if (deps.benchmark !== undefined) featureScopedDeps.benchmark = deps.benchmark;
     return runFeatureScopedTask(input, featureScopedDeps);
   }
 
@@ -151,6 +162,8 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
   // Observation runs before recall because recall needs a query. Its output is used
   // for search only: the solver below still receives the image, so anything this
   // step misses is not lost to the answer.
+  const recallLimit =
+    deps.recallLimit === undefined ? RECALL_LIMIT : parseRecallLimit(deps.recallLimit, "recallLimit");
   const features =
     input.features ??
     (deps.twoStep === true
@@ -159,7 +172,7 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
           .map((item) => item.text)
       : []);
 
-  const hints = await memory.recall(features, deps.recallLimit ?? RECALL_LIMIT);
+  const hints = await memory.recall(features, recallLimit);
   const use: MemoryUse = {
     observations: [],
     memoryGroups: [],
@@ -176,7 +189,9 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
       episodes: [],
       validOutput: false,
       latencyMs: Date.now() - startedAt,
-      legacyGlobalProviderIds: hints.map((hint) => hint.lessonId),
+      truth: input.truth,
+      fixture: deps.benchmark?.retrievalFixture,
+      legacyGlobalProviderIds: deps.benchmark?.legacyGlobalProviderIds ?? hints.map((hint) => hint.lessonId),
     }),
     features,
   };
@@ -187,11 +202,18 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
       ok: true,
       guess,
       ...use,
-      attemptMetrics: {
-        ...use.attemptMetrics,
+      attemptMetrics: buildAttemptMetrics({
+        attemptId: input.attemptId ?? input.imageId,
+        observations: [],
+        memoryGroups: [],
+        episodes: [],
         validOutput: true,
         latencyMs: Date.now() - startedAt,
-      },
+        guess,
+        truth: input.truth,
+        fixture: deps.benchmark?.retrievalFixture,
+        legacyGlobalProviderIds: deps.benchmark?.legacyGlobalProviderIds ?? hints.map((hint) => hint.lessonId),
+      }),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

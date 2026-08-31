@@ -1,0 +1,4 @@
+{"featureKey":"visible_text","class":"rare","expectedProviderIds":["lesson-0001"]}
+{"featureKey":"poles","class":"rare","expectedProviderIds":["lesson-0002"]}
+{"featureKey":"road_surface","class":"broad","expectedProviderIds":["lesson-0003"]}
+{"featureKey":"vegetation","class":"broad","expectedProviderIds":["lesson-0004"]}

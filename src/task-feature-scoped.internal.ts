@@ -1,6 +1,7 @@
 import { UnparseableOutputError } from "./agent.ts";
 import type { Guess } from "./agent.ts";
 import { buildAttemptMetrics } from "./benchmark-metrics.ts";
+import type { RetrievalFixtureCase } from "./benchmark-metrics.ts";
 import { haversineKm } from "./geo.ts";
 import { locate } from "./locate.ts";
 import type { LocateDeps } from "./locate.ts";
@@ -8,6 +9,7 @@ import { readLocatePartialResult } from "./locate-partial.internal.ts";
 import { readerOnly } from "./memory/memory.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import type { Hint, MemoryReader, MemoryWriter } from "./memory/memory.ts";
+import type { LegacyMemory } from "./memory/memory.ts";
 import { ReflectRuntimeError } from "./reflect-runtime.internal.ts";
 import { reflectEpisode } from "./reflect.ts";
 import type {
@@ -115,6 +117,8 @@ function memoryUseFromLocate(
     latencyMs: number;
     guess?: Guess;
     truth?: { latitude: number; longitude: number };
+    legacyGlobalProviderIds?: readonly string[];
+    fixture?: readonly RetrievalFixtureCase[];
   },
 ): MemoryUse {
   const hints = projectLegacyHints(result.memoryGroups);
@@ -137,12 +141,26 @@ function memoryUseFromLocate(
       latencyMs: options.latencyMs,
       guess: options.guess,
       truth: options.truth,
+      fixture: options.fixture,
+      legacyGlobalProviderIds: options.legacyGlobalProviderIds,
     }),
     features: result.observations
       .filter((item) => item.state === "visible")
       .map((item) => item.text)
       .filter((text) => text.trim() !== ""),
   };
+}
+
+async function legacyGlobalProviderIdsForMetrics(input: {
+  memory: LegacyMemory | undefined;
+  explicitProviderIds: readonly string[] | undefined;
+  features: readonly string[];
+  limit: FeatureScopedTaskDeps["run"]["recallLimit"];
+}): Promise<string[] | undefined> {
+  if (input.explicitProviderIds !== undefined) return [...input.explicitProviderIds];
+  if (input.memory === undefined) return undefined;
+  const hints = await input.memory.recall([...input.features], input.limit);
+  return hints.map((hint) => hint.lessonId);
 }
 
 function shouldReflect(
@@ -303,17 +321,39 @@ export async function runFeatureScopedTask(
     if (shouldReflect(input, deps)) {
       await reflectEpisodesAfterReveal(input, result, deps as FeatureScopedTaskRuntimeDeps & { writer: MemoryWriter });
     }
+    const features = result.observations
+      .filter((item) => item.state === "visible")
+      .map((item) => item.text)
+      .filter((text) => text.trim() !== "");
+    const legacyGlobalProviderIds = await legacyGlobalProviderIdsForMetrics({
+      memory: deps.benchmark?.legacyGlobalMemory,
+      explicitProviderIds: deps.benchmark?.legacyGlobalProviderIds,
+      features,
+      limit: deps.run.recallLimit,
+    });
     const use = memoryUseFromLocate(result, {
       attemptId: result.attemptId,
       validOutput: true,
       latencyMs: Date.now() - startedAt,
       guess: result.guess as Guess,
       truth: input.truth,
+      fixture: deps.benchmark?.retrievalFixture,
+      legacyGlobalProviderIds,
     });
     return { ok: true, guess: result.guess as Guess, ...use };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const partial = readLocatePartialResult(error);
+    const partialFeatures = partial?.observations
+      .filter((item) => item.state === "visible")
+      .map((item) => item.text)
+      .filter((text) => text.trim() !== "") ?? [];
+    const legacyGlobalProviderIds = await legacyGlobalProviderIdsForMetrics({
+      memory: deps.benchmark?.legacyGlobalMemory,
+      explicitProviderIds: deps.benchmark?.legacyGlobalProviderIds,
+      features: partialFeatures,
+      limit: deps.run.recallLimit,
+    });
     const use = partial === null
       ? {
           ...emptyMemoryUse(),
@@ -324,6 +364,8 @@ export async function runFeatureScopedTask(
             episodes: [],
             validOutput: false,
             latencyMs: Date.now() - startedAt,
+            fixture: deps.benchmark?.retrievalFixture,
+            legacyGlobalProviderIds,
           }),
         }
       : memoryUseFromLocate(partial, {
@@ -331,6 +373,8 @@ export async function runFeatureScopedTask(
           validOutput: false,
           latencyMs: Date.now() - startedAt,
           truth: input.truth,
+          fixture: deps.benchmark?.retrievalFixture,
+          legacyGlobalProviderIds,
         });
     if (error instanceof UnparseableOutputError) {
       return { ok: false, failure: "unparseable", message, ...use };

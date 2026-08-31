@@ -38,6 +38,27 @@ test("training selection excludes eval ids and rows sharing eval sequences", () 
   ]);
 });
 
+test("training sequence exclusion uses full CSV metadata before image availability filtering", () => {
+  const manifest: Manifest = {
+    seed: "eval-v1",
+    size: 1,
+    fingerprint: "fixture",
+    ids: ["eval-missing-image"],
+  };
+  const metadataRows = [
+    row({ id: "eval-missing-image", country: "BR", sequence: "seq-eval" }),
+    row({ id: "same-sequence-on-disk", country: "BR", sequence: "seq-eval" }),
+    row({ id: "train-on-disk", country: "BR", sequence: "seq-train" }),
+  ];
+  const availableRows = metadataRows.filter((item) => item.id !== "eval-missing-image");
+
+  const selection = selectTrainingRows(availableRows, manifest, metadataRows);
+
+  assert.deepEqual(selection.evalRows.map((item) => item.id), ["eval-missing-image"]);
+  assert.deepEqual([...selection.evalSequences], ["seq-eval"]);
+  assert.deepEqual(selection.trainPool.map((item) => item.id), ["train-on-disk"]);
+});
+
 test("control and memory-on share the same training sample order and observation cache contract", () => {
   const manifest: Manifest = {
     seed: "eval-v1",

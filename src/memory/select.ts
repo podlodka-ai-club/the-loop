@@ -7,10 +7,10 @@
  * backend is reproducible only by convention - nobody wrote to the namespace in
  * between - and that has to be visible at the call site.
  */
-import { FrozenMemory, parseRecallMode } from "./file/memory.ts";
+import { FrozenMemory, parseRecallMode, type RecallMode } from "./file/memory.ts";
 import { createMem0Memory, loadMem0MemoryConfig } from "./mem0/memory.ts";
 import { NullMemory } from "./null/memory.ts";
-import type { LegacyMemory, MemoryReader } from "./memory.ts";
+import { RECALL_LIMIT, type LegacyMemory, type MemoryReader } from "./memory.ts";
 import type { BenchmarkMemoryMode } from "../benchmark-metrics.ts";
 import type { MemoryRunConfig } from "../tools/memory.ts";
 
@@ -29,6 +29,8 @@ export type MemorySelection = {
   describe: string;
   /** False when the backend cannot freeze state; the run is then reproducible only by convention. */
   frozen: boolean;
+  recallMode: RecallMode;
+  recallLimit: MemoryRunConfig["recallLimit"];
 };
 
 export type FeatureScopedMemorySelection = {
@@ -37,6 +39,8 @@ export type FeatureScopedMemorySelection = {
   describe: string;
   frozen: boolean;
   memoryMode: BenchmarkMemoryMode;
+  recallMode: RecallMode;
+  recallLimit: MemoryRunConfig["recallLimit"];
 };
 
 export function selectMemory(options: {
@@ -44,8 +48,15 @@ export function selectMemory(options: {
   snapshotId: string;
   recall: string;
 }): MemorySelection {
+  const recallMode = parseRecallMode(options.recall);
   if (options.snapshotId === "" && options.backend === "file") {
-    return { memory: new NullMemory(), describe: "off (baseline)", frozen: true };
+    return {
+      memory: new NullMemory(),
+      describe: "off (baseline)",
+      frozen: true,
+      recallMode: "off",
+      recallLimit: RECALL_LIMIT,
+    };
   }
 
   if (options.backend === "mem0") {
@@ -54,13 +65,17 @@ export function selectMemory(options: {
       memory: createMem0Memory({ snapshots: false }, config),
       describe: `mem0 agent ${config.agentId}, ranking by the service`,
       frozen: false,
+      recallMode,
+      recallLimit: RECALL_LIMIT,
     };
   }
 
   return {
-    memory: new FrozenMemory(options.snapshotId, parseRecallMode(options.recall)),
-    describe: `file snapshot ${options.snapshotId}, recall ${options.recall}`,
+    memory: new FrozenMemory(options.snapshotId, recallMode),
+    describe: `file snapshot ${options.snapshotId}, recall ${recallMode}`,
     frozen: true,
+    recallMode,
+    recallLimit: RECALL_LIMIT,
   };
 }
 
@@ -70,43 +85,39 @@ export function selectFeatureScopedEvaluationMemory(options: {
   recall: string;
   memoryMode: BenchmarkMemoryMode;
 }): FeatureScopedMemorySelection {
-  const recallLimit = boundedRecallLimit();
+  const recallMode = parseRecallMode(options.recall);
   if (options.memoryMode === "cold") {
+    if (recallMode !== "off") {
+      throw new Error("feature-scoped cold evaluation requires --recall off");
+    }
     return {
       memory: new NullMemory(),
-      run: { mode: "production", snapshotId: null, readOnly: true, recallLimit },
+      run: { mode: "production", snapshotId: null, readOnly: true, recallLimit: RECALL_LIMIT },
       describe: "feature-scoped cold control (memory off)",
       frozen: true,
       memoryMode: options.memoryMode,
+      recallMode: "off",
+      recallLimit: RECALL_LIMIT,
     };
   }
-
-  if (options.backend === "mem0") {
-    const config = loadMem0MemoryConfig();
-    const memory = createMem0Memory({ snapshots: false }, config).asReadOnlyReader();
-    return {
-      memory,
-      run: { mode: "production", snapshotId: null, readOnly: true, recallLimit },
-      describe: `feature-scoped mem0 agent ${config.agentId}, ranking by the service [not frozen]`,
-      frozen: false,
-      memoryMode: options.memoryMode,
-    };
+  if (recallMode !== "top") {
+    throw new Error("feature-scoped warm evaluation requires --recall top");
   }
-
   if (options.snapshotId.trim() === "") {
     throw new Error("feature-scoped warm evaluation requires --snapshot");
   }
+
+  if (options.backend === "mem0") {
+    throw new Error("feature-scoped warm evaluation requires a backend with frozen snapshots");
+  }
   const snapshotId = options.snapshotId.trim();
   return {
-    memory: new FrozenMemory(snapshotId, parseRecallMode(options.recall)).asFeatureScopedReader(),
-    run: { mode: "evaluation", snapshotId, readOnly: true, recallLimit },
+    memory: new FrozenMemory(snapshotId, recallMode).asFeatureScopedReader(),
+    run: { mode: "evaluation", snapshotId, readOnly: true, recallLimit: RECALL_LIMIT },
     describe: `feature-scoped file snapshot ${snapshotId}, recall top`,
     frozen: true,
     memoryMode: options.memoryMode,
+    recallMode,
+    recallLimit: RECALL_LIMIT,
   };
-}
-
-function boundedRecallLimit(): MemoryRunConfig["recallLimit"] {
-  const value = Number(process.env.MEMORY_RECALL_LIMIT ?? 5);
-  return value === 1 || value === 2 || value === 3 || value === 4 ? value : 5;
 }

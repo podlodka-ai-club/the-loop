@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { geoEvaluators } from "./evaluators.ts";
 import { FEATURE_KEYS, type FeatureObservation } from "./observe.ts";
 import type { Guess } from "./agent.ts";
+import type { RetrievalFixtureCase } from "./benchmark-metrics.ts";
+import type { Hint, LegacyMemory, LegacyLessonInput, MemoryWriteResult } from "./memory/memory.ts";
 import { executeMemoryRetrieve, executeMemoryStore, makeMemoryHitId, type FeatureMemoryGroup, type LocateResult, type MemoryHit, type ToolEvent } from "./tools/memory.ts";
 import type { ReflectEpisodeFunction } from "./task-feature-scoped.internal.ts";
 import { runTrainingTaskWithRuntime, runTaskWithRuntime } from "./task-runtime.internal.ts";
@@ -35,6 +38,13 @@ test("twelve-feature mixed-failure attempt preserves cardinality budgets duplica
     episodes: [],
     trace: { attemptId, groups, episodes: [], events },
   };
+  const retrievalFixture = [
+    { featureKey: "visible_text", class: "rare", expectedProviderIds: ["visible_text-provider-0"] },
+    { featureKey: "road_surface", class: "broad", expectedProviderIds: ["road_surface-provider-0"] },
+  ] satisfies readonly RetrievalFixtureCase[];
+  const legacyGlobalMemory = new LegacyGlobalMemorySpy([
+    { lessonId: "road_surface-provider-0", text: "legacy global road surface prior" },
+  ]);
   const memory = new FileMemory(join(memoryDir, "live.jsonl"), "top", false);
   let duplicateStatus: string | null = null;
   let reflectionCalls = 0;
@@ -84,6 +94,7 @@ test("twelve-feature mixed-failure attempt preserves cardinality budgets duplica
       run: { mode: "training", snapshotId: null, readOnly: false, recallLimit: 5 },
       locate: async () => locateResult,
       reflectEpisode,
+      benchmark: { retrievalFixture, legacyGlobalMemory },
     },
   );
 
@@ -98,6 +109,20 @@ test("twelve-feature mixed-failure attempt preserves cardinality budgets duplica
   assert.equal(result.episodes.length, 50);
   assert.equal(result.attemptMetrics.episodesByEffect.helped, 38);
   assert.equal(result.attemptMetrics.episodesByEffect.misleading, 12);
+  assert.equal(result.attemptMetrics.rareCueHitRate, 1);
+  assert.equal(result.attemptMetrics.broadCueHitRate, 1);
+  assert.equal(result.attemptMetrics.featureScopedRareCueHitRate, 1);
+  assert.equal(result.attemptMetrics.legacyGlobalTopKRareCueHitRate, 0);
+  assert.equal(result.attemptMetrics.geoscore, 5000);
+  assert.deepEqual(legacyGlobalMemory.invocations, [
+    { features: groups.map((group) => group.feature.text), limit: 5 },
+  ]);
+  assert.equal(await evaluatorScore("rare_cue_hit_rate", result), 1);
+  assert.equal(await evaluatorScore("broad_cue_hit_rate", result), 1);
+  assert.equal(await evaluatorScore("legacy_global_topk_rare_cue_hit_rate", result), 0);
+  assert.equal(await evaluatorScore("feature_scoped_rare_cue_hit_rate", result), 1);
+  assert.equal(await evaluatorScore("geoscore", result, { latitude: 1, longitude: 2, country: "BR" }), 5000);
+  assert.equal(await evaluatorScore("episodes_helped", result), 38);
   assert.equal(reflectionCalls, 50);
   assert.equal(duplicateStatus, "already_stored");
   assert.equal(await memory.size(), 50);
@@ -201,6 +226,37 @@ function makeTwelveFeatureGroups(attemptId: string): FeatureMemoryGroup[] {
     });
     return { attemptId, feature, query: `${featureKey} query`, status: "hits", hits, failure: null };
   });
+}
+
+async function evaluatorScore(name: string, output: unknown, expected?: unknown): Promise<number | null> {
+  const evaluator = geoEvaluators.find((item) => item.name === name);
+  if (evaluator === undefined) assert.fail(`missing evaluator ${name}`);
+  const result = await evaluator.evaluate({ output, expected } as Parameters<typeof evaluator.evaluate>[0]);
+  return result.score ?? null;
+}
+
+class LegacyGlobalMemorySpy implements LegacyMemory {
+  readonly invocations: Array<{ features: string[]; limit?: number }> = [];
+  private readonly hints: Hint[];
+
+  constructor(hints: Hint[]) {
+    this.hints = hints;
+  }
+
+  async recall(features: string[], limit?: number): Promise<Hint[]> {
+    this.invocations.push({ features: [...features], limit });
+    return this.hints.slice(0, limit);
+  }
+
+  async remember(_lesson: LegacyLessonInput): Promise<MemoryWriteResult> {
+    throw new Error("legacy benchmark control must not write");
+  }
+
+  async snapshot(): Promise<string> {
+    return "legacy-global";
+  }
+
+  async restore(): Promise<void> {}
 }
 
 function guess(): Guess {

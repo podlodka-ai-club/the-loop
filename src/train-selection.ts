@@ -5,6 +5,7 @@ export type TrainingSelectionOptions = {
   limit: number;
   seed: string;
   matchManifest: boolean;
+  metadataRows?: readonly Row[];
   onlyCountries?: ReadonlySet<string>;
 };
 
@@ -18,16 +19,20 @@ export type TrainingSelection = {
   shortfalls: string[];
 };
 
-export function selectTrainingRows(pool: readonly Row[], manifest: Manifest): {
+export function selectTrainingRows(
+  availableRows: readonly Row[],
+  manifest: Manifest,
+  metadataRows: readonly Row[] = availableRows,
+): {
   evalIds: Set<string>;
   evalSequences: Set<string>;
   evalRows: Row[];
   trainPool: Row[];
 } {
   const evalIds = new Set(manifest.ids);
-  const evalRows = pool.filter((row) => evalIds.has(row.id));
+  const evalRows = metadataRows.filter((row) => evalIds.has(row.id));
   const evalSequences = new Set(evalRows.map((row) => row.sequence).filter((sequence) => sequence !== ""));
-  const trainPool = pool.filter((row) => !evalIds.has(row.id) && !evalSequences.has(row.sequence));
+  const trainPool = availableRows.filter((row) => !evalIds.has(row.id) && !evalSequences.has(row.sequence));
   return { evalIds, evalSequences, evalRows, trainPool };
 }
 
@@ -64,7 +69,7 @@ export function selectTrainingSample(
   manifest: Manifest,
   options: TrainingSelectionOptions,
 ): TrainingSelection {
-  const selected = selectTrainingRows(pool, manifest);
+  const selected = selectTrainingRows(pool, manifest, options.metadataRows);
   if (!options.matchManifest) {
     return {
       ...selected,

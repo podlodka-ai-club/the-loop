@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { Guess } from "./agent.ts";
 import { FEATURE_KEYS, type FeatureKey, type FeatureObservation } from "./observe.ts";
 import { geoScore, haversineKm } from "./geo.ts";
@@ -16,6 +17,8 @@ export type RetrievalFixtureCase = {
   class: "rare" | "broad";
   expectedProviderIds: readonly string[];
 };
+
+export const DEFAULT_RETRIEVAL_FIXTURE = "benchmark/samples/feature-memory-retrieval-fixture.jsonl";
 
 export type BenchmarkPairContract = {
   sampleIds: string[];
@@ -39,6 +42,25 @@ export type AttemptMetricsInput = {
   fixture?: readonly RetrievalFixtureCase[];
   legacyGlobalProviderIds?: readonly string[];
 };
+
+export async function loadRetrievalFixture(
+  path = DEFAULT_RETRIEVAL_FIXTURE,
+): Promise<RetrievalFixtureCase[]> {
+  const body = await readFile(path, "utf8");
+  const cases: RetrievalFixtureCase[] = [];
+  for (const [index, line] of body.split("\n").entries()) {
+    if (line.trim() === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch (error) {
+      throw new Error(`${path}:${index + 1} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    cases.push(parseRetrievalFixtureCase(parsed, `${path}:${index + 1}`));
+  }
+  if (cases.length === 0) throw new Error(`${path} must contain at least one retrieval fixture case`);
+  return cases;
+}
 
 export type AttemptMetricsSummary = {
   attempts: number;
@@ -114,9 +136,9 @@ export function buildAttemptMetrics(input: AttemptMetricsInput): AttemptMetrics 
   const featureScopedMetrics =
     input.fixture === undefined ? [] : retrievalMetricsFromGroups(input.memoryGroups, input.fixture);
   const legacyMetrics =
-    input.fixture === undefined || input.legacyGlobalProviderIds === undefined
+    input.fixture === undefined
       ? []
-      : retrievalMetricsFromLegacyGlobalProviderIds(input.legacyGlobalProviderIds, input.fixture);
+      : retrievalMetricsFromLegacyGlobalProviderIds(input.legacyGlobalProviderIds ?? [], input.fixture);
   const episodesByEffect = {
     helped: 0,
     irrelevant: 0,
@@ -173,6 +195,34 @@ function retrievalMetric(
     expectedProviderIds,
     returnedProviderIds: returned,
     hit: expectedProviderIds.some((id) => returned.includes(id)),
+  };
+}
+
+function parseRetrievalFixtureCase(value: unknown, source: string): RetrievalFixtureCase {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${source} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const featureKey = record.featureKey;
+  const cueClass = record.class;
+  const expectedProviderIds = record.expectedProviderIds;
+  if (typeof featureKey !== "string" || !(FEATURE_KEYS as readonly string[]).includes(featureKey)) {
+    throw new Error(`${source}.featureKey must be one of FEATURE_KEYS`);
+  }
+  if (cueClass !== "rare" && cueClass !== "broad") {
+    throw new Error(`${source}.class must be rare|broad`);
+  }
+  if (
+    !Array.isArray(expectedProviderIds) ||
+    expectedProviderIds.length === 0 ||
+    expectedProviderIds.some((id) => typeof id !== "string" || id.trim() === "")
+  ) {
+    throw new Error(`${source}.expectedProviderIds must be a non-empty string array`);
+  }
+  return {
+    featureKey: featureKey as FeatureKey,
+    class: cueClass,
+    expectedProviderIds: expectedProviderIds.map((id) => id.trim()),
   };
 }
 

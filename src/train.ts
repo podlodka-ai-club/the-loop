@@ -14,24 +14,31 @@ import { readManifest, DEFAULT_MANIFEST } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
 import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
-import { loadRows } from "./osv5m.ts";
+import { loadCsvRows, loadRows } from "./osv5m.ts";
 import { runTrainingTaskWithRuntime } from "./task-runtime.internal.ts";
 import type { MemoryRunConfig } from "./tools/memory.ts";
 import { parseBenchmarkMemoryMode } from "./benchmark-metrics.ts";
 import { selectTrainingSample } from "./train-selection.ts";
+import { parsePositiveSafeIntegerOption } from "./cli-options.ts";
 
 function flag(name: string, fallback: string): string {
   const index = process.argv.indexOf(`--${name}`);
   return index === -1 ? fallback : (process.argv[index + 1] ?? fallback);
 }
 
-const limit = Number(flag("limit", "30"));
-const snapshotEvery = Number(flag("snapshot-every", "10"));
+const limit = parsePositiveSafeIntegerOption("limit", flag("limit", "30"));
+const snapshotEvery = parsePositiveSafeIntegerOption("snapshot-every", flag("snapshot-every", "10"));
 const seed = flag("seed", "train-v1");
 const memoryMode = parseBenchmarkMemoryMode(flag("memory-mode", "warm"));
-const recallMode = parseRecallMode(flag("recall", memoryMode === "cold" ? "off" : "all"));
+const recallMode = parseRecallMode(flag("recall", memoryMode === "cold" ? "off" : "top"));
+if (memoryMode === "cold" && recallMode !== "off") {
+  throw new Error("cold training requires --recall off");
+}
+if (memoryMode === "warm" && recallMode !== "top") {
+  throw new Error("warm training requires --recall top");
+}
 
-const { rows: pool } = await loadRows();
+const [{ rows: pool }, { rows: metadataRows }] = await Promise.all([loadRows(), loadCsvRows()]);
 const manifest = await readManifest(flag("manifest", DEFAULT_MANIFEST));
 
 const matchManifest = !process.argv.includes("--no-match-manifest");
@@ -55,6 +62,7 @@ const selection = selectTrainingSample(pool, manifest, {
   limit,
   seed,
   matchManifest,
+  metadataRows,
   onlyCountries,
 });
 const { trainPool, sample } = selection;
@@ -69,7 +77,7 @@ const run = {
   mode: "training",
   snapshotId: null,
   readOnly: false,
-  recallLimit: boundedRecallLimit(RECALL_LIMIT),
+  recallLimit: RECALL_LIMIT,
 } satisfies MemoryRunConfig;
 
 console.log(`pool     ${trainPool.length} train-eligible of ${pool.length} on disk`);
@@ -134,7 +142,3 @@ console.log(`lessons written   ${learned}, reflection produced nothing ${refused
 console.log(`memory size       ${await memory.size()} lessons`);
 console.log(`final snapshot    ${finalSnapshot}`);
 console.log(`evaluate it with  npm run experiment -- --snapshot ${finalSnapshot} --concurrency 1`);
-
-function boundedRecallLimit(value: number): MemoryRunConfig["recallLimit"] {
-  return value === 1 || value === 2 || value === 3 || value === 4 ? value : 5;
-}

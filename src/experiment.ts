@@ -13,10 +13,16 @@ process.env.OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT ??= "2000";
 import { createDataset, getDatasetInfo } from "@arizeai/phoenix-client/datasets";
 import { runExperiment } from "@arizeai/phoenix-client/experiments";
 import { MODEL } from "./agent.ts";
-import { buildBenchmarkPairContract, parseBenchmarkMemoryMode } from "./benchmark-metrics.ts";
+import {
+  DEFAULT_RETRIEVAL_FIXTURE,
+  buildBenchmarkPairContract,
+  loadRetrievalFixture,
+  parseBenchmarkMemoryMode,
+} from "./benchmark-metrics.ts";
+import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption } from "./cli-options.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
-import { RECALL_LIMIT } from "./memory/memory.ts";
+import type { LegacyMemory } from "./memory/memory.ts";
 import { parseRecallMode } from "./memory/file/memory.ts";
 import { parseBackend, selectFeatureScopedEvaluationMemory, selectMemory } from "./memory/select.ts";
 import { fingerprintOf, loadRows } from "./osv5m.ts";
@@ -31,32 +37,57 @@ function flag(name: string, fallback: string): string {
 }
 
 const manifestPath = flag("manifest", DEFAULT_MANIFEST);
-const concurrency = Number(flag("concurrency", "8"));
+const concurrency = parsePositiveSafeIntegerOption("concurrency", flag("concurrency", "8"));
 const label = flag("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
 
 // Memory is read-only here on purpose. Evaluation that writes lessons is training
 // with extra steps, and the held-out numbers stop meaning anything.
 const snapshotId = flag("snapshot", "");
-const recallMode = parseRecallMode(flag("recall", "all"));
 const flow = flag("flow", "legacy");
 if (flow !== "legacy" && flow !== "feature-scoped") {
   throw new Error(`unknown flow "${flow}", expected legacy|feature-scoped`);
 }
 const memoryMode = parseBenchmarkMemoryMode(flag("memory-mode", snapshotId === "" ? "cold" : "warm"));
+const recallMode = parseRecallMode(flag("recall", memoryMode === "cold" ? "off" : "top"));
+if (memoryMode === "cold" && recallMode !== "off") {
+  throw new Error("cold benchmark requires --recall off");
+}
+if (memoryMode === "warm" && recallMode !== "top") {
+  throw new Error("warm benchmark requires --recall top");
+}
+if (memoryMode === "cold" && snapshotId.trim() !== "") {
+  throw new Error("cold benchmark must not set --snapshot");
+}
+if (memoryMode === "warm" && snapshotId.trim() === "") {
+  throw new Error("warm benchmark requires --snapshot");
+}
 
 // Two-step costs a second vision call per item. It is pointless without memory, and
 // mandatory with a ranked or query-based backend, which has nothing to rank on
 // otherwise.
 const twoStep = process.argv.includes("--two-step");
 const backend = parseBackend(flag("backend", "file"));
-const recallFlag = flag("recall", "all");
-const legacySelection = flow === "legacy" ? selectMemory({ backend, snapshotId, recall: recallFlag }) : null;
+const recallFlag = recallMode;
+const legacySelection =
+  flow === "legacy"
+    ? selectMemory({
+        backend: memoryMode === "cold" ? "file" : backend,
+        snapshotId: memoryMode === "cold" ? "" : snapshotId,
+        recall: recallFlag,
+      })
+    : null;
 const featureScopedSelection =
   flow === "feature-scoped"
     ? selectFeatureScopedEvaluationMemory({ backend, snapshotId, recall: recallFlag, memoryMode })
     : null;
 const activeSelection = featureScopedSelection ?? legacySelection;
 if (activeSelection === null) throw new Error("memory selection is missing");
+const retrievalFixturePath = flag("retrieval-fixture", DEFAULT_RETRIEVAL_FIXTURE);
+const retrievalFixture = await loadRetrievalFixture(retrievalFixturePath);
+const legacyGlobalMemory: LegacyMemory | undefined =
+  memoryMode === "warm" && flow === "feature-scoped"
+    ? selectMemory({ backend, snapshotId, recall: recallFlag }).memory
+    : undefined;
 
 // The sample is read from a file in the repository, never drawn afresh. `loadRows`
 // sees only the image shards this machine holds, so a fresh draw would silently
@@ -72,7 +103,7 @@ if (activeSelection === null) throw new Error("memory selection is missing");
  * time, and it gets its own fingerprint - a partial run is a different benchmark and
  * must never be filed under the full one's numbers.
  */
-const head = Number(flag("head", "0"));
+const head = parseNonNegativeSafeIntegerOption("head", flag("head", "0"));
 
 const { rows: pool, csvRowCount } = await loadRows();
 const full = await loadFrozenSample(pool, manifestPath);
@@ -161,20 +192,38 @@ const experiment = await runExperiment({
     memoryMode,
     flow,
     observationCacheKey: pairContract.observationCacheKey,
-    recallMode: snapshotId === "" ? "off" : recallMode,
+    recallMode: activeSelection.recallMode,
     twoStep,
-    recallLimit: RECALL_LIMIT,
+    recallLimit: activeSelection.recallLimit,
+    retrievalFixture: retrievalFixturePath,
   },
   task: (example) => {
     const input = example.input as ExampleInput;
+    const expected = example.output as { latitude?: unknown; longitude?: unknown; country?: unknown } | undefined;
+    const truth =
+      typeof expected?.latitude === "number" &&
+      typeof expected.longitude === "number" &&
+      typeof expected.country === "string"
+        ? { latitude: expected.latitude, longitude: expected.longitude, country: expected.country }
+        : undefined;
+    const taskInput = truth === undefined ? input : { ...input, truth };
     if (featureScopedSelection !== null) {
-      return runTask(input, {
+      return runTask(taskInput, {
         memory: featureScopedSelection.memory,
         run: featureScopedSelection.run,
+        benchmark: {
+          retrievalFixture,
+          ...(legacyGlobalMemory === undefined ? {} : { legacyGlobalMemory }),
+        },
       });
     }
     if (legacySelection === null) throw new Error("legacy memory selection is missing");
-    return runTask(input, { memory: legacySelection.memory, twoStep });
+    return runTask(taskInput, {
+      memory: legacySelection.memory,
+      twoStep,
+      recallLimit: legacySelection.recallLimit,
+      benchmark: { retrievalFixture },
+    });
   },
   evaluators: geoEvaluators,
   concurrency,

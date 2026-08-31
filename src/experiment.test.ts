@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { buildBenchmarkPairContract, buildAttemptMetrics, parseBenchmarkMemoryMode, retrievalMetricsFromGroups, retrievalMetricsFromLegacyGlobalProviderIds, summarizeAttemptMetrics } from "./benchmark-metrics.ts";
+import { buildBenchmarkPairContract, buildAttemptMetrics, loadRetrievalFixture, parseBenchmarkMemoryMode, retrievalMetricsFromGroups, retrievalMetricsFromLegacyGlobalProviderIds, summarizeAttemptMetrics } from "./benchmark-metrics.ts";
 import type { RetrievalFixtureCase } from "./benchmark-metrics.ts";
+import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption } from "./cli-options.ts";
 import type { FeatureObservation } from "./observe.ts";
 import { createMem0Memory } from "./memory/mem0/memory.ts";
 import type { Mem0PlatformPort, Mem0SearchRequest } from "./memory/mem0/platform.ts";
+import { selectFeatureScopedEvaluationMemory } from "./memory/select.ts";
 import { executeMemoryRetrieve, type FeatureMemoryGroup } from "./tools/memory.ts";
 
 test("experiment metrics use fixed fixture labels and compare feature-scoped with legacy global rare cue rates", () => {
@@ -90,6 +95,52 @@ test("benchmark pair contract pins sample order cache key and explicit cold or w
   assert.deepEqual(contract.memoryOn.sampleIds, ["img-1", "img-2"]);
   assert.equal(contract.control.observationCacheKey, contract.memoryOn.observationCacheKey);
   assert.match(contract.observationCacheKey, /abc123:observe-v1:cold$/);
+});
+
+test("retrieval fixture loader requires fixed rare and broad provider ids", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "loci-retrieval-fixture-"));
+  const path = join(directory, "fixture.jsonl");
+  try {
+    await writeFile(
+      path,
+      [
+        JSON.stringify({ featureKey: "visible_text", class: "rare", expectedProviderIds: ["rare-1"] }),
+        JSON.stringify({ featureKey: "vegetation", class: "broad", expectedProviderIds: ["broad-1"] }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    assert.deepEqual(await loadRetrievalFixture(path), [
+      { featureKey: "visible_text", class: "rare", expectedProviderIds: ["rare-1"] },
+      { featureKey: "vegetation", class: "broad", expectedProviderIds: ["broad-1"] },
+    ]);
+    await writeFile(path, "", "utf8");
+    await assert.rejects(() => loadRetrievalFixture(path), /at least one retrieval fixture case/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("benchmark CLI numeric and memory-mode contracts fail fast", () => {
+  assert.equal(parsePositiveSafeIntegerOption("limit", "1"), 1);
+  assert.equal(parsePositiveSafeIntegerOption("concurrency", "8"), 8);
+  assert.equal(parseNonNegativeSafeIntegerOption("head", "0"), 0);
+  assert.throws(() => parsePositiveSafeIntegerOption("limit", "-1"), /--limit must be a safe integer/);
+  assert.throws(() => parsePositiveSafeIntegerOption("snapshot-every", "0"), /--snapshot-every must be a safe integer/);
+  assert.throws(() => parseNonNegativeSafeIntegerOption("head", "-1"), /--head must be a safe integer/);
+
+  assert.throws(
+    () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "snapshot", recall: "off", memoryMode: "warm" }),
+    /warm evaluation requires --recall top/,
+  );
+  assert.throws(
+    () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "", recall: "top", memoryMode: "warm" }),
+    /warm evaluation requires --snapshot/,
+  );
+  assert.throws(
+    () => selectFeatureScopedEvaluationMemory({ backend: "file", snapshotId: "", recall: "top", memoryMode: "cold" }),
+    /cold evaluation requires --recall off/,
+  );
 });
 
 test("FileMemory and Mem0 readers both enter feature-scoped retrieval through the dispatcher", async () => {

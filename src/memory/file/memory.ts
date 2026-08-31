@@ -113,7 +113,7 @@ export class FileMemory implements Memory, LegacyMemory {
     }
   }
 
-  async recall(queryOrFeatures: string | string[], limit = RECALL_LIMIT): Promise<Hint[]> {
+  async recall(queryOrFeatures: string | string[], limit: number = RECALL_LIMIT): Promise<Hint[]> {
     if (this.mode === "off") return [];
 
     const features = normalizeRecallInput(queryOrFeatures);

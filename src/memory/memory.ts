@@ -9,7 +9,21 @@
 import type { FeatureKey } from "../observe.ts";
 
 /** Default number of lessons a single recall may put into the prompt. */
-export const RECALL_LIMIT = Number(process.env.MEMORY_RECALL_LIMIT ?? 5);
+export type RecallLimit = 1 | 2 | 3 | 4 | 5;
+
+export const RECALL_LIMIT = parseRecallLimit(process.env.MEMORY_RECALL_LIMIT ?? "5", "MEMORY_RECALL_LIMIT");
+
+export function parseRecallLimit(value: string | number, name = "recallLimit"): RecallLimit {
+  const raw = typeof value === "number" ? String(value) : value.trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name} must be an integer from 1 to 5`);
+  }
+  const parsed = Number(raw);
+  if (parsed === 1 || parsed === 2 || parsed === 3 || parsed === 4 || parsed === 5) {
+    return parsed;
+  }
+  throw new Error(`${name} must be an integer from 1 to 5`);
+}
 
 export type ReflectionEffect =
   | "helped"
@@ -194,7 +208,7 @@ export class InMemoryMemory implements Memory {
   readonly lessons: Lesson[] = [];
   #byIdempotencyKey = new Map<string, string>();
 
-  async recall(queryOrFeatures: string | string[], limit = RECALL_LIMIT): Promise<Hint[]> {
+  async recall(queryOrFeatures: string | string[], limit: number = RECALL_LIMIT): Promise<Hint[]> {
     if (!Number.isInteger(limit) || limit < 1) return [];
     const query = Array.isArray(queryOrFeatures) ? queryOrFeatures.join("\n") : queryOrFeatures;
     const tokens = new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 2));
@@ -252,9 +266,7 @@ export async function resolveMemoryBinding(config: {
   if (config.mode !== "training" && config.mode !== "evaluation" && config.mode !== "production") {
     throw new Error("unknown memory mode");
   }
-  if (!Number.isInteger(config.recallLimit) || config.recallLimit < 1 || config.recallLimit > 5) {
-    throw new Error("recallLimit must be an integer from 1 to 5");
-  }
+  parseRecallLimit(config.recallLimit, "recallLimit");
   if (config.mode === "evaluation") {
     if (typeof config.snapshotId !== "string" || config.snapshotId.trim() === "" || config.readOnly !== true) {
       throw new Error("evaluation memory requires a non-empty snapshotId and readOnly=true");
