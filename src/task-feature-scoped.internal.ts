@@ -4,8 +4,10 @@ import { haversineKm } from "./geo.ts";
 import { locate } from "./locate.ts";
 import type { LocateDeps } from "./locate.ts";
 import { readLocatePartialResult } from "./locate-partial.internal.ts";
+import { readerOnly } from "./memory/memory.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import type { Hint, MemoryReader, MemoryWriter } from "./memory/memory.ts";
+import { ReflectRuntimeError } from "./reflect-runtime.internal.ts";
 import { reflectEpisode } from "./reflect.ts";
 import type {
   ReflectionEpisodeInput,
@@ -144,11 +146,11 @@ function memoryReaderForRun(deps: FeatureScopedTaskRuntimeDeps): MemoryReader {
   const memory: MemoryReader = deps.memory ?? new NullMemory();
   if (deps.run.mode === "training") return memory;
   const readOnlyReader = memory.asReadOnlyReader?.();
-  if (readOnlyReader !== undefined) return readOnlyReader;
+  if (readOnlyReader !== undefined) return readerOnly(readOnlyReader);
   if (isMemoryWriter(memory)) {
     throw new Error("feature-scoped evaluation/production memory must be reader-only");
   }
-  return memory;
+  return readerOnly(memory);
 }
 
 function reflectionEvent(
@@ -172,6 +174,7 @@ function failedReflectionEvent(
   attemptId: string,
   hit: MemoryHit,
   sequence: number,
+  status: string,
 ): ToolEvent {
   return {
     attemptId,
@@ -179,7 +182,7 @@ function failedReflectionEvent(
     operation: "memory_store",
     featureKey: hit.featureKey,
     memoryHitId: hit.memoryHitId,
-    status: "reflection_failed",
+    status,
     sequence,
   };
 }
@@ -236,7 +239,7 @@ async function reflectEpisodesAfterReveal(
         if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
         sequence += 1;
         result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence));
-      } catch {
+      } catch (error) {
         const episode: EpisodeTrace = {
           attemptId: result.attemptId,
           featureKey: hit.featureKey,
@@ -248,7 +251,8 @@ async function reflectEpisodesAfterReveal(
         result.episodes.push(episode);
         if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
         sequence += 1;
-        result.trace.events.push(failedReflectionEvent(result.attemptId, hit, sequence));
+        const eventStatus = error instanceof ReflectRuntimeError ? error.code : "reflection_failed";
+        result.trace.events.push(failedReflectionEvent(result.attemptId, hit, sequence, eventStatus));
       }
     }
   }

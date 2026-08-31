@@ -27,7 +27,7 @@ export type MemoryWriteErrorCode = "write_failed" | "write_outcome_unknown";
 export class MemoryWriteError extends Error {
   readonly code: MemoryWriteErrorCode;
 
-  constructor(code: MemoryWriteErrorCode, message = code) {
+  constructor(code: MemoryWriteErrorCode, message: string = code) {
     super(message);
     this.name = "MemoryWriteError";
     this.code = code;
@@ -151,7 +151,7 @@ export function bindFeatureScopedReader(reader: MemoryReader): MemoryReader {
   return reader.asFeatureScopedReader?.() ?? reader;
 }
 
-function readerOnly(memory: MemoryReader): MemoryReader {
+export function readerOnly(memory: MemoryReader): MemoryReader {
   const reader: MemoryReader =
     memory.featureScope === undefined
       ? { recall: (query, limit) => memory.recall(query, limit) }

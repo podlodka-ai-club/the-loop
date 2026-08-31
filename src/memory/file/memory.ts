@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { RECALL_LIMIT, renderHint } from "../memory.ts";
+import { MemoryWriteError, RECALL_LIMIT, renderHint } from "../memory.ts";
 import type {
   Hint,
   LegacyLesson,
@@ -164,7 +164,10 @@ export class FileMemory implements Memory, LegacyMemory {
 
   async remember(input: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
     if (this.readOnly) {
-      throw new Error("FileMemory is read-only: evaluation and production must not write lessons");
+      throw new MemoryWriteError(
+        "write_failed",
+        "FileMemory is read-only: evaluation and production must not write lessons",
+      );
     }
     const existing = await this.load();
     if (input.idempotencyKey !== undefined) {
@@ -245,8 +248,8 @@ export class FrozenMemory extends FileMemory {
   constructor(snapshotId: string, mode: RecallMode = "all") {
     super(join(MEMORY_DIR, `${snapshotId}.jsonl`), mode, true);
   }
-  override async remember(): Promise<MemoryWriteResult> {
-    throw new Error("FrozenMemory is read-only: evaluation must not write lessons");
+  override async remember(_input?: LessonInput | LegacyLessonInput): Promise<MemoryWriteResult> {
+    throw new MemoryWriteError("write_failed", "FrozenMemory is read-only: evaluation must not write lessons");
   }
 }
 

@@ -20,6 +20,7 @@ import type {
   MemoryWriteResult,
 } from "./memory/memory.ts";
 import { FEATURE_KEYS, type FeatureObservation, type ObserveResult } from "./observe.ts";
+import { ReflectRuntimeError } from "./reflect-runtime.internal.ts";
 import { runTask, type FeatureScopedTaskDeps } from "./task.ts";
 import {
   runTrainingTaskWithRuntime,
@@ -29,7 +30,7 @@ import {
   type ReflectEpisodeFunction,
 } from "./task-runtime.internal.ts";
 import { episodeCandidatesFromGroups } from "./tools/episode-ledger.internal.ts";
-import { makeMemoryHitId, type LocateResult, type MemoryRunConfig } from "./tools/memory.ts";
+import { makeMemoryHitId, type FeatureMemoryGroup, type LocateResult, type MemoryHit, type MemoryRunConfig } from "./tools/memory.ts";
 import type { ReflectionEpisodeInput, ReflectionEpisodeResult } from "./reflect.ts";
 
 const run = {
@@ -81,6 +82,12 @@ class MemoryWriterSpy extends MemoryReaderSpy implements MemoryWriter {
   }
 
   async restore(): Promise<void> {}
+}
+
+class WritableProjectionMemorySpy extends MemoryWriterSpy {
+  asReadOnlyReader(): MemoryReader {
+    return this;
+  }
 }
 
 class ReflectEpisodeSpy {
@@ -723,6 +730,94 @@ test("runTask feature-scoped training keeps the first stored episode when the ne
   assert.deepEqual(writer.rememberInvocations, []);
 });
 
+test("runTask feature-scoped training preserves typed reflection runtime error code in trace event", async () => {
+  for (const code of ["model_failed", "image_data_uri_failed"] as const) {
+    const attemptId = `attempt-reflect-${code}`;
+    const feature: FeatureObservation = { key: "poles", state: "visible", text: "wooden poles" };
+    const hit: MemoryHit = {
+      attemptId,
+      featureKey: "poles",
+      memoryHitId: makeMemoryHitId(attemptId, "poles", "lesson-source", "wooden pole lesson", 0),
+      providerId: "lesson-source",
+      text: "wooden pole lesson",
+      score: 1,
+      effect: "helped",
+    };
+    const locateSpy: LocateFunction = async (input): Promise<LocateResult> => {
+      const groups: FeatureMemoryGroup[] = [
+        {
+          attemptId: input.attemptId,
+          feature,
+          query: "wooden poles",
+          status: "hits",
+          hits: [hit],
+          failure: null,
+        },
+      ];
+      const episodes: LocateResult["episodes"] = [];
+      return {
+        attemptId: input.attemptId,
+        guess: {
+          latitude: 1,
+          longitude: 2,
+          place: "Typed runtime failure",
+          confidence: 0.4,
+          reasoning: "Injected locate produced one memory hit.",
+          provider: "fake",
+        },
+        observations: [feature],
+        memoryGroups: groups,
+        episodes,
+        trace: { attemptId: input.attemptId, groups, episodes, events: [] },
+      };
+    };
+    const reflect: ReflectEpisodeFunction = async () => {
+      throw new ReflectRuntimeError(code, new Error(code));
+    };
+    const writer = new MemoryWriterSpy();
+
+    const result = await runTrainingTaskWithRuntime(
+      {
+        imageId: `image-reflect-${code}`,
+        imagePath: `reflect-${code}.jpg`,
+        attemptId,
+        truth: { latitude: 1, longitude: 2, country: "BR" },
+      },
+      {
+        memory: new MemoryReaderSpy(),
+        writer,
+        run,
+        locate: locateSpy,
+        reflectEpisode: reflect,
+      },
+    );
+
+    assert.equal(result.ok, true, code);
+    assert.deepEqual(result.episodes, [
+      {
+        attemptId,
+        featureKey: "poles",
+        memoryHitId: hit.memoryHitId,
+        effect: null,
+        reflectionStatus: "reflection_failed",
+        lessonId: null,
+      },
+    ]);
+    assert.deepEqual(result.trace?.events, [
+      {
+        attemptId,
+        phase: "reflect",
+        operation: "memory_store",
+        featureKey: "poles",
+        memoryHitId: hit.memoryHitId,
+        status: code,
+        sequence: 1,
+      },
+    ]);
+    assert.deepEqual(writer.rememberInvocations, [], code);
+  }
+});
+
 test("runTask feature-scoped path skips reflection for no-hit, not-visible and failed retrieval outcomes", async () => {
   const client = new LocateClientSpy();
   client.missingAlwaysFor.add("plates");
@@ -956,6 +1051,63 @@ test("runTask evaluation and production reject direct writable adapters without 
     assert.deepEqual(memory.invocations, [], scenario.mode);
     assert.deepEqual(memory.rememberInvocations, [], scenario.mode);
     assert.deepEqual(reflect.invocations, [], scenario.mode);
+  }
+});
+
+test("runTask evaluation and production strip writable methods from read-only adapter projection", async () => {
+  for (const scenario of [
+    { mode: "evaluation" as const, snapshotId: "snapshot-writable-projection", readOnly: true },
+    { mode: "production" as const, snapshotId: null, readOnly: true },
+  ]) {
+    const memory = new WritableProjectionMemorySpy();
+    let receivedMemory: MemoryReader | null = null;
+    const locateSpy: LocateFunction = async (input, deps): Promise<LocateResult> => {
+      receivedMemory = deps.memory;
+      assert.equal("remember" in deps.memory, false, scenario.mode);
+      assert.equal("restore" in deps.memory, false, scenario.mode);
+      assert.deepEqual(await deps.memory.recall("wooden poles", 5), [
+        { lessonId: "lesson-1-a", text: "first memory for wooden poles", effect: "helped" },
+        { lessonId: "lesson-1-b", text: "second memory for wooden poles", effect: "misleading" },
+      ]);
+      return {
+        attemptId: input.attemptId,
+        guess: {
+          latitude: 1,
+          longitude: 2,
+          place: "Writable projection",
+          confidence: 0.5,
+          reasoning: "Projected memory was reader-only.",
+          provider: "fake",
+        },
+        observations: [],
+        memoryGroups: [],
+        episodes: [],
+        trace: { attemptId: input.attemptId, groups: [], episodes: [], events: [] },
+      };
+    };
+
+    const result = await runTaskWithRuntime(
+      {
+        imageId: `image-writable-projection-${scenario.mode}`,
+        imagePath: `writable-projection-${scenario.mode}.jpg`,
+        attemptId: `attempt-writable-projection-${scenario.mode}`,
+        truth: { latitude: 1, longitude: 2, country: "BR" },
+      },
+      {
+        memory,
+        writer: memory,
+        run: { ...scenario, recallLimit: 5 },
+        locate: locateSpy,
+        reflectEpisode: new ReflectEpisodeSpy().reflect,
+      },
+    );
+
+    assert.equal(result.ok, true, scenario.mode);
+    assert.ok(receivedMemory, scenario.mode);
+    assert.equal("remember" in receivedMemory, false, scenario.mode);
+    assert.equal("restore" in receivedMemory, false, scenario.mode);
+    assert.deepEqual(memory.invocations, [{ query: "wooden poles", limit: 5 }], scenario.mode);
+    assert.deepEqual(memory.rememberInvocations, [], scenario.mode);
   }
 });
 

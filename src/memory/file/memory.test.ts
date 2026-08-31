@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { MemoryWriteError } from "../memory.ts";
 import type { LegacyLesson, LegacyLessonInput, LessonInput } from "../memory.ts";
 import type { RecallMode } from "./memory.ts";
 
@@ -256,9 +257,33 @@ test("read-only FileMemory rejects direct remember without changing the store", 
 
   await assert.rejects(
     sut.remember(makeInput({ content: "new lesson" })),
-    /FileMemory is read-only/,
+    (error) => {
+      assert.ok(error instanceof MemoryWriteError);
+      assert.equal(error.code, "write_failed");
+      assert.match(error.message, /FileMemory is read-only/);
+      return true;
+    },
   );
   assert.equal(await readFile(path, "utf8"), before);
+});
+
+test("read-only FrozenMemory rejects direct remember with MemoryWriteError", async () => {
+  const source = makeSUT();
+  const frozen = makeLesson({ id: "lesson-0001", content: "frozen" });
+  await writeLessons(source.path, [frozen]);
+  const snapshotId = await source.sut.snapshot();
+  const sut = new FrozenMemory(snapshotId);
+
+  await assert.rejects(
+    sut.remember(makeInput({ content: "new frozen lesson" })),
+    (error) => {
+      assert.ok(error instanceof MemoryWriteError);
+      assert.equal(error.code, "write_failed");
+      assert.match(error.message, /FrozenMemory is read-only/);
+      return true;
+    },
+  );
+  assert.equal(await readFile(source.path, "utf8"), `${JSON.stringify(frozen)}\n`);
 });
 
 test("read-only FileMemory rejects direct restore without changing the store", async () => {
