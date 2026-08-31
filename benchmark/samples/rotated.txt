@@ -2,14 +2,19 @@
 #
 # One frame per line: <id> <degrees clockwise>. Allowed values are 90, 180 and 270.
 #
-# OSV-5M bakes rotation into the pixels of a few percent of frames. The rotation is
-# applied to the pristine dataset frame, so this file, not the file on disk, is the
-# verdict. Delete a line to put a frame back the way the dataset shipped it.
+# This file is a build input, not metadata about a frame. `npm run collect` reads it once
+# and writes benchmark/images/<role>/ with the rotation already in the pixels. After that
+# the committed frame is the picture, and nothing on the run path opens this file.
+#
+# It stays committed because a re-freeze rebuilds that directory from the OSV-5M shards,
+# which ship these frames on their side, and no code can rederive which ones a person
+# turned. The rotation is applied to the pristine shard frame, so deleting a line here and
+# rebuilding restores the frame exactly as the dataset shipped it.
 #
 # A frame listed in benchmark/samples/rejected.txt has no line here. It is in no corpus,
-# so nothing would ever read the rotation, and a line nobody reads goes stale unnoticed.
+# so nothing would ever apply the rotation, and a line nobody reads goes stale unnoticed.
 #
-# Written by `npm run review`. After editing by hand, rebuild the image folder:
+# Written by `npm run review`. After editing by hand, rebuild the frames:
 #   npm run collect
 1047222609015689  180
 1062966637444202  180

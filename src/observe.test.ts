@@ -1,50 +1,44 @@
 /**
- * The one contract the two-step observation shares with the corpus: a frame the reviewer
- * turned upright is a different picture, so it must not answer from the cache written
- * before the rotation.
+ * The contract the two-step observation shares with the corpus: a cached observation
+ * describes the picture that was sent, and nothing else.
  *
- * This is checked rather than reasoned about because the failure is silent. A stale entry
- * returns plausible features for the orientation review rejected, recall searches for the
- * wrong thing, and nothing in the run says so.
+ * This is checked rather than reasoned about because the failure is silent. A frame the
+ * reviewer turns upright keeps its name and changes its pixels; an entry keyed on the name
+ * would return plausible features for the orientation review rejected, recall would search
+ * for the wrong thing, and nothing in the run would say so.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { observeCachePath } from "./observe.ts";
-import { loadRotations } from "./rotations.ts";
-import type { Turn } from "./rotations.ts";
 
-const FRAME = "tmp/datasets/osv5m/images/test/1047222609015689.jpg";
+const FRAME = Buffer.from("pretend this is a jpeg");
 
-test("the recorded angle changes the cache key for one unchanged frame", () => {
-  const asShipped = observeCachePath(FRAME, 0);
-  const turned = observeCachePath(FRAME, 180);
-  assert.notEqual(
-    asShipped,
-    turned,
-    "a rotated frame reuses the cache written before the rotation",
-  );
-
-  // Every angle a photograph can need has to be distinguishable, not just 0 against 180.
-  const angles: Turn[] = [0, 90, 180, 270];
-  const keys = new Set(angles.map((angle) => observeCachePath(FRAME, angle)));
-  assert.equal(keys.size, angles.length);
+test("different pixels cache under different keys", () => {
+  const turned = Buffer.from("pretend this is the same frame, turned");
+  assert.notEqual(observeCachePath(FRAME), observeCachePath(turned));
 });
 
-test("the same frame at the same angle maps to one path", () => {
-  assert.equal(observeCachePath(FRAME, 90), observeCachePath(FRAME, 90));
-});
-
-test("two frames at the same angle do not collide", () => {
-  const other = FRAME.replace("1047222609015689", "1000184947185715");
-  assert.notEqual(observeCachePath(FRAME, 0), observeCachePath(other, 0));
+test("the same pixels map to one path", () => {
+  assert.equal(observeCachePath(FRAME), observeCachePath(Buffer.from(FRAME)));
 });
 
 /**
- * Guards the caller, not the key: `observe` reads the angle from the committed list, so a
- * frame that stopped being rotated there would silently stop exercising the rotated path.
+ * A one-byte change is the realistic case: turning a frame re-encodes it, and two
+ * re-encodes of one photograph differ in far less than a whole image.
  */
-test("the committed list still turns the frame this test uses", async () => {
-  const rotations = await loadRotations();
-  assert.equal(rotations.get("1047222609015689"), 180);
-  assert.equal(rotations.has("1000184947185715"), false);
+test("a single changed byte changes the key", () => {
+  const nudged = Buffer.from(FRAME);
+  nudged[0] = (nudged[0] ?? 0) ^ 0x01;
+  assert.notEqual(observeCachePath(FRAME), observeCachePath(nudged));
+});
+
+/**
+ * The prompt is part of the question. Re-wording it invalidates every cached answer, so
+ * `PROMPT_VERSION` has to reach the key; a key over the bytes alone would keep serving
+ * observations made under the old instructions.
+ */
+test("the key is not the bare digest of the frame", () => {
+  const bare = createHash("sha256").update(FRAME).digest("hex").slice(0, 16);
+  assert.equal(observeCachePath(FRAME).includes(bare), false);
 });

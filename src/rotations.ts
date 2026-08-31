@@ -7,11 +7,11 @@
  * would corrupt a good frame on every false positive. A person therefore decides, in
  * `src/review.ts`, and the decision is written here.
  *
- * A rejected frame leaves the corpus and costs one candidate. A rotated frame stays, so
- * the verdict has to reach every reader of that frame: the committed copy under
- * `benchmark/images/<role>/`, and the bytes the model sees through `src/image.ts`. Both
- * call `frameBytes` here, so a rotated frame cannot look upright in review and stay
- * sideways for the model.
+ * This list is a build input, not runtime metadata. `src/collect.ts` reads it once to
+ * write `benchmark/images/<role>/`, and after that the committed frame is upright and
+ * answers for itself; see `src/frames.ts`. Nothing on the run path opens this file. The
+ * list stays committed because a re-freeze rebuilds the frame directory from the shards,
+ * and no code can rederive which frames a person turned.
  *
  * Rotation is applied to the pristine dataset frame, never to an already rotated file.
  * Four presses of the arrow key therefore cost one re-encode, not four, and returning to
@@ -41,14 +41,19 @@ const HEADER = `# Frames turned upright by review.
 #
 # One frame per line: <id> <degrees clockwise>. Allowed values are 90, 180 and 270.
 #
-# OSV-5M bakes rotation into the pixels of a few percent of frames. The rotation is
-# applied to the pristine dataset frame, so this file, not the file on disk, is the
-# verdict. Delete a line to put a frame back the way the dataset shipped it.
+# This file is a build input, not metadata about a frame. \`npm run collect\` reads it once
+# and writes benchmark/images/<role>/ with the rotation already in the pixels. After that
+# the committed frame is the picture, and nothing on the run path opens this file.
+#
+# It stays committed because a re-freeze rebuilds that directory from the OSV-5M shards,
+# which ship these frames on their side, and no code can rederive which ones a person
+# turned. The rotation is applied to the pristine shard frame, so deleting a line here and
+# rebuilding restores the frame exactly as the dataset shipped it.
 #
 # A frame listed in benchmark/samples/rejected.txt has no line here. It is in no corpus,
-# so nothing would ever read the rotation, and a line nobody reads goes stale unnoticed.
+# so nothing would ever apply the rotation, and a line nobody reads goes stale unnoticed.
 #
-# Written by \`npm run review\`. After editing by hand, rebuild the image folder:
+# Written by \`npm run review\`. After editing by hand, rebuild the frames:
 #   npm run collect
 `;
 
@@ -119,8 +124,13 @@ export async function saveRotations(
 
 let cached: Promise<Map<string, Angle>> | undefined;
 
-/** The verdict for one frame id, read from the list once per process. */
-export async function rotationOf(id: string): Promise<Turn> {
+/**
+ * The verdict for one frame id, read from the list once per process.
+ *
+ * Deliberately not exported. A reader that can ask for an angle is a reader that can
+ * forget to, which is the mistake this module used to invite.
+ */
+async function rotationOf(id: string): Promise<Turn> {
   cached ??= loadRotations();
   return (await cached).get(id) ?? 0;
 }
@@ -131,8 +141,8 @@ export function renderRotated(sourcePath: string, angle: Angle): Promise<Buffer>
 }
 
 /**
- * A frame as every reader must see it: original bytes when review left it alone, and the
- * rotated re-encode when review turned it upright.
+ * A frame as `src/collect.ts` must write it: original bytes when review left it alone, and
+ * the rotated re-encode when review turned it upright. The one place the angle is applied.
  */
 export async function frameBytes(sourcePath: string): Promise<{ bytes: Buffer; angle: Turn }> {
   const angle = await rotationOf(basename(sourcePath, extname(sourcePath)));

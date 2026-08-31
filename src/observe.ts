@@ -12,21 +12,21 @@
  * kept the image. Whatever this step fails to notice is not lost, because the solver
  * still sees the frame itself. The output is a search query, not a summary.
  *
- * Features are cached on disk by image, prompt version and rotation: a memory-on and a
- * memory-off run over the same corpus must issue the same observation, and paying for it
- * twice would double the quota cost of every comparison. The rotation belongs in the key
- * because `toDataUri` applies the verdict in `benchmark/samples/rotated.txt`: a frame
- * turned upright after its features were cached is a different picture, and the cached
- * answer would describe the orientation the reviewer rejected.
+ * Features are cached on disk by prompt version and by the frame's own bytes: a memory-on
+ * and a memory-off run over the same corpus must issue the same observation, and paying
+ * for it twice would double the quota cost of every comparison.
+ *
+ * The key is the content, not the path. A frame the reviewer turns upright keeps its name
+ * and changes its pixels, so a path-keyed entry would answer a question about the new
+ * picture with features observed from the old one. Hashing what was actually sent makes
+ * that impossible to get wrong, and it costs one read of a 40 KB file.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { trace } from "@opentelemetry/api";
 import OpenAI from "openai";
-import { toDataUri } from "./image.ts";
-import { rotationOf } from "./rotations.ts";
-import type { Turn } from "./rotations.ts";
+import { readFrame } from "./image.ts";
 
 const MODEL = process.env.OBSERVE_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
@@ -101,14 +101,15 @@ const tracer = trace.getTracer("observe");
 /**
  * Where one frame's features are cached. Exported so the parent can unit-check it.
  *
- * The angle is a parameter rather than a lookup so that this stays a pure function of
- * what the model was shown. It is part of the key, not decoration: a reviewer who turns a
- * frame upright after its features were cached changes the picture the model is asked
- * about, and the cached answer describes the orientation that was rejected.
+ * Keyed on the bytes that were sent, so the entry cannot outlive the picture it describes.
+ * A pure function of the payload: nothing about the file's name or location enters the key,
+ * because neither is what the model was asked about.
  */
-export function observeCachePath(imagePath: string, angle: Turn): string {
+export function observeCachePath(bytes: Buffer): string {
   const key = createHash("sha256")
-    .update(`${PROMPT_VERSION}:${imagePath}:${angle}`)
+    .update(PROMPT_VERSION)
+    .update(":")
+    .update(bytes)
     .digest("hex")
     .slice(0, 16);
   return join(CACHE_DIR, `${key}.json`);
@@ -121,8 +122,8 @@ export function observeCachePath(imagePath: string, angle: Turn): string {
  * losing the row costs the denominator, which is worse and harder to notice.
  */
 export async function observe(imagePath: string): Promise<string[]> {
-  const angle = await rotationOf(basename(imagePath, extname(imagePath)));
-  const path = observeCachePath(imagePath, angle);
+  const { bytes, dataUri } = await readFrame(imagePath);
+  const path = observeCachePath(bytes);
   try {
     return JSON.parse(await readFile(path, "utf8")) as string[];
   } catch {
@@ -141,7 +142,7 @@ export async function observe(imagePath: string): Promise<string[]> {
             role: "user",
             content: [
               { type: "text", text: PROMPT },
-              { type: "image_url", image_url: { url: await toDataUri(imagePath) } },
+              { type: "image_url", image_url: { url: dataUri } },
             ],
           },
         ],

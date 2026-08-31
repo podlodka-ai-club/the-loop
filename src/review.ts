@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { appendReject, loadRejects, REJECTS_PATH } from "./rejects.ts";
 import { appendReviewed, loadReviewed } from "./reviewed.ts";
+import { FRAMES_ROOT, frameDir, framePath } from "./frames.ts";
 import { indexImages } from "./osv5m.ts";
 import {
   loadRotations,
@@ -45,7 +46,6 @@ import {
   type Turn,
 } from "./rotations.ts";
 
-const IMAGES_ROOT = join("benchmark", "images");
 const ORDER_PATH = join("tmp", "analysis", "updown.json");
 const UI_PATH = join(import.meta.dirname, "review.html");
 const PORT = Number(process.env.REVIEW_PORT ?? 5173);
@@ -95,13 +95,13 @@ const rotations = await loadRotations();
 
 const frames: Item[] = [];
 for (const role of Object.keys(ROLES)) {
-  const names = await readdir(join(IMAGES_ROOT, role)).catch(() => []);
+  const names = await readdir(frameDir(role)).catch(() => []);
   for (const name of names) {
     if (name.endsWith(".jpg")) frames.push({ id: name.slice(0, -4), role });
   }
 }
 if (frames.length === 0) {
-  console.error(`no frames under ${IMAGES_ROOT}. Build them with \`npm run collect\`.`);
+  console.error(`no frames under ${FRAMES_ROOT}. Build them with \`npm run collect\`.`);
   process.exit(1);
 }
 
@@ -219,7 +219,7 @@ async function rotate(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const current = rotations.get(item.id) ?? 0;
   const angle = body.dir === "cw" ? NEXT_CW[current] : NEXT_CCW[current];
   const source = await sourceOf(item.id);
-  const target = join(IMAGES_ROOT, item.role, `${item.id}.jpg`);
+  const target = framePath(item.role, item.id);
 
   if (angle === 0) {
     rotations.delete(item.id);
@@ -240,7 +240,7 @@ async function image(url: URL, res: ServerResponse): Promise<void> {
   const role = url.searchParams.get("role") ?? "";
   if (ROLES[role] !== true || !ID.test(id)) throw new Error(`no such frame: ${role}/${id}`);
 
-  const bytes = await readFile(join(IMAGES_ROOT, role, `${id}.jpg`));
+  const bytes = await readFile(framePath(role, id));
   res.writeHead(200, {
     "content-type": "image/jpeg",
     "content-length": bytes.length,
@@ -350,7 +350,7 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`frames   ${frames.length} in ${IMAGES_ROOT}`);
+  console.log(`frames   ${frames.length} in ${FRAMES_ROOT}`);
   console.log(`settled  ${frames.length - queue.length} already judged, ${queue.length} to go`);
   console.log(`order    ${order.size > 0 ? `most suspicious first, by ${ORDER_PATH}` : "by id"}`);
   console.log(`rotated  ${rotations.size} frames turned upright, per ${ROTATIONS_PATH}`);

@@ -29,12 +29,11 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { FRAMES_ROOT, frameDir, framePath } from "./frames.ts";
 import { DEFAULT_MANIFEST, DEFAULT_TRAIN_MANIFEST, readManifest } from "./manifest.ts";
 import { loadRejects } from "./rejects.ts";
 import { loadRows } from "./osv5m.ts";
 import { frameBytes } from "./rotations.ts";
-
-const ROOT = join("benchmark", "images");
 
 /** Where dropped frames go. Under `tmp/`, which `.gitignore` excludes whole. */
 const DROPPED = join("tmp", "dropped");
@@ -51,7 +50,7 @@ const rejects = await loadRejects();
 /** Every frame in the directory now, and which role folder holds it. */
 const before = new Map<string, string>();
 for (const { role } of CORPORA) {
-  for (const name of await readdir(join(ROOT, role)).catch(() => [])) {
+  for (const name of await readdir(frameDir(role)).catch(() => [])) {
     if (name.endsWith(".jpg")) before.set(name.slice(0, -4), role);
   }
 }
@@ -82,7 +81,7 @@ for (const id of rejects.keys()) {
   const target = join(DROPPED, `${id}.jpg`);
   const role = before.get(id);
   if (role !== undefined) {
-    await moveFile(join(ROOT, role, `${id}.jpg`), target);
+    await moveFile(framePath(role, id), target);
     moved++;
     continue;
   }
@@ -107,7 +106,7 @@ const kept = new Set<string>();
 
 for (const { role, path } of CORPORA) {
   const manifest = await readManifest(path);
-  const dir = join(ROOT, role);
+  const dir = frameDir(role);
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 
@@ -119,7 +118,7 @@ for (const { role, path } of CORPORA) {
       continue;
     }
     const { bytes: wanted, angle } = await frameBytes(row.imagePath);
-    const target = join(dir, `${id}.jpg`);
+    const target = framePath(role, id);
     await writeFile(target, wanted);
 
     const back = await readFile(target);
@@ -143,7 +142,7 @@ for (const { role, path } of CORPORA) {
 
 credits.sort((a, b) => (a.id < b.id ? -1 : 1));
 await writeFile(
-  join(ROOT, "credits.csv"),
+  join(FRAMES_ROOT, "credits.csv"),
   ["id,role,creator_username", ...credits.map((c) => `${c.id},${c.role},${c.creator}`)].join("\n") +
     "\n",
   "utf8",

@@ -11,8 +11,9 @@
  * that carries a burned-in overlay instead of cropping one away, so there is no
  * per-frame preprocessing left to record.
  */
-import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { access, readFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { framePath } from "./frames.ts";
 import { fingerprintOf } from "./osv5m.ts";
 import type { Row, Sample } from "./osv5m.ts";
 
@@ -168,10 +169,19 @@ export async function readManifest(path: string): Promise<Manifest> {
 }
 
 /**
- * Resolves the manifest against the rows that are on disk.
+ * Resolves the manifest into the frames a run will read.
  *
- * Missing ids are fatal on purpose. A short run is not a cheaper run, it is a
- * different benchmark, and averaging over a smaller denominator hides that.
+ * Two files back one corpus item, and they answer different questions. `test.csv` holds
+ * the ground truth, which is never duplicated into this repository. The frame under
+ * `benchmark/images/<role>/` holds the pixels, already turned upright if review turned
+ * them, and that is what `imagePath` points at. A reader therefore cannot get a frame
+ * without its orientation, because the orientation is the frame.
+ *
+ * Rows are copied rather than edited. `pool` is shared with every other caller, and
+ * repointing a row in place would silently change which file they read.
+ *
+ * Missing ids are fatal on purpose. A short run is not a cheaper run, it is a different
+ * benchmark, and averaging over a smaller denominator hides that.
  */
 export function selectByManifest(pool: readonly Row[], manifest: Manifest): Sample {
   const byId = new Map(pool.map((row) => [row.id, row]));
@@ -180,15 +190,23 @@ export function selectByManifest(pool: readonly Row[], manifest: Manifest): Samp
 
   for (const id of manifest.ids) {
     const row = byId.get(id);
-    if (row === undefined) missing.push(id);
-    else rows.push(row);
+    if (row === undefined) {
+      missing.push(id);
+      continue;
+    }
+    // A retired corpus has no frame directory, so its rows keep pointing at the shards.
+    // Nothing scores it; it stays readable for history.
+    const imagePath =
+      manifest.role === "superseded" ? row.imagePath : framePath(manifest.role, id);
+    rows.push({ ...row, imagePath });
   }
 
   if (missing.length > 0) {
     throw new ManifestError(
-      `${missing.length} of ${manifest.ids.length} images from the frozen sample are not on ` +
-        `disk, for example ${missing.slice(0, 3).join(", ")}. Download the test image shards ` +
-        `listed in docs/benchmark/reproduce.md, then run \`node src/sample.ts\` again.`,
+      `${missing.length} of ${manifest.ids.length} frames in the frozen corpus have no row ` +
+        `in test.csv on this machine, for example ${missing.slice(0, 3).join(", ")}. The ` +
+        `labels come from the dataset: follow docs/benchmark/reproduce.md, then run ` +
+        `\`node src/sample.ts\` again.`,
     );
   }
 
@@ -202,15 +220,19 @@ export function selectByManifest(pool: readonly Row[], manifest: Manifest): Samp
 }
 
 /**
- * Reads the manifest and resolves it, or stops with the reason.
+ * Reads the manifest, resolves it, and checks that every frame it names is on disk.
  *
- * A missing shard or an edited manifest is an operator problem, not a defect, and a
- * stack trace buries the one line that says what to do next.
+ * The frame check belongs here rather than in the first reader. A run that discovers a
+ * missing frame on item 400 has already spent 400 paid calls, and a run that treated the
+ * gap as one lost row would report a mean over a denominator nobody chose.
  *
- * `expected` is not ceremony. Distilling memories from the eval corpus, or scoring on
- * the train corpus, invalidates every number produced afterwards and leaves no trace
- * in the output that says so. The role is written into the file precisely so the
- * wrong path is refused instead of silently obeyed.
+ * A missing frame or an edited manifest is an operator problem, not a defect, and a stack
+ * trace buries the one line that says what to do next.
+ *
+ * `expected` is not ceremony. Distilling memories from the eval corpus, or scoring on the
+ * train corpus, invalidates every number produced afterwards and leaves no trace in the
+ * output that says so. The role is written into the file precisely so the wrong path is
+ * refused instead of silently obeyed.
  */
 export async function loadFrozenSample(
   pool: readonly Row[],
@@ -225,7 +247,27 @@ export async function loadFrozenSample(
           `Pass --manifest with the right file, or re-freeze with \`node src/sample.ts --freeze\`.`,
       );
     }
-    return selectByManifest(pool, manifest);
+
+    const sample = selectByManifest(pool, manifest);
+    const absent: string[] = [];
+    await Promise.all(
+      sample.rows.map(async (row) => {
+        try {
+          await access(row.imagePath);
+        } catch {
+          absent.push(row.id);
+        }
+      }),
+    );
+    if (absent.length > 0) {
+      absent.sort();
+      throw new ManifestError(
+        `${absent.length} of ${sample.rows.length} frames of the ${manifest.role} corpus are ` +
+          `not on disk, for example ${absent.slice(0, 3).join(", ")}. Rebuild them with ` +
+          `\`npm run collect\`.`,
+      );
+    }
+    return sample;
   } catch (error) {
     if (!(error instanceof ManifestError)) throw error;
     console.error(`failed   ${error.message}`);
