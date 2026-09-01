@@ -26,7 +26,6 @@ import {
 import { Mem0MemoryError } from "./error.ts";
 import { createMem0PlatformPort } from "./platform.ts";
 import type { Mem0PlatformPort, Mem0Record } from "./platform.ts";
-import { runIdempotentWrite } from "../idempotency.ts";
 
 export const MEM0_CAPABILITIES = { snapshot: false, restore: false } as const;
 
@@ -358,21 +357,16 @@ export class Mem0Memory implements Memory, LegacyMemory {
     this.assertUsable();
     this.validateLesson(lesson);
     if (lesson.idempotencyKey !== undefined) {
-      if (this.dependencies.platform.supportsAtomicIdempotency !== true) {
-        throw new MemoryWriteError(
-          "unsupported",
-          "Mem0 cannot atomically deduplicate idempotent writes across adapter instances",
-        );
-      }
-      return runIdempotentWrite(
-        `mem0:${this.config.agentId}`,
-        lesson.idempotencyKey,
-        async () => {
-          const existing = await this.findExistingLessonId(lesson.idempotencyKey!);
-          if (existing !== undefined) return { status: "already_stored", lessonId: existing };
-          return this.rememberOnce(lesson, prompt);
-        },
-      );
+      // Mem0 Cloud does not expose an atomic compare-and-add primitive. The
+      // adapter serializes writes on this instance and performs an exact
+      // provider-metadata preflight before adding a lesson. An ambiguous
+      // ingestion outcome is never retried automatically; a later call can
+      // still discover a completed write through the provider list.
+      const existing = await this.findExistingLessonId(lesson.idempotencyKey);
+      if (existing !== undefined) return { status: "already_stored", lessonId: existing };
+      const lessonId = await this.rememberOnce(lesson, prompt);
+      this.lessonIdsByIdempotencyKey.set(lesson.idempotencyKey, lessonId);
+      return { status: "stored", lessonId };
     }
     return { status: "stored", lessonId: await this.rememberOnce(lesson, prompt) };
   }
