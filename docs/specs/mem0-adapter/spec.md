@@ -305,7 +305,7 @@ the adapter with `recall(query: string, limit)`.
 | W.9 | Quarantined instance rejects subsequent remember/recall without calls. Quarantine is process-local instance state. |
 | W.10 | No outcome-unknown path automatically retries add. Completion observer fires once only after no-op or visibility success; an observer throw becomes non-retryable `observer_failed` without quarantine. |
 | W.11 | Concurrent `remember` calls on one instance execute FIFO. Recall may run during ingestion and observes only facts already visible in Cloud. |
-| W.12 | Before `add`, the dynamic adapter searches for an existing record with the exact `loci_idempotency_key`; a match returns `already_stored` and its provider ID without a second add request. A void/ambiguous native result becomes `write_outcome_unknown`. |
+| W.12 | The dynamic adapter sends the exact `loci_idempotency_key` with `add`; the provider owns duplicate handling. The adapter only memoizes successful IDs locally and never performs a full-scope lookup before each write. A void/ambiguous native result becomes `write_outcome_unknown`. |
 
 ### R — Ranked recall
 

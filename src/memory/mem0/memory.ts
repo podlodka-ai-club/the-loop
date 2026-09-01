@@ -357,12 +357,10 @@ export class Mem0Memory implements Memory, LegacyMemory {
     this.assertUsable();
     this.validateLesson(lesson);
     if (lesson.idempotencyKey !== undefined) {
-      // Mem0 Cloud does not expose an atomic compare-and-add primitive. The
-      // adapter serializes writes on this instance and performs an exact
-      // provider-metadata preflight before adding a lesson. An ambiguous
-      // ingestion outcome is never retried automatically; a later call can
-      // still discover a completed write through the provider list.
-      const existing = await this.findExistingLessonId(lesson.idempotencyKey);
+      // The provider owns duplicate handling. The local cache only prevents a
+      // second add from this adapter instance; it deliberately does not list
+      // the whole remote scope before every write.
+      const existing = this.lessonIdsByIdempotencyKey.get(lesson.idempotencyKey);
       if (existing !== undefined) return { status: "already_stored", lessonId: existing };
       const lessonId = await this.rememberOnce(lesson, prompt);
       this.lessonIdsByIdempotencyKey.set(lesson.idempotencyKey, lessonId);
@@ -413,30 +411,6 @@ export class Mem0Memory implements Memory, LegacyMemory {
       this.lessonIdsByIdempotencyKey.set(lesson.idempotencyKey, lessonId);
     }
     return lessonId;
-  }
-
-  private async findExistingLessonId(idempotencyKey: string): Promise<string | undefined> {
-    const cached = this.lessonIdsByIdempotencyKey.get(idempotencyKey);
-    if (cached !== undefined) return cached;
-
-    let records: Mem0Record[];
-    try {
-      records = await this.dependencies.platform.list(this.config.agentId);
-    } catch (error) {
-      throw sanitizeExistingError(error, "protocol_error", undefined, isTransient(error));
-    }
-    if (!Array.isArray(records)) throw sanitizedError("protocol_error");
-
-    for (const record of records) {
-      if (!isRecord(record) || !isRecord(record.metadata)) continue;
-      if (record.metadata.loci_idempotency_key !== idempotencyKey) continue;
-      if (typeof record.id !== "string" || record.id.trim() === "") {
-        throw sanitizedError("protocol_error");
-      }
-      this.lessonIdsByIdempotencyKey.set(idempotencyKey, record.id);
-      return record.id;
-    }
-    return undefined;
   }
 
   private validateLesson(lesson: LessonInput | LegacyLessonInput): void {

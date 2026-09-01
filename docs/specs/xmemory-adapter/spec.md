@@ -569,7 +569,7 @@ boundary receives one already-formed query string from the dispatcher.
 | W.6 | Write timeout, abort, transport failure, HTTP 408/5xx, malformed success, conflicting code/status or unknown error becomes `write_outcome_unknown`, quarantines once, invokes quarantine observer once and never retries. Observer failure does not replace the original error. |
 | W.7 | Calls already queued behind the ambiguous write and calls made afterward reject `instance_quarantined` when they reach the head/before validation, with no provider call. Quarantine is process-local; the pilot observer provides retirement evidence. Snapshot/restore remain unsupported-operation errors. |
 | W.8 | Observer failure becomes non-retryable `observer_failed` after committed success and does not quarantine the instance. |
-| W.9 | The XMD primary key or provider lookup uses the exact dynamic idempotency key; a repeated key returns `already_stored` and does not create a second training experience. |
+| W.9 | The XMD primary key uses the exact dynamic idempotency key; a repeated key returns `already_stored` without a pre-write lookup and does not create a second training experience. |
 
 ### R — Recall
 

@@ -93,7 +93,7 @@ export type HindsightRetainResponse = {
   usage: Record<string, number> | null;
 };
 
-/** Provider-visible document identity used for idempotency preflight. */
+/** Provider-visible document identity used by provider-side idempotency. */
 export type HindsightDocumentLookup = {
   documentId: string;
 };

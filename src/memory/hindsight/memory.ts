@@ -463,37 +463,6 @@ class HindsightMemoryImplementation implements HindsightMemory {
     if (this.#quarantined) throw hindsightError("instance_quarantined", operation);
   }
 
-  async #findProviderDocument(idempotencyKey: string): Promise<string | undefined> {
-    const platform = this.#getPlatform();
-    const signal = AbortSignal.timeout(this.#config.readTimeoutMs);
-    if (platform.getDocument === undefined) {
-      // Older injected ports expose only a bank count. They can safely prove an
-      // empty test bank, but cannot identify one exact document in a populated
-      // bank, so refuse to guess instead of claiming an idempotent result.
-      const summary = await this.#callPlatform("read", signal, () =>
-        platform.listDocuments({
-          bankId: this.#config.source.bankId,
-          timeoutMs: this.#config.readTimeoutMs,
-          signal,
-        }),
-      );
-      if (summary.total > 0) throw hindsightError("unavailable", "read");
-      return undefined;
-    }
-
-    const document = await this.#callPlatform("read", signal, () =>
-      platform.getDocument!({
-        bankId: this.#config.source.bankId,
-        documentId: idempotencyKey,
-        timeoutMs: this.#config.readTimeoutMs,
-        signal,
-      }),
-    );
-    if (document === null) return undefined;
-    if (document.documentId !== idempotencyKey) throw hindsightError("protocol_error", "read");
-    return document.documentId;
-  }
-
   remember(
     lesson: LessonInput | LegacyLessonInput,
     prompt: MemoryPrompt = sharedMemoryPrompt("store"),
@@ -520,12 +489,6 @@ class HindsightMemoryImplementation implements HindsightMemory {
     this.#assertUsable("write");
     const normalizedLesson = validateLesson(lesson);
     const idempotencyKey = normalizedLesson.idempotencyKey;
-    if (idempotencyKey !== undefined && this.#getPlatform().supportsAtomicIdempotency !== true) {
-      throw new MemoryWriteError(
-        "unsupported",
-        "Hindsight provider does not advertise atomic document-id deduplication",
-      );
-    }
     if (idempotencyKey !== undefined) {
       const existing = this.#lessonIdsByIdempotencyKey.get(idempotencyKey);
       if (existing !== undefined) return { status: "already_stored", lessonId: existing };
@@ -538,11 +501,6 @@ class HindsightMemoryImplementation implements HindsightMemory {
     );
 
     const write = async (): Promise<string | MemoryWriteResult> => {
-      if (idempotencyKey !== undefined) {
-        const existing = await this.#findProviderDocument(idempotencyKey);
-        if (existing !== undefined) return { status: "already_stored", lessonId: existing };
-      }
-
       let response: unknown;
       try {
         response = await this.#callPlatform("write", request.signal, () =>

@@ -425,7 +425,7 @@ public dynamic `Memory.recall(query: string, limit)` boundary.
 | W.6 | E.1 is the canonical status mapping; a malformed retain response becomes `protocol_error`. A transport timeout, abort or 5xx after the retain call starts becomes `write_outcome_unknown`. |
 | W.7 | `write_outcome_unknown` quarantines the adapter exactly once, calls `onInstanceQuarantined` at most once, rejects queued and future read/write calls with `instance_quarantined`, and never retries retain automatically. |
 | W.8 | `onRememberCompleted` runs once after successful retain. An observer failure becomes `observer_failed` and does not quarantine or undo the completed Cloud write. |
-| W.9 | Before retain, the adapter resolves an existing `document_id` from the exact idempotency key; a match returns `already_stored` and its lesson identity without a second retain. |
+| W.9 | The adapter sends the exact idempotency key as `document_id` to `retain`; provider-side document identity handles repeats, while the adapter memoizes successful IDs locally and performs no lookup before each retain. |
 
 ### R — Recall
 

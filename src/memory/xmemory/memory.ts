@@ -27,7 +27,6 @@ import {
 import { createXmemoryPlatformPort } from "./platform.ts";
 import {
   decodeXmemoryChanges,
-  decodeXmemoryRawTables,
   type XmemoryChangeSet,
   type XmemoryPlatformPort,
 } from "./platform-contract.ts";
@@ -397,10 +396,6 @@ function providerLessonId(idempotencyKey: string): string {
   return `xmemory-lesson:${createHash("sha256").update(idempotencyKey, "utf8").digest("hex")}`;
 }
 
-function buildIdempotencyLookupData(idempotencyKey: string): string {
-  return JSON.stringify({ idempotency_key: idempotencyKey });
-}
-
 function projectXmemoryAnswer(text: string): Pick<Hint, "text" | "effect"> {
   const effectMatch = /^effect:\s*(helped|irrelevant|misleading|insufficient)\s*$/im.exec(text);
   const effect = effectMatch?.[1] as ReflectionEffect | undefined;
@@ -549,70 +544,22 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
     return error;
   }
 
-  private async findProviderLessonId(idempotencyKey: string): Promise<string | undefined> {
-    this.assertUsable("read");
-    let traceId: string;
-    try {
-      traceId = this.behavior.createTraceId();
-      if (typeof traceId !== "string" || !LOWERCASE_UUID.test(traceId)) throw new Error("invalid trace id");
-    } catch {
-      throw new XmemoryMemoryError("unavailable", "read", "xmemory idempotency lookup is unavailable");
-    }
-
-    let rawResult: { traceId: string | null; readerResult: unknown };
-    try {
-      rawResult = await this.platform.read({
-        query: encodeMemoryRetrieveQuery(
-          sharedMemoryPrompt("retrieve"),
-          buildIdempotencyLookupData(idempotencyKey),
-        ),
-        readMode: "raw-tables",
-        traceId,
-        timeoutMs: this.config.readTimeoutMs,
-      });
-    } catch (error) {
-      throw sanitizeReadError(error);
-    }
-
-    try {
-      const table = decodeXmemoryRawTables(rawResult.readerResult);
-      if (table === null) return undefined;
-      const keyColumn = table.columns.findIndex((column) => column.name === "idempotency_key");
-      if (keyColumn < 0) throw new Error("idempotency lookup column is missing");
-      for (const row of table.rows) {
-        const value = row[keyColumn];
-        if (typeof value !== "string") throw new Error("idempotency lookup value is invalid");
-        if (value === idempotencyKey) return providerLessonId(idempotencyKey);
-      }
-      return undefined;
-    } catch {
-      throw new XmemoryMemoryError("unavailable", "read", "xmemory idempotency lookup is unavailable");
-    }
-  }
-
   private async performRemember(
     input: LessonInput | LegacyLessonInput,
     prompt: MemoryPrompt,
   ): Promise<MemoryWriteResult> {
     const lesson = normalizeLesson(input);
     if (lesson.idempotencyKey !== undefined) {
-      if (this.platform.supportsAtomicIdempotency !== true) {
-        throw new MemoryWriteError(
-          "unsupported",
-          "xmemory schema does not advertise atomic primary-key deduplication",
-        );
-      }
       const existing = this.lessonIdsByIdempotencyKey.get(lesson.idempotencyKey);
       if (existing !== undefined) return { status: "already_stored", lessonId: existing };
     }
 
     if (lesson.idempotencyKey === undefined) return this.performRememberOnce(lesson, prompt);
-    const write = async (): Promise<MemoryWriteResult> => {
-      const existing = await this.findProviderLessonId(lesson.idempotencyKey!);
-      if (existing !== undefined) return { status: "already_stored", lessonId: existing };
-      return this.performRememberOnce(lesson, prompt);
-    };
-    return runIdempotentWrite(`xmemory:${this.config.instanceId}`, lesson.idempotencyKey, write);
+    return runIdempotentWrite(
+      `xmemory:${this.config.instanceId}`,
+      lesson.idempotencyKey,
+      () => this.performRememberOnce(lesson, prompt),
+    );
   }
 
   private async performRememberOnce(
