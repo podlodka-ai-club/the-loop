@@ -8,10 +8,10 @@ import { createHash } from "node:crypto";
 export function makeMemoryIdempotencyKey(
   attemptId: string,
   featureKey: string,
-  memoryHitId: string,
+  memoryHitId: string | null,
 ): string {
   return createHash("sha256")
-    .update(`${attemptId}\0${featureKey}\0${memoryHitId}`, "utf8")
+    .update(`${attemptId}\0${featureKey}\0${memoryHitId ?? ""}`, "utf8")
     .digest("hex")
     .slice(0, 32);
 }

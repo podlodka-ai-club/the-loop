@@ -131,7 +131,7 @@ function makeInput(overrides: Partial<ReflectionEpisodeInput> = {}): ReflectionE
 
 function toolCall(overrides: Partial<{
   feature_key: string;
-  memory_hit_id: string;
+  memory_hit_id: string | null;
   effect: ReflectionEffect | "unknown";
   content: string;
   triggers: string[];
@@ -249,6 +249,42 @@ test("reflectEpisode sends one feature and one memory hit with guess, truth, dis
   assert.equal(prompt.includes("triggers must be 1-8 short observable noun phrases"), true);
   assert.equal(prompt.includes("region must be the two-letter uppercase country code of the revealed truth"), true);
   assert.equal(JSON.stringify(request.messages).includes("data:image/jpeg;base64,image-reflect.jpg"), true);
+});
+
+test("reflectEpisode stores a grounded lesson with nullable hit provenance after no-hit retrieval", async () => {
+  const writer = new WriterSpy();
+  const client = new ReflectClientSpy();
+  client.toolCalls = [toolCall({
+    memory_hit_id: null,
+    effect: "insufficient",
+    content: "The visible road marking was a useful weak cue, but no memory answer was available to compare against it.",
+    triggers: ["single yellow center line"],
+  })];
+
+  const result = await reflectEpisodeWithRuntime(makeInput({ memoryHit: null }), {
+    memoryBinding: await makeResolvedBinding(writer),
+    run,
+    client,
+    imageDataUri: async () => "data:image/jpeg;base64,AA==",
+  });
+
+  assert.deepEqual(result, {
+    status: "stored",
+    effect: "insufficient",
+    lessonId: "lesson-written",
+    failure: null,
+  });
+  assert.equal(textPart(client.invocations[0]!).includes('"selected_memory_hit":null'), true);
+  assert.deepEqual(writer.invocations.map((invocation) => invocation.lesson), [{
+    content: "The visible road marking was a useful weak cue, but no memory answer was available to compare against it.",
+    sourceAttemptId: "attempt-reflect",
+    featureKey: "road_markings",
+    memoryHitId: null,
+    effect: "insufficient",
+    triggers: ["single yellow center line"],
+    region: "BR",
+    idempotencyKey: makeIdempotencyKey("attempt-reflect", "road_markings", null),
+  }]);
 });
 
 test("reflectEpisode accepts all effect values and writes app-owned provenance", async () => {

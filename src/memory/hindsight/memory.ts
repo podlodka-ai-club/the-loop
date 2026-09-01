@@ -254,7 +254,9 @@ function validateLesson(lesson: unknown): LessonInput | LegacyLessonInput {
     const normalizedEffect = effect === undefined ? undefined : readEffect(effect);
     if (
       (featureKey !== undefined && normalizedFeatureKey === undefined) ||
-      (memoryHitId !== undefined && (typeof memoryHitId !== "string" || memoryHitId.trim() === "")) ||
+      (memoryHitId !== undefined &&
+        memoryHitId !== null &&
+        (typeof memoryHitId !== "string" || memoryHitId.trim() === "")) ||
       (effect !== undefined && normalizedEffect === undefined) ||
       (idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || idempotencyKey.trim() === ""))
     ) {
@@ -270,7 +272,9 @@ function validateLesson(lesson: unknown): LessonInput | LegacyLessonInput {
       content,
       sourceAttemptId: sourceAttemptId.trim(),
       ...(normalizedFeatureKey === undefined ? {} : { featureKey: normalizedFeatureKey }),
-      ...(memoryHitId === undefined ? {} : { memoryHitId: memoryHitId.trim() }),
+      ...(memoryHitId === undefined
+        ? {}
+        : { memoryHitId: memoryHitId === null ? null : memoryHitId.trim() }),
       ...(normalizedEffect === undefined ? {} : { effect: normalizedEffect }),
       ...(idempotencyKey === undefined ? {} : { idempotencyKey: idempotencyKey.trim() }),
       triggers: normalizedTriggers,

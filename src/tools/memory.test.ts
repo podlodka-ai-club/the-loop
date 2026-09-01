@@ -145,7 +145,7 @@ function candidateHit(overrides: Partial<MemoryHit> = {}, occurrence = 0): Memor
   };
 }
 
-function storeContext(writer = new FakeWriter(), activeMemoryHit = hit()): MemoryToolContext {
+function storeContext(writer = new FakeWriter(), activeMemoryHit: MemoryHit | null = hit()): MemoryToolContext {
   return {
     ...context(writer),
     writer,
@@ -214,8 +214,7 @@ test("tool definitions are strict, complete and phase gated", () => {
     "insufficient",
   ]);
   assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.memory_hit_id, {
-    type: "string",
-    minLength: 1,
+    type: ["string", "null"],
   });
   assert.deepEqual(MEMORY_STORE_TOOL.function.parameters.properties.content, {
     type: "string",
@@ -1399,6 +1398,30 @@ test("store dispatcher binds app-owned provenance and maps write outcomes", asyn
     region: "BR",
   });
   assert.deepEqual(writeFailed, { status: "write_failed", lessonId: null, failure: "write_failed" });
+});
+
+test("store dispatcher accepts a null memory hit without fabricating provider provenance", async () => {
+  const writer = new FakeWriter();
+  const result = await executeMemoryStore(storeContext(writer, null), {
+    feature_key: "poles",
+    memory_hit_id: null,
+    effect: "insufficient",
+    content: "The visible pole style was a useful cue, but retrieval returned no memory answer.",
+    triggers: ["wooden poles"],
+    region: "BR",
+  });
+
+  assert.deepEqual(result, { status: "stored", lessonId: "lesson-1", failure: null });
+  assert.deepEqual(writer.lessons, [{
+    content: "The visible pole style was a useful cue, but retrieval returned no memory answer.",
+    sourceAttemptId: "attempt-1",
+    featureKey: "poles",
+    memoryHitId: null,
+    effect: "insufficient",
+    triggers: ["wooden poles"],
+    region: "BR",
+    idempotencyKey: makeIdempotencyKey("attempt-1", "poles", null),
+  }]);
 });
 
 test("store dispatcher preserves already_stored and unknown write outcomes without fabricating success", async () => {

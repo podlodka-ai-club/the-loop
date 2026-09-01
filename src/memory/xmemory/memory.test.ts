@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { MemoryWriteError, encodeMemoryRetrieveQuery, normalizeMemoryQuery, sharedMemoryPrompt, sharedMemoryPromptMetadata } from "../memory.ts";
+import {
+  MemoryBindingError,
+  MemoryWriteError,
+  encodeMemoryRetrieveQuery,
+  normalizeMemoryQuery,
+  sharedMemoryPrompt,
+  sharedMemoryPromptMetadata,
+  type LessonInput,
+} from "../memory.ts";
 import {
   XMEMORY_CAPABILITIES,
   XmemoryMemoryError,
@@ -480,6 +488,18 @@ async function rejectsMemoryCode(
   retryable = false,
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (operation === "write" && error instanceof MemoryBindingError) {
+      const mapped =
+        code === "instance_not_found"
+          ? "memory_not_found"
+          : code === "authentication" || code === "authorization"
+            ? "memory_mismatch"
+            : code === "rate_limited"
+              ? "unavailable"
+              : code;
+      assert.equal(error.code, mapped);
+      return true;
+    }
     if (operation === "write" && error instanceof MemoryWriteError) {
       assert.equal(error.code, code === "write_outcome_unknown" ? "write_outcome_unknown" : "write_failed");
       assert.equal("cause" in error, false);
@@ -562,6 +582,46 @@ test("remember sends the exact normalized envelope while preserving lesson conte
       timeoutMs: 180_000,
     },
   ]);
+});
+
+test("no-hit envelope omits memory_hit_id instead of serializing a fake string", async () => {
+  let request: Parameters<XmemoryPlatformPort["write"]>[0] | undefined;
+  let writes = 0;
+  const memory = await behaviorMemory({
+    supportsAtomicIdempotency: true,
+    read: async () => ({ traceId: null, readerResult: null }),
+    write: async (value) => {
+      writes += 1;
+      request = value;
+      return { writeId: "no-hit-write", traceId: null, changes: emptyChanges };
+    },
+  });
+
+  const noHitLesson: LessonInput = {
+    content: "The feature had no useful memory match.",
+    sourceAttemptId: "attempt-no-hit",
+    featureKey: "road_markings",
+    memoryHitId: null,
+    effect: "insufficient",
+    idempotencyKey: "attempt-no-hit/road_markings/no-hit",
+    triggers: ["road markings"],
+    region: "Iceland",
+  };
+  const firstResult = await memory.remember(noHitLesson);
+  assert.equal(firstResult.status, "stored");
+
+  assert.ok(request);
+  assert.match(request.text, /feature_key: road_markings\n/);
+  assert.match(request.text, /effect: insufficient\n/);
+  assert.match(request.text, /idempotency_key: attempt-no-hit\/road_markings\/no-hit\n/);
+  assert.doesNotMatch(request.text, /memory_hit_id:/);
+  assert.doesNotMatch(request.text, /memory_hit_id: null/);
+
+  assert.deepEqual(await memory.remember(noHitLesson), {
+    status: "already_stored",
+    lessonId: firstResult.lessonId,
+  });
+  assert.equal(writes, 1);
 });
 
 test("remember accepts every exact inclusive lesson boundary", async () => {

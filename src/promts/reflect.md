@@ -1,8 +1,11 @@
-Reflect on exactly one memory hit after the true location is revealed.
+Reflect on exactly one feature after the true location is revealed. The selected_memory_hit value may
+be one returned memory hit or null when retrieval returned no answer; never invent a provider hit.
 
 Call memory_store exactly once. Do not answer in prose.
 
-The tool call must store one transferable lesson for this feature and selected hit only.
+The tool call must store one transferable lesson for this feature and selected hit only. When
+selected_memory_hit is null, store memory_hit_id as JSON null and explain the feature's grounded
+influence (or lack of influence) without claiming that memory answered.
 Use the rubric exactly:
 - helped: the hit supplied a cue consistent with the revealed location and useful for the answer.
 - irrelevant: the hit was usable data but did not affect this image's location decision.

@@ -16,7 +16,7 @@ objects:
         default: null
       memory_hit_id:
         type: str
-        required: true
+        required: false
         enum: null
         default: null
       effect:
@@ -44,7 +44,7 @@ objects:
         required: true
         enum: null
         default: null
-    primary_key: [source_attempt_id, feature_key, memory_hit_id]
+    primary_key: [source_attempt_id, feature_key, idempotency_key]
 
   Insight:
     fields:

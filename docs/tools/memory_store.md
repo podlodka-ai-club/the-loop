@@ -43,7 +43,7 @@ dispatcher добавляет machine-readable provenance and typed write outcom
 ```text
 memory_store
   feature_key    string, required  # dynamic feature-scoped agent tool
-  memory_hit_id  string, required
+  memory_hit_id  string | null, required
   effect         string, required
   content        string, required
   triggers       string[], required
@@ -55,7 +55,9 @@ legacy memory_store
 ```
 
 В dynamic agent flow `content` формирует агент рефлексии как самостоятельное текстовое описание
-одного эпизода. Dispatcher проверяет strict schema: feature key и hit ID, один из четырёх effects,
+одного эпизода. Для `no_hit` агент получает и возвращает `memory_hit_id: null`; это означает, что
+lesson относится к влиянию признака без найденного memory hit. Dispatcher проверяет strict schema:
+feature key и hit ID/null, один из четырёх effects,
 content 1–2,000 символов и не более двух предложений, 1–8 bounded triggers и двухбуквенный uppercase
 region. В legacy provider envelope ниже остаётся только проверка непустого content на native boundary.
 

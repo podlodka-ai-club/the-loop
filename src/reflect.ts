@@ -12,7 +12,7 @@ export type ReflectionEpisodeInput = {
   attemptId: string;
   imagePath: string;
   feature: FeatureObservation;
-  memoryHit: MemoryHit;
+  memoryHit: MemoryHit | null;
   guess: { latitude: number; longitude: number; place: string; reasoning: string };
   truth: { latitude: number; longitude: number; country: string };
   distanceKm: number;

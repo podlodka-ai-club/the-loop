@@ -2,19 +2,21 @@
 type: Specification
 title: "Dynamic feature memory tools без geo-policy"
 description: Актуальный контракт model-generated набора визуальных признаков без post-hoc geo-фильтрации, с bounded retrieval, reflection и benchmark isolation.
-timestamp: 2026-08-31T00:00:00+03:00
-date: 2026-08-31
+timestamp: 2026-09-01T00:00:00+03:00
+date: 2026-09-01
 model: gpt-5
-version: 3
+version: 4
 tags: [loci, memory, tools, observe, reflection, dynamic-features, specification]
 ---
 
 # Spec: Dynamic feature memory tools без geo-policy
 
 Эта спецификация является следующей итерацией [dynamic feature memory tools](/specs/memory-tools-observe-dynamic-features/spec.md).
-Она меняет только observation validation: geo dictionary, geo policy и semantic content rejection
-удалены. Остальные dynamic feature, memory, locate, reflection, train и evaluation contracts
-предыдущей спецификации остаются нормативными, если ниже явно не переопределены.
+Она меняет observation validation и явно переопределяет reflection для `no_hit`: geo dictionary,
+geo policy и semantic content rejection удалены, а подключённая память теперь получает episode
+для пары `feature + null`, если retrieval не вернул hit. Остальные dynamic feature, memory, locate,
+reflection, train и evaluation contracts предыдущей спецификации остаются нормативными, если ниже
+явно не переопределены.
 
 ## Changes from v1
 
@@ -28,7 +30,8 @@ model-facing tool/provider instructions вынесены из TypeScript в от
 
 Реализовать dynamic `observe → retrieve → analyze → reflect` flow, в котором vision-модель сама
 формирует variable набор features для конкретной фотографии. Runtime принимает любой structurally
-valid feature text, выполняет feature-scoped retrieval и сохраняет связь `feature → hit → episode → lesson`.
+valid feature text, выполняет feature-scoped retrieval и сохраняет связь
+`feature → hit|null → episode → lesson`.
 
 ## Contract
 
@@ -185,7 +188,7 @@ The following contracts are inherited unchanged from the predecessor spec:
 - `FeatureMemoryGroup`, `MemoryRunConfig`, `LocateResult`, trace/provenance fields and `memoryRef:null`
   no-hit behavior.
 - Feature-scoped query ownership, one logical outcome per emitted feature, blind/reveal boundary,
-  per-hit reflection, deterministic idempotency and train/evaluation isolation.
+  per-hit and per-no-hit reflection, deterministic idempotency and train/evaluation isolation.
 
 Implementers MUST read the inherited contracts before coding:
 [predecessor spec](/specs/memory-tools-observe-dynamic-features/spec.md), [memory tools](/tools/index.md),
@@ -231,9 +234,11 @@ Implementers MUST read the inherited contracts before coding:
 | ID | Rule |
 | --- | --- |
 | E1 | Every returned memory hit creates exactly one episode candidate keyed by attempt, feature and hit identity. |
-| E2 | Reflection occurs after reveal and receives only the episode's feature, hit and final answer context. |
+| E1a | Every valid `no_hit` group with a connected memory creates exactly one episode candidate keyed by attempt, feature and a null hit identity. |
+| E2 | Reflection occurs after reveal and receives only the episode's feature, an optional hit (`MemoryHit | null`) and final answer context. |
 | E3 | Every attempted episode ends with `stored`, `already_stored`, `write_failed`, `reflection_failed` or another explicit terminal outcome. |
-| E4 | Lessons retain `sourceAttemptId`, `featureKey`, `memoryHitId`, effect and deterministic idempotency key. |
+| E4 | Lessons retain `sourceAttemptId`, `featureKey`, nullable `memoryHitId`, effect and deterministic idempotency key. |
+| E5 | A valid `no_hit` episode is reflected and stored independently; absent features, failed/skipped/invalid groups and `memoryRef:null` do not reflect or store. |
 
 ### Boundaries
 
@@ -343,10 +348,11 @@ retry/abort and episode identity.
 
 ### Phase 4 — Reflection, training and evaluation
 
-**Objective.** Keep per-hit reflection and training/evaluation isolation for dynamic groups.
+**Objective.** Reflect every valid dynamic feature episode, including a no-hit feature with a null
+memory hit, while keeping training/evaluation isolation.
 
-**Work.** Create explicit episode outcomes; pass reveal-only context to reflection; persist dynamic provenance;
-keep evaluation read-only.
+**Work.** Create explicit episode outcomes for returned hits and valid no-hit groups; pass reveal-only
+context with an optional hit to reflection; persist nullable dynamic provenance; keep evaluation read-only.
 
 **Dependencies.** Phase 3.
 
@@ -354,7 +360,8 @@ keep evaluation read-only.
 
 **Validation.** Tests 18–21; typecheck; full suite green.
 
-**Done.** Every returned hit has a terminal episode result and only training can write lessons.
+**Done.** Every returned hit and valid connected-memory no-hit group has a terminal episode result,
+and only training can write lessons.
 
 ### Phase 5 — Benchmark and final verification
 
@@ -379,6 +386,8 @@ keep evaluation read-only.
 - All static agent instructions are separate non-empty Markdown assets under `src/promts/` and are loaded by name.
 - Model-facing tool descriptions and provider instructions are also Markdown assets; no static instruction body is duplicated in TypeScript.
 - Retrieval, reflection and lessons retain dynamic feature provenance and explicit outcomes.
+- Connected-memory `no_hit` groups run one reflection with `memoryHit: null` and may create one
+  feature lesson; absent features, failed/skipped/invalid groups and `memoryRef:null` do not reflect.
 - `memoryRef:null` performs no memory model/provider/write calls and creates per-feature no-hit groups.
 - Blind/reveal boundaries and training/evaluation isolation remain enforced.
 - Required tests and typecheck pass; unavailable dataset/credential checks are reported explicitly.

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { MemoryWriteError, encodeMemoryRetrieveQuery, normalizeMemoryQuery, sharedMemoryPromptMetadata } from "../memory.ts";
+import {
+  MemoryBindingError,
+  MemoryWriteError,
+  encodeMemoryRetrieveQuery,
+  normalizeMemoryQuery,
+  sharedMemoryPromptMetadata,
+} from "../memory.ts";
 import {
   HINDSIGHT_CAPABILITIES,
   HINDSIGHT_DEFAULT_MAX_TOKENS,
@@ -71,6 +77,10 @@ async function assertAsyncMemoryError(
   retryable = false,
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (operation === "write" && error instanceof MemoryBindingError) {
+      assert.equal(error.code, code === "rate_limited" ? "unavailable" : code);
+      return true;
+    }
     if (operation === "write" && error instanceof MemoryWriteError) {
       assert.equal(error.code, code === "write_outcome_unknown" ? "write_outcome_unknown" : "write_failed");
       assert.equal("cause" in error, false);
@@ -301,6 +311,19 @@ test("retain builder validates lesson boundaries and emits the exact canonical e
       "write",
     );
   }
+
+  const noHitRequest = buildHindsightRetainRequest(
+    source.bankId,
+    {
+      ...lesson,
+      featureKey: "road_markings",
+      memoryHitId: null,
+      effect: "insufficient",
+      idempotencyKey: "attempt-01:west/road_markings/no-hit",
+    },
+    1_000,
+  );
+  assert.equal(noHitRequest.metadata.loci_memory_hit_id, null);
 });
 
 test("remember is FIFO, uses replace identity, accepts zero-fact success and observes completion", async () => {

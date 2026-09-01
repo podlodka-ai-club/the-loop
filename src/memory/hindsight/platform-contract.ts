@@ -78,7 +78,7 @@ export type HindsightRetainRequest = {
   documentId: string;
   retainMission: string;
   context: typeof HINDSIGHT_RETAIN_CONTEXT;
-  metadata: Record<string, string>;
+  metadata: Record<string, string | null>;
   async: false;
   timeoutMs: number;
   signal: AbortSignal;

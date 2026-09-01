@@ -470,8 +470,8 @@ export class Mem0Memory implements Memory, LegacyMemory {
     if (
       lesson.content.trim().replace(/\s+/g, " ").length > 2_000 ||
       readFeatureKey(lesson.featureKey) === undefined ||
-      typeof lesson.memoryHitId !== "string" ||
-      lesson.memoryHitId.trim() === "" ||
+      (lesson.memoryHitId !== null && typeof lesson.memoryHitId !== "string") ||
+      (lesson.memoryHitId !== null && lesson.memoryHitId.trim() === "") ||
       readEffect(lesson.effect) === undefined ||
       typeof lesson.idempotencyKey !== "string" ||
       lesson.idempotencyKey.trim() === "" ||

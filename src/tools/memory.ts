@@ -65,7 +65,7 @@ export type FeatureMemoryGroup = {
 export type EpisodeTrace = {
   attemptId: string;
   featureKey: FeatureKey;
-  memoryHitId: string;
+  memoryHitId: string | null;
   effect: ReflectionEffect | null;
   reflectionStatus:
     | "stored"
@@ -188,7 +188,7 @@ export const MEMORY_RETRIEVE_TOOL = {
 
 export type MemoryStoreArgs = {
   feature_key: FeatureKey;
-  memory_hit_id: string;
+  memory_hit_id: string | null;
   effect: ReflectionEffect;
   content: string;
   triggers: string[];
@@ -210,7 +210,7 @@ export const MEMORY_STORE_TOOL = {
           maxLength: 64,
           pattern: "^[a-z][a-z0-9_]{0,63}$",
         },
-        memory_hit_id: { type: "string", minLength: 1 },
+        memory_hit_id: { type: ["string", "null"] },
         effect: {
           type: "string",
           enum: ["helped", "irrelevant", "misleading", "insufficient"],
@@ -251,7 +251,7 @@ export type MemoryToolContext = {
   phase: MemoryToolPhase;
   run: MemoryRunConfig;
   activeFeature: FeatureObservation;
-  activeMemoryHit?: MemoryHit;
+  activeMemoryHit?: MemoryHit | null;
 };
 
 export type RetrievalMetric = {
@@ -384,7 +384,10 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
     throw new MemoryToolValidationError("invalid_tool_arguments");
   }
   if (!isFeatureKey(value.feature_key)) throw new MemoryToolValidationError("invalid_tool_arguments");
-  if (typeof value.memory_hit_id !== "string" || value.memory_hit_id.trim() === "") {
+  if (
+    value.memory_hit_id !== null &&
+    (typeof value.memory_hit_id !== "string" || value.memory_hit_id.trim() === "")
+  ) {
     throw new MemoryToolValidationError("invalid_tool_arguments");
   }
   if (!isReflectionEffect(value.effect)) throw new MemoryToolValidationError("invalid_tool_arguments");
@@ -412,7 +415,7 @@ function validateStoreArgs(input: unknown): MemoryStoreArgs {
   }
   return {
     feature_key: value.feature_key,
-    memory_hit_id: value.memory_hit_id.trim(),
+    memory_hit_id: value.memory_hit_id === null ? null : value.memory_hit_id.trim(),
     effect: value.effect,
     content,
     triggers,
@@ -563,7 +566,7 @@ export function makeMemoryHitId(
 export function makeIdempotencyKey(
   attemptId: string,
   featureKey: FeatureKey,
-  memoryHitId: string,
+  memoryHitId: string | null,
 ): string {
   return makeMemoryIdempotencyKey(attemptId, featureKey, memoryHitId);
 }
@@ -697,7 +700,11 @@ export async function executeMemoryStore(
 
   const parsed = validateStoreArgs(args);
   const hit = context.activeMemoryHit;
-  if (
+  if (hit === null) {
+    if (parsed.feature_key !== context.activeFeature.key || parsed.memory_hit_id !== null) {
+      throw new MemoryToolValidationError("foreign_hit");
+    }
+  } else if (
     hit.attemptId !== context.attemptId ||
     hit.featureKey !== context.activeFeature.key ||
     parsed.feature_key !== hit.featureKey ||

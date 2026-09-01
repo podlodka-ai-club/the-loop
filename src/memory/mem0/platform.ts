@@ -22,7 +22,7 @@ export type Mem0AddRequest = {
     loci_triggers: string[];
     loci_region: string;
     loci_feature_key?: string;
-    loci_memory_hit_id?: string;
+    loci_memory_hit_id?: string | null;
     loci_effect?: string;
     loci_idempotency_key?: string;
   };

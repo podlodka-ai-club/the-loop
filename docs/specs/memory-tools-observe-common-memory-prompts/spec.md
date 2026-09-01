@@ -2,10 +2,10 @@
 type: Specification
 title: "Common memory prompts для всех adapters"
 description: Overlay-контракт, который заменяет adapter-specific memory instructions едиными application-owned retrieve/store prompts.
-timestamp: 2026-08-31T00:00:00+03:00
-date: 2026-08-31
+timestamp: 2026-09-01T00:00:00+03:00
+date: 2026-09-01
 model: gpt-5
-version: 1
+version: 2
 tags: [loci, memory, prompts, adapters, specification]
 ---
 
@@ -13,7 +13,8 @@ tags: [loci, memory, prompts, adapters, specification]
 
 Эта спецификация является overlay для [dynamic features без geo-policy](/specs/memory-tools-observe-dynamic-features-no-geo-filter/spec.md).
 Все контракты dynamic observe, locate, reflection, training и evaluation из базовой spec остаются
-нормативными, кроме prompt ownership и memory adapter boundaries, переопределённых ниже.
+нормативными, кроме prompt ownership, memory adapter boundaries и no-hit reflection, переопределённых
+ниже.
 
 ## Goal
 
@@ -186,4 +187,6 @@ single source of truth; add shared prompt metadata and digest; update tool/provi
 - All adapters use identical shared retrieve/store prompt text, version and digest.
 - Native API mappings do not change the shared instruction content.
 - `memoryRef:null` remains provider/prompt-free.
+- A connected-memory `no_hit` feature receives one reflection with `memoryHit: null`; nullable
+  provenance remains consistent across all adapters.
 - Base dynamic feature, memory, locate, reflection, training and evaluation criteria remain green.

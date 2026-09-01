@@ -334,10 +334,15 @@ function validateSnapshotLesson(
   if (Object.hasOwn(record, "featureKey") && !isNormalizedFeatureKey(record.featureKey)) {
     throw new Error(`snapshot record ${index + 1}.featureKey is invalid`);
   }
-  for (const key of ["memoryHitId", "idempotencyKey"] as const) {
-    if (Object.hasOwn(record, key) && !isNonEmptyString(record[key])) {
-      throw new Error(`snapshot record ${index + 1}.${key} is invalid`);
-    }
+  if (
+    Object.hasOwn(record, "memoryHitId") &&
+    record.memoryHitId !== null &&
+    !isNonEmptyString(record.memoryHitId)
+  ) {
+    throw new Error(`snapshot record ${index + 1}.memoryHitId is invalid`);
+  }
+  if (Object.hasOwn(record, "idempotencyKey") && !isNonEmptyString(record.idempotencyKey)) {
+    throw new Error(`snapshot record ${index + 1}.idempotencyKey is invalid`);
   }
   if (
     Object.hasOwn(record, "effect") &&
@@ -349,7 +354,7 @@ function validateSnapshotLesson(
     if (record.idempotencyKey !== makeMemoryIdempotencyKey(
       record.sourceAttemptId as string,
       record.featureKey as string,
-      record.memoryHitId as string,
+      record.memoryHitId as string | null,
     )) {
       throw new Error(`snapshot record ${index + 1}.idempotencyKey is not deterministic`);
     }

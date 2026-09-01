@@ -237,7 +237,8 @@ async function resolveTaskBinding(deps: FeatureScopedTaskRuntimeDeps): Promise<M
 
 function reflectionEvent(
   attemptId: string,
-  hit: MemoryHit,
+  feature: FeatureMemoryGroup["feature"],
+  memoryHitId: string | null,
   result: ReflectionEpisodeResult,
   sequence: number,
   memoryRef: string | null,
@@ -247,8 +248,8 @@ function reflectionEvent(
     attemptId,
     phase: "reflect",
     operation: "memory_store",
-    featureKey: hit.featureKey,
-    memoryHitId: hit.memoryHitId,
+    featureKey: feature.key,
+    memoryHitId,
     status: result.status === "reflection_failed" ? result.failure : result.status,
     sequence,
     memoryRef,
@@ -258,7 +259,8 @@ function reflectionEvent(
 
 function failedReflectionEvent(
   attemptId: string,
-  hit: MemoryHit,
+  feature: FeatureMemoryGroup["feature"],
+  memoryHitId: string | null,
   sequence: number,
   status: string,
   memoryRef: string | null,
@@ -268,8 +270,8 @@ function failedReflectionEvent(
     attemptId,
     phase: "reflect",
     operation: "memory_store",
-    featureKey: hit.featureKey,
-    memoryHitId: hit.memoryHitId,
+    featureKey: feature.key,
+    memoryHitId,
     status,
     sequence,
     memoryRef,
@@ -292,14 +294,24 @@ async function reflectEpisodesAfterReveal(
       (candidate) => `${candidate.featureKey}\0${candidate.memoryHitId}`,
     ),
   );
+  const observedFeatures = new Set(result.observations.map((observation) => observation.key));
+  const noHitFeatures = new Set<string>();
   const distanceKm = haversineKm(result.guess, {
     latitude: input.truth.latitude,
     longitude: input.truth.longitude,
   });
   for (const group of result.memoryGroups) {
-    if (group.status !== "hits") continue;
-    for (const hit of group.hits) {
-      if (!candidates.has(`${hit.featureKey}\0${hit.memoryHitId}`)) continue;
+    const reflectionHits: Array<MemoryHit | null> = group.status === "hits"
+      ? group.hits.filter((hit) => candidates.has(`${hit.featureKey}\0${hit.memoryHitId}`))
+      : group.status === "no_hit" &&
+          group.failure === null &&
+          group.hits.length === 0 &&
+          observedFeatures.has(group.feature.key) &&
+          !noHitFeatures.has(group.feature.key)
+        ? [null]
+        : [];
+    if (group.status === "no_hit" && reflectionHits.length === 1) noHitFeatures.add(group.feature.key);
+    for (const hit of reflectionHits) {
       try {
         const reflection = await reflect(
           {
@@ -320,8 +332,8 @@ async function reflectEpisodesAfterReveal(
         );
         const episode: EpisodeTrace = {
           attemptId: result.attemptId,
-          featureKey: hit.featureKey,
-          memoryHitId: hit.memoryHitId,
+          featureKey: group.feature.key,
+          memoryHitId: hit?.memoryHitId ?? null,
           effect: reflection.effect,
           reflectionStatus: reflection.status,
           lessonId: reflection.lessonId,
@@ -330,13 +342,20 @@ async function reflectEpisodesAfterReveal(
         result.episodes.push(episode);
         if (result.trace.episodes !== result.episodes) result.trace.episodes.push(episode);
         sequence += 1;
-        result.trace.events.push(reflectionEvent(result.attemptId, hit, reflection, sequence, deps.run.memoryRef));
+        result.trace.events.push(reflectionEvent(
+          result.attemptId,
+          group.feature,
+          hit?.memoryHitId ?? null,
+          reflection,
+          sequence,
+          deps.run.memoryRef,
+        ));
       } catch (error) {
         const bindingFailure = error instanceof MemoryBindingError ? error.code : null;
         const episode: EpisodeTrace = {
           attemptId: result.attemptId,
-          featureKey: hit.featureKey,
-          memoryHitId: hit.memoryHitId,
+          featureKey: group.feature.key,
+          memoryHitId: hit?.memoryHitId ?? null,
           effect: null,
           reflectionStatus: bindingFailure ?? "reflection_failed",
           lessonId: null,
@@ -350,7 +369,14 @@ async function reflectEpisodesAfterReveal(
           : error instanceof ReflectRuntimeError
             ? error.code
             : "reflection_failed";
-        result.trace.events.push(failedReflectionEvent(result.attemptId, hit, sequence, eventStatus, deps.run.memoryRef));
+        result.trace.events.push(failedReflectionEvent(
+          result.attemptId,
+          group.feature,
+          hit?.memoryHitId ?? null,
+          sequence,
+          eventStatus,
+          deps.run.memoryRef,
+        ));
       }
     }
   }

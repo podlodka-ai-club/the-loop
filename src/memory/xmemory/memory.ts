@@ -218,7 +218,7 @@ type NormalizedLesson = {
   content: string;
   sourceAttemptId: string;
   featureKey?: FeatureKey;
-  memoryHitId?: string;
+  memoryHitId?: string | null;
   effect?: ReflectionEffect;
   idempotencyKey?: string;
   triggers: string[];
@@ -323,7 +323,9 @@ function normalizeLesson(value: LessonInput | LegacyLessonInput): NormalizedLess
     if (
       (rawFeatureKey !== undefined &&
         (!isNormalizedFeatureKey(rawFeatureKey) || SENTINEL.test(rawFeatureKey))) ||
-      (rawMemoryHitId !== undefined && (typeof rawMemoryHitId !== "string" || rawMemoryHitId.trim() === "" || SENTINEL.test(rawMemoryHitId))) ||
+      (rawMemoryHitId !== undefined &&
+        rawMemoryHitId !== null &&
+        (typeof rawMemoryHitId !== "string" || rawMemoryHitId.trim() === "" || SENTINEL.test(rawMemoryHitId))) ||
       (rawEffect !== undefined &&
         (typeof rawEffect !== "string" || !(REFLECTION_EFFECTS as readonly string[]).includes(rawEffect))) ||
       (rawIdempotencyKey !== undefined && (typeof rawIdempotencyKey !== "string" || rawIdempotencyKey.trim() === "" || SENTINEL.test(rawIdempotencyKey)))
@@ -348,7 +350,9 @@ function normalizeLesson(value: LessonInput | LegacyLessonInput): NormalizedLess
       content,
       sourceAttemptId,
       ...(rawFeatureKey === undefined ? {} : { featureKey: rawFeatureKey as FeatureKey }),
-      ...(rawMemoryHitId === undefined ? {} : { memoryHitId: rawMemoryHitId.trim() }),
+      ...(rawMemoryHitId === undefined
+        ? {}
+        : { memoryHitId: rawMemoryHitId === null ? null : rawMemoryHitId.trim() }),
       ...(rawEffect === undefined ? {} : { effect: rawEffect }),
       ...(rawIdempotencyKey === undefined ? {} : { idempotencyKey: rawIdempotencyKey.trim() }),
       triggers,
@@ -360,6 +364,10 @@ function normalizeLesson(value: LessonInput | LegacyLessonInput): NormalizedLess
 }
 
 function buildLessonEnvelope(lesson: NormalizedLesson): string {
+  const memoryHitLine =
+    lesson.memoryHitId === undefined || lesson.memoryHitId === null
+      ? ""
+      : `memory_hit_id: ${lesson.memoryHitId}\n`;
   const episodeProvenance =
     lesson.featureKey === undefined &&
     lesson.memoryHitId === undefined &&
@@ -367,7 +375,7 @@ function buildLessonEnvelope(lesson: NormalizedLesson): string {
     lesson.idempotencyKey === undefined
       ? ""
       : `feature_key: ${lesson.featureKey ?? ""}\n` +
-        `memory_hit_id: ${lesson.memoryHitId ?? ""}\n` +
+        memoryHitLine +
         `effect: ${lesson.effect ?? ""}\n` +
         `idempotency_key: ${lesson.idempotencyKey ?? ""}\n`;
   return (

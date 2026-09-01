@@ -144,8 +144,8 @@ export type Lesson = {
   sourceAttemptId: string;
   /** Feature slot that produced the memory hit. */
   featureKey: FeatureKey;
-  /** Application-owned hit id used to bind one lesson to one memory hit. */
-  memoryHitId: string;
+  /** Application-owned hit id, or null when no memory answer was returned. */
+  memoryHitId: string | null;
   /** Whether the hit helped, misled, was irrelevant, or was insufficient. */
   effect: ReflectionEffect;
   /** Deterministic key for idempotent episode writes. */
@@ -165,7 +165,7 @@ export type LessonInput = {
   content: string;
   sourceAttemptId: string;
   featureKey: FeatureKey;
-  memoryHitId: string;
+  memoryHitId: string | null;
   effect: ReflectionEffect;
   triggers: string[];
   region: string;

@@ -12,7 +12,8 @@ tags: [loci, workflow, learning, memory, training]
 
 Обучение проходит по подготовленному train-корпусу и изменяет только внешнюю память. На каждом
 примере Loci сначала выполняет dynamic `observe → retrieve → analyze` без ground truth, затем
-получает правильное место и выполняет отдельную рефлексию для каждой пары `feature + memory hit`.
+получает правильное место и выполняет отдельную рефлексию для каждой пары `feature + memory hit`
+и для каждой пары `feature + null`, когда подключённая память не вернула hit.
 
 Система памяти сама решает, как извлечь, связать, консолидировать или сохранить опыт. Loci не
 требует создания атомарных заметок и не управляет внутренними memory objects.
@@ -93,9 +94,9 @@ Ground truth не раскрывается, а выбранная память �
 ### 3. Reveal
 
 Для успешного шага оркестратор раскрывает правильное место. Рефлексия выполняется отдельно для
-каждого returned memory hit в новом чистом контексте, который содержит изображение, feature
-observation, один hit, blind Guess, ground truth и distance. Внутренний контекст blind solver не
-продолжается.
+каждого returned memory hit и ровно один раз для каждого валидного `no_hit` при подключённой
+памяти. Новый чистый контекст содержит изображение, feature observation, один hit или `null`,
+blind Guess, ground truth и distance. Внутренний контекст blind solver не продолжается.
 
 ### 4. Рефлексия
 
@@ -112,7 +113,7 @@ dynamic agent tool contract.
 ### 5. Обновление памяти
 
 Если reflection payload валиден и задана `memory_ref`, оркестратор делает ровно один `memory_store`
-для этого feature/hit episode. Успешные и negative effects сохраняются независимо; unknown write не
+для этого feature/hit-or-null episode. Успешные и negative effects сохраняются независимо; unknown write не
 повторяется, а уже сохранённые episodes не откатываются.
 
 Если reflection завершилась `reflection_failed`, система памяти для этого episode не вызывается.
@@ -142,7 +143,8 @@ for sample in corpus:
     failed_samples += 1
     continue
   for group in answer.memoryGroups:
-    for hit in group.hits:
+    episodes = group.hits if group.status == "hits" else [null] if group.status == "no_hit" else []
+    for hit in episodes:
       reflection = reflect_episode(sample.image, group.feature, hit, answer.guess, sample.ground_truth)
       if reflection is valid and memory is not null:
         stored = memory_store(memory, reflection)
@@ -177,7 +179,8 @@ malformed tool calls.
 - Ground truth скрыт до фиксации ответа.
 - Обучение изменяет только память, а не веса модели и не общий solver.
 - Каждый шаг использует не более одной закреплённой `memory_ref`.
-- Loci передаёт отдельный episode-level experience для каждой пары feature + memory hit и не управляет внутренней моделью памяти.
+- Loci передаёт отдельный episode-level experience для каждой пары feature + memory hit и для
+  каждой пары feature + null при валидном no-hit; Loci не управляет внутренней моделью памяти.
 - Внутри обучения нет baseline-run, score, A/B-сравнения или валидации отдельных memory objects.
 - Порядок samples и content hash задаёт `corpus_ref`.
 - Train-корпус не пересекается с eval-корпусом по `data_group_id`.

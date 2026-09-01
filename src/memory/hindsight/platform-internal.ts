@@ -312,18 +312,33 @@ type CapturedRetainRequest = {
   documentId: string;
   retainMission: string;
   context: string;
-  metadata: Record<string, string>;
+  metadata: Record<string, string | null>;
   async: false;
   timeoutMs: number;
   signal: AbortSignal;
 };
 
-function stringMap(value: unknown): value is Record<string, string> {
+function retainMetadataMap(value: unknown): value is Record<string, string | null> {
   try {
-    return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
+    return (
+      isRecord(value) &&
+      Object.entries(value).every(([key, item]) =>
+        typeof item === "string" || (key === "loci_memory_hit_id" && item === null),
+      )
+    );
   } catch {
     return false;
   }
+}
+
+function toNativeRetainMetadata(
+  metadata: Record<string, string | null>,
+): Record<string, string> {
+  const nativeMetadata: Record<string, string> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value !== null) nativeMetadata[key] = value;
+  }
+  return nativeMetadata;
 }
 
 function captureRetainRequest(request: unknown): CapturedRetainRequest | null {
@@ -336,7 +351,7 @@ function captureRetainRequest(request: unknown): CapturedRetainRequest | null {
       typeof request.retainMission !== "string" ||
       request.retainMission.trim() === "" ||
       request.context !== HINDSIGHT_RETAIN_CONTEXT ||
-      !stringMap(request.metadata) ||
+      !retainMetadataMap(request.metadata) ||
       request.async !== false ||
       !isPositiveTimeout(request.timeoutMs) ||
       !hasAbortSignal(request.signal)
@@ -518,7 +533,7 @@ export function createHindsightPlatformPortInternal(
           documentId: captured.documentId,
           retainMission: captured.retainMission,
           context: captured.context,
-          metadata: captured.metadata,
+          metadata: toNativeRetainMetadata(captured.metadata),
           async: captured.async,
           signal,
         });

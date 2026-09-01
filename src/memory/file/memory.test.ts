@@ -11,6 +11,7 @@ import {
   MemoryWriteError,
   sharedMemoryPromptMetadata,
 } from "../memory.ts";
+import { makeMemoryIdempotencyKey } from "../provenance.ts";
 import type { LegacyLesson, LegacyLessonInput, LessonInput } from "../memory.ts";
 import type { RecallMode } from "./memory.ts";
 
@@ -118,6 +119,29 @@ test("remember stores episode provenance and duplicate idempotency returns exist
       effect: "helped",
     },
   ]);
+});
+
+test("remember preserves null memory-hit provenance and deduplicates the no-hit episode", async () => {
+  const { sut, path } = makeSUT();
+  const input: LessonInput = {
+    content: "The visible pole style was a useful cue, but retrieval returned no memory answer.",
+    sourceAttemptId: "attempt-no-hit",
+    featureKey: "poles",
+    memoryHitId: null,
+    effect: "insufficient",
+    triggers: ["wooden poles"],
+    region: "BR",
+    idempotencyKey: makeMemoryIdempotencyKey("attempt-no-hit", "poles", null),
+  };
+
+  assert.deepEqual(await sut.remember(input), { status: "stored", lessonId: "lesson-0001" });
+  assert.deepEqual(await new FileMemory(path).remember(input), {
+    status: "already_stored",
+    lessonId: "lesson-0001",
+  });
+  assert.deepEqual(await readLessons(path), [{ id: "lesson-0001", ...input, hits: 0, wins: 0 }]);
+  const snapshotId = await sut.snapshot("dynamic");
+  assert.equal(snapshotId.length, 12);
 });
 
 test("recall rendering keeps non-helped effects visible in text and metadata", async () => {

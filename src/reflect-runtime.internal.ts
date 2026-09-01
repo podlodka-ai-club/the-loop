@@ -124,13 +124,15 @@ function reflectionPrompt(input: ReflectionEpisodeInput): string {
   return `${loadPrompt("reflect")}\n\n${JSON.stringify({
     attempt_id: input.attemptId,
     feature: input.feature,
-    selected_memory_hit: {
-      memory_hit_id: input.memoryHit.memoryHitId,
-      provider_id: input.memoryHit.providerId,
-      text: input.memoryHit.text,
-      score: input.memoryHit.score,
-      previous_effect: input.memoryHit.effect,
-    },
+    selected_memory_hit: input.memoryHit === null
+      ? null
+      : {
+          memory_hit_id: input.memoryHit.memoryHitId,
+          provider_id: input.memoryHit.providerId,
+          text: input.memoryHit.text,
+          score: input.memoryHit.score,
+          previous_effect: input.memoryHit.effect,
+        },
     blind_guess: input.guess,
     truth: input.truth,
     distance_km: input.distanceKm.toFixed(3),
@@ -204,6 +206,7 @@ function effectFromParsedToolArguments(parsed: unknown): ReflectionEffect | null
 }
 
 function isActiveEpisode(input: ReflectionEpisodeInput): boolean {
+  if (input.memoryHit === null) return true;
   return (
     input.memoryHit.attemptId === input.attemptId &&
     input.memoryHit.featureKey === input.feature.key
@@ -308,10 +311,10 @@ export async function reflectEpisodeWithRuntime(
       span.setAttributes({
         "reflect.attempt_id": input.attemptId,
         "reflect.feature_key": input.feature.key,
-        "reflect.memory_hit_id": input.memoryHit.memoryHitId,
         "reflect.prompt_version": PROMPT_VERSIONS.reflect,
         "reflect.effect": effect,
         "reflect.status": store.status,
+        ...(input.memoryHit === null ? {} : { "reflect.memory_hit_id": input.memoryHit.memoryHitId }),
       });
 
       if (store.status === "stored" || store.status === "already_stored") {

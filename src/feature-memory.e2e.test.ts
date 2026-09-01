@@ -57,7 +57,7 @@ test("model-selected dynamic features preserve cardinality budgets duplicate sto
     reflectionCalls += 1;
     const args = {
       feature_key: input.feature.key,
-      memory_hit_id: input.memoryHit.memoryHitId,
+      memory_hit_id: input.memoryHit?.memoryHitId ?? null,
       effect: reflectionCalls % 4 === 0 ? "misleading" : "helped",
       content: `Lesson ${reflectionCalls} stays grounded in ${input.feature.key}.`,
       triggers: [input.feature.text],
@@ -132,8 +132,8 @@ test("model-selected dynamic features preserve cardinality budgets duplicate sto
   assert.equal(Math.max(...result.memoryGroups.map((group) => group.hits.length)), 5);
   assert.equal(result.attemptMetrics.retrievalOutcomes, 12);
   assert.equal(result.attemptMetrics.memoryHits, 50);
-  assert.equal(result.episodes.length, 50);
-  assert.equal(result.attemptMetrics.episodesByEffect.helped, 38);
+  assert.equal(result.episodes.length, 51);
+  assert.equal(result.attemptMetrics.episodesByEffect.helped, 39);
   assert.equal(result.attemptMetrics.episodesByEffect.misleading, 12);
   assert.equal(result.attemptMetrics.rareCueHitRate, 1);
   assert.equal(result.attemptMetrics.broadCueHitRate, 1);
@@ -145,15 +145,26 @@ test("model-selected dynamic features preserve cardinality budgets duplicate sto
   assert.equal(await evaluatorScore("legacy_global_topk_rare_cue_hit_rate", result), 0);
   assert.equal(await evaluatorScore("feature_scoped_rare_cue_hit_rate", result), 1);
   assert.equal(await evaluatorScore("geoscore", result, { latitude: 1, longitude: 2, country: "BR" }), 5000);
-  assert.equal(await evaluatorScore("episodes_helped", result), 38);
-  assert.equal(reflectionCalls, 50);
+  assert.equal(await evaluatorScore("episodes_helped", result), 39);
+  assert.equal(reflectionCalls, 51);
   assert.equal(duplicateStatus, "already_stored");
-  assert.equal(await memory.size(), 50);
+  assert.equal(await memory.size(), 51);
 
   const retrievalEvents = result.trace?.events.filter((event) => event.operation === "memory_retrieve") ?? [];
   const storeEvents = result.trace?.events.filter((event) => event.operation === "memory_store") ?? [];
   assert.equal(retrievalEvents.length, 12);
-  assert.equal(storeEvents.length, 50);
+  assert.equal(storeEvents.length, 51);
+  assert.deepEqual(
+    result.episodes.find((episode) => episode.featureKey === featureKeys[1]),
+    {
+      attemptId,
+      featureKey: featureKeys[1],
+      memoryHitId: null,
+      effect: "helped",
+      reflectionStatus: "stored",
+      lessonId: "lesson-0001",
+    },
+  );
   assert.ok(retrievalEvents.length <= 24);
   assert.ok(result.attemptMetrics.memoryHits <= 60);
   assert.ok(result.episodes.length <= 60);

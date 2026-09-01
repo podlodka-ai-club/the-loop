@@ -16,6 +16,7 @@ import {
   createFrozenMemorySnapshotBinding,
   createMemorySourceBinding,
   createMemorySourceResolver,
+  createNoopMemoryBinding,
   resolveMemoryBinding,
 } from "./memory/memory.ts";
 import type {
@@ -284,8 +285,8 @@ test("public runTask ignores hidden locate on widened feature-scoped deps", asyn
 
     assert.equal(injectedLocateCalls, 0);
     assert.equal(result.ok, false);
-    assert.equal(result.failure, "api_error");
-    assert.match(result.message, /Input file is missing: tmp\/does-not-exist\/public-run-task-boundary\.jpg/);
+    assert.equal(result.failure, "missing_image");
+    assert.match(result.message, /ENOENT.*public-run-task-boundary\.jpg/);
     assert.deepEqual(result.memoryGroups, []);
     assert.deepEqual(result.episodes, []);
     assert.equal(Object.prototype.hasOwnProperty.call(result, "episodeCandidates"), false);
@@ -669,7 +670,7 @@ test("runTask feature-scoped training reflects one episode per hit after reveal 
       attemptId: input.attemptId,
       imagePath: input.imagePath,
       feature: input.feature,
-      hitId: input.memoryHit.memoryHitId,
+      hitId: input.memoryHit?.memoryHitId ?? null,
       guess: input.guess,
       truth: input.truth,
       distanceKm: Math.round(input.distanceKm),
@@ -892,7 +893,7 @@ test("runTask feature-scoped training preserves typed reflection runtime error c
   }
 });
 
-test("runTask feature-scoped path skips reflection for no-hit, skipped and failed retrieval outcomes", async () => {
+test("runTask feature-scoped path reflects no-hit once but skips failed retrieval outcomes", async () => {
   const client = new LocateClientSpy();
   client.missingAlwaysFor.add("plates");
   const memory = new MemoryWriterSpy();
@@ -930,9 +931,129 @@ test("runTask feature-scoped path skips reflection for no-hit, skipped and faile
       ["vegetation", "no_hit", 0],
     ],
   );
+  assert.deepEqual(result.episodes, [
+    {
+      attemptId: "attempt-no-episode-reflection",
+      featureKey: "vegetation",
+      memoryHitId: null,
+      effect: "helped",
+      reflectionStatus: "stored",
+      lessonId: "lesson-written",
+    },
+  ]);
+  assert.deepEqual(reflect.invocations.map(({ input }) => ({
+    feature: input.feature,
+    memoryHit: input.memoryHit,
+  })), [
+    { feature: { key: "vegetation", text: "dry scrub" }, memoryHit: null },
+  ]);
+  assert.deepEqual(memory.rememberInvocations, []);
+});
+
+test("runTask records a failed no-hit reflection as one failed episode", async () => {
+  const feature: FeatureObservation = { key: "vegetation", text: "dry scrub" };
+  const groups: FeatureMemoryGroup[] = [{
+    attemptId: "attempt-no-hit-reflection-failed",
+    feature,
+    query: "dry scrub",
+    status: "no_hit",
+    hits: [],
+    failure: null,
+    retryCount: 0,
+  }];
+  const episodes: LocateResult["episodes"] = [];
+  const reflectInvocations: ReflectionEpisodeInput[] = [];
+  const result = await runTrainingTaskWithRuntime(
+    {
+      imageId: "image-no-hit-reflection-failed",
+      imagePath: "no-hit-reflection-failed.jpg",
+      attemptId: "attempt-no-hit-reflection-failed",
+      truth: { latitude: 1, longitude: 2, country: "BR" },
+    },
+    {
+      memoryBinding: await makeResolvedBinding(new MemoryWriterSpy()),
+      run,
+      locate: async () => ({
+        attemptId: "attempt-no-hit-reflection-failed",
+        guess: {
+          latitude: 1,
+          longitude: 2,
+          place: "No-hit fixture",
+          confidence: 1,
+          reasoning: "No memory answer was returned.",
+          provider: "fake",
+        },
+        observations: [feature],
+        memoryGroups: groups,
+        episodes,
+        trace: { attemptId: "attempt-no-hit-reflection-failed", groups, episodes, events: [] },
+      }),
+      reflectEpisode: async (input) => {
+        reflectInvocations.push(input);
+        throw new Error("reflection model failed");
+      },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(reflectInvocations.map((input) => ({ feature: input.feature, memoryHit: input.memoryHit })), [
+    { feature, memoryHit: null },
+  ]);
+  assert.deepEqual(result.episodes, [{
+    attemptId: "attempt-no-hit-reflection-failed",
+    featureKey: "vegetation",
+    memoryHitId: null,
+    effect: null,
+    reflectionStatus: "reflection_failed",
+    lessonId: null,
+  }]);
+});
+
+test("runTask never reflects or stores in no-memory training mode", async () => {
+  const feature: FeatureObservation = { key: "road_surface", text: "pale gravel" };
+  const groups: FeatureMemoryGroup[] = [{
+    attemptId: "attempt-no-memory-training",
+    feature,
+    query: null,
+    status: "no_hit",
+    hits: [],
+    failure: null,
+    retryCount: 0,
+  }];
+  const episodes: LocateResult["episodes"] = [];
+  const reflect = new ReflectEpisodeSpy();
+  const result = await runTrainingTaskWithRuntime(
+    {
+      imageId: "image-no-memory-training",
+      imagePath: "no-memory-training.jpg",
+      attemptId: "attempt-no-memory-training",
+      truth: { latitude: 1, longitude: 2, country: "BR" },
+    },
+    {
+      memoryBinding: createNoopMemoryBinding({ mode: "training", snapshotId: null }),
+      run: { memoryRef: null, mode: "training", snapshotId: null, readOnly: false, recallLimit: 5 },
+      locate: async () => ({
+        attemptId: "attempt-no-memory-training",
+        guess: {
+          latitude: 1,
+          longitude: 2,
+          place: "No-memory fixture",
+          confidence: 1,
+          reasoning: "Memory is disabled.",
+          provider: "fake",
+        },
+        observations: [feature],
+        memoryGroups: groups,
+        episodes,
+        trace: { attemptId: "attempt-no-memory-training", groups, episodes, events: [] },
+      }),
+      reflectEpisode: reflect.reflect,
+    },
+  );
+
+  assert.equal(result.ok, true);
   assert.deepEqual(result.episodes, []);
   assert.deepEqual(reflect.invocations, []);
-  assert.deepEqual(memory.rememberInvocations, []);
 });
 
 test("runTask feature-scoped reflection is training-only and memory bindings expose reader-only evaluation and production", async () => {
