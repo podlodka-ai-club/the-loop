@@ -15,6 +15,7 @@ import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
 import type { Hint } from "./memory/memory.ts";
 import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
+import { throttleOpenRouterRequest } from "./openrouter-throttle.ts";
 
 export { provider };
 
@@ -172,26 +173,28 @@ export function geolocate(imagePath: string, hints: readonly Hint[] = []): Promi
       "geolocate.hint_ids": hints.map((hint) => hint.lessonId).join(","),
     });
     try {
-      const response = await client().chat.completions.create({
-        model: MODEL,
-        temperature: TEMPERATURE,
-        seed: SEED,
-        // `provider` is an OpenRouter extension, absent from the OpenAI schema.
-        provider: PROVIDER,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: withHints(hints) },
-              { type: "image_url", image_url: { url: await toDataUri(imagePath) } },
-            ],
+      const response = await throttleOpenRouterRequest(async () =>
+        client().chat.completions.create({
+          model: MODEL,
+          temperature: TEMPERATURE,
+          seed: SEED,
+          // `provider` is an OpenRouter extension, absent from the OpenAI schema.
+          provider: PROVIDER,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: withHints(hints) },
+                { type: "image_url", image_url: { url: await toDataUri(imagePath) } },
+              ],
+            },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: { name: "location", strict: true, schema: SCHEMA },
           },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: { name: "location", strict: true, schema: SCHEMA },
-        },
-      } as OpenAI.ChatCompletionCreateParamsNonStreaming);
+        } as OpenAI.ChatCompletionCreateParamsNonStreaming),
+      );
 
       const raw = response.choices[0]?.message.content;
       if (!raw) {

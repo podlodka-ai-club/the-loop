@@ -13,6 +13,7 @@ import {
   type ReflectionEffect,
 } from "./tools/memory.ts";
 import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
+import { throttleOpenRouterRequest } from "./openrouter-throttle.ts";
 
 export type ReflectRuntimeChatClient = {
   chat: {
@@ -87,7 +88,8 @@ const REFLECTION_FAILURES = new Set<ReflectionFailure>([
   "foreign_hit",
 ]);
 
-let cachedClient: OpenAI | undefined;
+let rawClient: OpenAI | undefined;
+let cachedClient: ReflectRuntimeChatClient | undefined;
 const tracer = trace.getTracer("reflect");
 
 function requireEnv(name: string): string {
@@ -97,10 +99,20 @@ function requireEnv(name: string): string {
 }
 
 function defaultClient(): ReflectRuntimeChatClient {
-  cachedClient ??= new OpenAI({
+  rawClient ??= new OpenAI({
     apiKey: requireEnv("OPENROUTER_API_KEY"),
     baseURL: BASE_URL,
   });
+  cachedClient ??= {
+    chat: {
+      completions: {
+        create: (params) =>
+          throttleOpenRouterRequest(() =>
+            rawClient!.chat.completions.create(params) as Promise<ReflectRuntimeChatCompletion>,
+          ),
+      },
+    },
+  } satisfies ReflectRuntimeChatClient;
   return cachedClient;
 }
 

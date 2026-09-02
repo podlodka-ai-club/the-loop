@@ -45,6 +45,7 @@ import {
 } from "./tools/memory.ts";
 import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
 import { sharedMemoryPrompt } from "./memory/memory.ts";
+import { throttleOpenRouterRequest } from "./openrouter-throttle.ts";
 
 export type LocateRuntimeChatClient = {
   chat: {
@@ -79,14 +80,6 @@ export type LocateRuntimeDeps = LocateDeps & LocateRuntimeHooks & {
 type LocateChatClient = LocateRuntimeChatClient;
 
 type LocateChatCompletion = LocateRuntimeChatCompletion;
-
-type LocateChatClientShape = {
-  chat: {
-    completions: {
-      create(params: OpenAI.ChatCompletionCreateParamsNonStreaming): Promise<LocateChatCompletion>;
-    };
-  };
-};
 
 const MODEL = process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
@@ -129,7 +122,8 @@ const RETRIEVAL_MODEL_ATTEMPT_BUDGET = 24;
 const MEMORY_BINDING_ATTEMPT_DELAYS_MS = [1_000] as const;
 const ANALYZE_RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 60_000];
 
-let cachedClient: OpenAI | undefined;
+let rawClient: OpenAI | undefined;
+let cachedClient: LocateChatClient | undefined;
 const tracer = trace.getTracer("locate");
 
 function requireEnv(name: string): string {
@@ -139,11 +133,21 @@ function requireEnv(name: string): string {
 }
 
 function defaultClient(): LocateChatClient {
-  cachedClient ??= new OpenAI({
+  rawClient ??= new OpenAI({
     apiKey: requireEnv("OPENROUTER_API_KEY"),
     baseURL: BASE_URL,
   });
-  return cachedClient as LocateChatClientShape;
+  cachedClient ??= {
+    chat: {
+      completions: {
+        create: (params) =>
+          throttleOpenRouterRequest(() =>
+            rawClient!.chat.completions.create(params) as Promise<LocateChatCompletion>,
+          ),
+      },
+    },
+  } satisfies LocateChatClient;
+  return cachedClient;
 }
 
 function parseGuess(raw: string | null | undefined, provider: string | undefined): Guess {

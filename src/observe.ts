@@ -13,6 +13,7 @@ import { trace } from "@opentelemetry/api";
 import OpenAI from "openai";
 import { toDataUri } from "./image.ts";
 import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
+import { throttleOpenRouterRequest } from "./openrouter-throttle.ts";
 
 export type FeatureKey = string;
 
@@ -252,25 +253,27 @@ function client(): OpenAI {
 }
 
 async function defaultObserveModel(request: ObserveModelRequest, config: ObserveConfig): Promise<string | null> {
-  const response = await client().chat.completions.create({
-    model: config.model,
-    temperature: TEMPERATURE,
-    seed: config.seed,
-    provider: PROVIDER,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: request.prompt },
-          { type: "image_url", image_url: { url: await toDataUri(request.imagePath) } },
-        ],
+  const response = await throttleOpenRouterRequest(async () =>
+    client().chat.completions.create({
+      model: config.model,
+      temperature: TEMPERATURE,
+      seed: config.seed,
+      provider: PROVIDER,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: request.prompt },
+            { type: "image_url", image_url: { url: await toDataUri(request.imagePath) } },
+          ],
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "observation", strict: true, schema: request.schema },
       },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: { name: "observation", strict: true, schema: request.schema },
-    },
-  } as OpenAI.ChatCompletionCreateParamsNonStreaming);
+    } as OpenAI.ChatCompletionCreateParamsNonStreaming),
+  );
   return response.choices[0]?.message.content ?? null;
 }
 
