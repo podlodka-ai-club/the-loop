@@ -48,6 +48,47 @@ export async function indexImages(split = "test"): Promise<Map<string, string>> 
   return index;
 }
 
+/**
+ * Reads the split CSV without requiring the shard image to be on disk.
+ *
+ * A frozen corpus carries its pixels in `benchmark/images/<role>/`, so resolving one
+ * needs the labels and nothing else. Demanding the shard frame as well makes the run
+ * depend on which of the five test shards a machine happens to hold: a clone with the
+ * corpus committed but only one shard downloaded fails on 836 of 863 items, having
+ * every pixel it needs.
+ *
+ * Drawing a new corpus is the case that does need the shards - it picks from frames it
+ * can actually copy - and that path keeps using `loadRows`.
+ */
+export async function loadLabels(split = "test"): Promise<{ rows: Row[]; csvRowCount: number }> {
+  const csv = await readFile(join(OSV5M_DIR, `${split}.csv`), "utf8");
+  const raw = parse(csv, { columns: true, skipEmptyLines: true }) as RawRow[];
+
+  const rows: Row[] = [];
+  for (const record of raw) {
+    const id = record["id"];
+    if (!id) continue;
+    const latitude = Number(record["latitude"]);
+    const longitude = Number(record["longitude"]);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+    rows.push({
+      id,
+      latitude,
+      longitude,
+      country: record["country"] ?? "",
+      region: record["region"] ?? "",
+      subRegion: record["sub-region"] ?? "",
+      city: record["city"] ?? "",
+      cell: record["cell"] ?? "",
+      sequence: record["sequence"] ?? "",
+      creator: record["creator_username"] ?? "",
+      capturedAt: record["captured_at"] ?? "",
+      imagePath: "",
+    });
+  }
+  return { rows, csvRowCount: raw.length };
+}
+
 /** Reads the split CSV and keeps only rows whose image is present locally. */
 export async function loadRows(split = "test"): Promise<{ rows: Row[]; csvRowCount: number }> {
   const [csv, images] = await Promise.all([
