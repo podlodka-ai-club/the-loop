@@ -98,20 +98,16 @@ export class FileMemory implements Memory {
 
     const query = tokenize(features);
 
-    // NOT retrieval. With no observed features there is no query to rank against, so
-    // this returns the most-applied lessons - the same set for every task, i.e. a
-    // global prior. It is listed under `top` for continuity, but read it as "the
-    // memory the agent always carries", not "the memory relevant to this image".
-    // Real ranking needs a query, which needs something to have looked at the frame
-    // first - see the two-step mode.
-    if (query.size === 0) {
-      const prior = lessons
-        .slice()
-        .sort((a, b) => b.hits - a.hits || (a.id < b.id ? -1 : 1))
-        .slice(0, limit);
-      await this.countHits(prior.map((lesson) => lesson.id));
-      return prior.map(renderHint);
-    }
+    // No query, no hints.
+    //
+    // This used to fall back to the most-applied lessons - the same set for every
+    // frame, a standing prior rather than retrieval. A prior is exactly what the
+    // 863-frame run showed to be harmful: naming 61 regions in every prompt put the
+    // prediction inside one of them on 75% of frames against 5% without memory, and
+    // on 67% of the frames whose true country no lesson mentions. Memory acted as a
+    // menu and the model ordered from it. A frame that matches nothing must therefore
+    // see nothing, so that no menu exists where no lesson applies.
+    if (query.size === 0) return [];
 
     const ranked = lessons
       .map((lesson) => {

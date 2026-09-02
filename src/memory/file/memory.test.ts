@@ -114,7 +114,7 @@ test("recall all returns every lesson in id order and increments every hit", asy
   ]);
 });
 
-test("recall top without features uses hit count and stable id ordering", async () => {
+test("recall top without features returns nothing and touches no counter", async () => {
   const { sut, path } = makeSUT({ mode: "top" });
   const later = makeLesson({ id: "lesson-0002", content: "later", hits: 4 });
   const earlier = makeLesson({ id: "lesson-0001", content: "earlier", hits: 4 });
@@ -123,15 +123,12 @@ test("recall top without features uses hit count and stable id ordering", async 
 
   const hints = await sut.recall([], 2);
 
-  assert.deepEqual(hints, [
-    { lessonId: "lesson-0001", text: "XX: earlier" },
-    { lessonId: "lesson-0002", text: "XX: later" },
-  ]);
-  assert.deepEqual(await readLessons(path), [
-    { ...later, hits: 5 },
-    { ...earlier, hits: 5 },
-    ignored,
-  ]);
+  // An empty query used to return the most-applied lessons. That is a standing prior,
+  // not retrieval, and a prior names places in every prompt regardless of the frame -
+  // measured on 863 frames as the mechanism that pulled predictions into the named
+  // regions on 75% of them. Nothing matched, so nothing is shown.
+  assert.deepEqual(hints, []);
+  assert.deepEqual(await readLessons(path), [later, earlier, ignored]);
 });
 
 test("recall top ranks normalized trigger overlap and breaks ties by id", async () => {
