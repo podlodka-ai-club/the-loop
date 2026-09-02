@@ -22,10 +22,11 @@ import {
 import { MODEL, provider } from "./agent.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
+import { readFile } from "node:fs/promises";
 import { RECALL_LIMIT } from "./memory/memory.ts";
 import { parseRecallMode } from "./memory/file/memory.ts";
 import { parseBackend, selectMemory } from "./memory/select.ts";
-import { fingerprintOf, loadRows } from "./osv5m.ts";
+import { fingerprintOf, loadLabels } from "./osv5m.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
 
@@ -88,20 +89,62 @@ const memory = selection.memory;
  */
 const head = Number(flag("head", "0"));
 
-const { rows: pool, csvRowCount } = await loadRows();
+/**
+ * Score exactly the ids listed in a file, ignoring the rest of the manifest.
+ *
+ * For filling a hole rather than running a benchmark. A run that lost frames to
+ * provider quota records them as completed with a failure payload, and Phoenix will
+ * not re-run a completed run - deleting one is not allowed either. The frames are
+ * therefore re-scored beside the original run and merged when the numbers are read.
+ * Like any partial pass this gets its own fingerprint: it is a fill, and calling it
+ * the corpus would be a lie.
+ */
+const idsFile = flag("ids", "");
+
+const { rows: pool, csvRowCount } = await loadLabels();
 const full = await loadFrozenSample(pool, manifestPath, "eval");
+const wanted =
+  idsFile === ""
+    ? null
+    : new Set(
+        (await readFile(idsFile, "utf8"))
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line !== "" && !line.startsWith("#")),
+      );
+
+const selected =
+  wanted === null
+    ? full
+    : (() => {
+        const rows = full.rows.filter((row) => wanted.has(row.id));
+        if (rows.length !== wanted.size) {
+          throw new Error(
+            `${idsFile} lists ${wanted.size} ids, ${rows.length} of them are in the corpus`,
+          );
+        }
+        return {
+          ...full,
+          rows,
+          fingerprint: fingerprintOf(rows.map((row) => row.id)),
+          strata: new Set(rows.map((row) => row.cell)).size,
+        };
+      })();
+
 const sample =
-  head > 0 && head < full.rows.length
+  head > 0 && head < selected.rows.length
     ? {
-        ...full,
-        rows: full.rows.slice(0, head),
-        fingerprint: fingerprintOf(full.rows.slice(0, head).map((row) => row.id)),
-        strata: new Set(full.rows.slice(0, head).map((row) => row.cell)).size,
+        ...selected,
+        rows: selected.rows.slice(0, head),
+        fingerprint: fingerprintOf(selected.rows.slice(0, head).map((row) => row.id)),
+        strata: new Set(selected.rows.slice(0, head).map((row) => row.cell)).size,
       }
-    : full;
+    : selected;
 const seed = sample.seed;
 
-if (sample !== full) {
+if (wanted !== null) {
+  console.log(`ids     ${sample.rows.length} frames from ${idsFile}, fp=${sample.fingerprint}`);
+} else if (sample !== full) {
   console.log(`head    first ${sample.rows.length} of ${full.rows.length} manifest ids`);
 }
 

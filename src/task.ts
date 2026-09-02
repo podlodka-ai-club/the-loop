@@ -65,12 +65,19 @@ export type TaskDeps = {
 };
 
 /**
- * Novita rate-limits per minute, and a sequential 200-image run still trips it: half
- * the first OpenRouter baseline came back `429 Provider returned error`. Retrying is
- * not optional here - `allow_fallbacks: false` means a 429 cannot be answered by
- * routing elsewhere, which is the trade we accepted to keep the quantization pinned.
+ * Novita rate-limits per minute, and a sequential run still trips it: half of the
+ * first OpenRouter baseline came back `429 Provider returned error`. Retrying is not
+ * optional here - `allow_fallbacks: false` means a 429 cannot be answered by routing
+ * elsewhere, which is the trade we accepted to keep the quantization pinned.
+ *
+ * Ten steps rather than five, and a longer tail. A 863-frame baseline still lost 54
+ * frames, 6% of the corpus, and a lost frame is worse than a slow one: the next run
+ * loses a different 54, so part of any difference between two runs is which frames
+ * happened to run out of quota.
  */
-const RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 60_000];
+const RETRY_DELAYS_MS = [
+  5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000, 90_000, 90_000, 120_000,
+];
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -129,6 +136,13 @@ export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise
     if (message.includes("ENOENT")) {
       return { ok: false, failure: "missing_image", message, ...use };
     }
-    return { ok: false, failure: "api_error", message, ...use };
+    // An infrastructure failure is rethrown, unlike a model failure.
+    //
+    // Swallowing it records a completed run holding an error payload, and a completed
+    // run is not re-run: the frame stays lost for the life of the experiment. Letting
+    // it out marks the run failed on the server, and `resumeExperiment` picks up
+    // exactly those on the next pass. The denominator is preserved either way - the
+    // example is still in the dataset - but only this way can it be filled later.
+    throw error;
   }
 }
