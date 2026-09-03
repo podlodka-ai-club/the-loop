@@ -134,7 +134,31 @@ export async function selectFeatureScopedEvaluationMemory(options: {
   }
 
   if (options.backend === "mem0") {
-    throw new Error("feature-scoped warm evaluation requires a backend with frozen snapshots");
+    const config = loadMem0MemoryConfig();
+    const memory = createMem0Memory({ snapshots: false }, config);
+    const run = {
+      memoryRef: "mem0",
+      mode: "production" as const,
+      snapshotId: null,
+      readOnly: true as const,
+      recallLimit: RECALL_LIMIT,
+    };
+    return {
+      memoryBinding: await resolveMemoryBinding(
+        run,
+        createMemorySourceResolver(createMemorySourceBinding({
+          memoryRef: "mem0",
+          memory,
+          provider: "mem0",
+        })),
+      ),
+      run,
+      describe: `feature-scoped mem0 agent ${config.agentId}, recall top`,
+      frozen: false,
+      memoryMode: options.memoryMode,
+      recallMode: "top",
+      recallLimit: RECALL_LIMIT,
+    };
   }
   const snapshotId = options.snapshotId.trim();
   // Validate and materialize the snapshot at selection time, before evaluation
