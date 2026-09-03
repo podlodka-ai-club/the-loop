@@ -48,37 +48,55 @@ export async function indexImages(split = "test"): Promise<Map<string, string>> 
   return index;
 }
 
+async function loadRawRows(split: string): Promise<RawRow[]> {
+  const csv = await readFile(join(OSV5M_DIR, `${split}.csv`), "utf8");
+  return parse(csv, { columns: true, skipEmptyLines: true }) as RawRow[];
+}
+
+function rowFromRecord(record: RawRow, imagePath: string): Row | null {
+  const id = record["id"];
+  if (!id) return null;
+  const latitude = Number(record["latitude"]);
+  const longitude = Number(record["longitude"]);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return {
+    id,
+    latitude,
+    longitude,
+    country: record["country"] ?? "",
+    region: record["region"] ?? "",
+    subRegion: record["sub-region"] ?? "",
+    city: record["city"] ?? "",
+    cell: record["cell"] ?? "",
+    sequence: record["sequence"] ?? "",
+    creator: record["creator_username"] ?? "",
+    capturedAt: record["captured_at"] ?? "",
+    imagePath,
+  };
+}
+
+/** Reads CSV metadata without requiring local image files. `imagePath` is empty for these rows. */
+export async function loadCsvRows(split = "test"): Promise<{ rows: Row[]; csvRowCount: number }> {
+  const raw = await loadRawRows(split);
+  const rows: Row[] = [];
+  for (const record of raw) {
+    const row = rowFromRecord(record, "");
+    if (row !== null) rows.push(row);
+  }
+  return { rows, csvRowCount: raw.length };
+}
+
 /** Reads the split CSV and keeps only rows whose image is present locally. */
 export async function loadRows(split = "test"): Promise<{ rows: Row[]; csvRowCount: number }> {
-  const [csv, images] = await Promise.all([
-    readFile(join(OSV5M_DIR, `${split}.csv`), "utf8"),
-    indexImages(split),
-  ]);
-  const raw = parse(csv, { columns: true, skipEmptyLines: true }) as RawRow[];
-
+  const [raw, images] = await Promise.all([loadRawRows(split), indexImages(split)]);
   const rows: Row[] = [];
   for (const record of raw) {
     const id = record["id"];
     if (!id) continue;
     const imagePath = images.get(id);
     if (!imagePath) continue;
-    const latitude = Number(record["latitude"]);
-    const longitude = Number(record["longitude"]);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
-    rows.push({
-      id,
-      latitude,
-      longitude,
-      country: record["country"] ?? "",
-      region: record["region"] ?? "",
-      subRegion: record["sub-region"] ?? "",
-      city: record["city"] ?? "",
-      cell: record["cell"] ?? "",
-      sequence: record["sequence"] ?? "",
-      creator: record["creator_username"] ?? "",
-      capturedAt: record["captured_at"] ?? "",
-      imagePath,
-    });
+    const row = rowFromRecord(record, imagePath);
+    if (row !== null) rows.push(row);
   }
   return { rows, csvRowCount: raw.length };
 }

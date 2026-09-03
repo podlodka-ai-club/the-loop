@@ -107,13 +107,18 @@ memory_source
 
 ```text
 memory_call
-  request — memory_retrieve
-  result — memory_retrieve_result | null
-  error — invalid_request | memory_not_found | memory_mismatch | unavailable | timeout | null
+  attempt_id
+  feature_key
+  request — dynamic memory_retrieve
+  result — dynamic_memory_retrieve_result | null
+  error — invalid_tool_arguments | wrong_feature | missing_tool_call | multiple_tool_calls |
+           malformed_tool_json | memory_error | timeout | budget_exhausted | skipped | null
 ```
 
-Request и result определены в [`memory_retrieve`](../tools/memory_retrieve.md). Успешный вызов имеет
-`error: null`; неуспешный — `result: null` и ненулевой `error`.
+Request and dynamic result are defined in [`memory_retrieve`](../tools/memory_retrieve.md) and the
+[dynamic feature spec](/specs/memory-tools-observe-dynamic-features/spec.md). Успешный вызов имеет
+`error: null`; неуспешный — `result: null` и ненулевой `error`. Legacy provider envelopes remain
+available only for compatibility adapters.
 
 ## Geocode call
 

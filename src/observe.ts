@@ -1,37 +1,92 @@
 /**
- * First of two calls: list what is visible in the frame, so memory has something to
- * search with.
+ * Extract the visual cues that are actually present in one image.
  *
- * Why this exists. `recall` used to run before anything had looked at the image, so
- * its query was always empty: ranking had no input, and every query-based backend
- * (mem0, xmemory, hindsight) would have been asked to search for nothing.
- *
- * What this is NOT. It does not replace looking at the photo. An earlier two-phase
- * design passed only this feature list to the solver and dropped the image; measured
- * on 26 August, its median error was 5711 km against 772 km for the single call that
- * kept the image. Whatever this step fails to notice is not lost, because the solver
- * still sees the frame itself. The output is a search query, not a summary.
- *
- * Features are cached on disk by prompt version and by the frame's own bytes: a memory-on
- * and a memory-off run over the same corpus must issue the same observation, and paying
- * for it twice would double the quota cost of every comparison.
- *
- * The key is the content, not the path. A frame the reviewer turns upright keeps its name
- * and changes its pixels, so a path-keyed entry would answer a question about the new
- * picture with features observed from the old one. Hashing what was actually sent makes
- * that impossible to get wrong, and it costs one read of a 40 KB file.
+ * Observation is deliberately an open-vocabulary boundary. The model chooses
+ * the useful cues for a particular frame; the application only supplies a
+ * bounded transport contract and validates the result before it can influence
+ * retrieval.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { trace } from "@opentelemetry/api";
 import OpenAI from "openai";
-import { readFrame } from "./image.ts";
+import { toDataUri } from "./image.ts";
+import { loadPrompt, PROMPT_VERSIONS } from "./promts.ts";
+import { throttleOpenRouterRequest } from "./openrouter-throttle.ts";
 
-const MODEL = process.env.OBSERVE_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
+export type FeatureKey = string;
+
+export type FeatureObservation = {
+  key: FeatureKey;
+  text: string;
+};
+
+export type ObserveResult = {
+  features: FeatureObservation[];
+  error: string | null;
+};
+
+export const MAX_FEATURES = 12;
+export const MAX_FEATURE_KEY_LENGTH = 64;
+export const MAX_FEATURE_TEXT_LENGTH = 512;
+
+export const OBSERVE_PROMPT_VERSION = PROMPT_VERSIONS.observe;
+export const OBSERVE_SCHEMA_VERSION = "dynamic-features-schema-v2" as const;
+
+export const OBSERVE_PROMPT = loadPrompt("observe");
+
+export const OBSERVE_SCHEMA = {
+  type: "object",
+  properties: {
+    features: {
+      type: "array",
+      minItems: 0,
+      maxItems: MAX_FEATURES,
+      items: {
+        type: "object",
+        properties: {
+          key: {
+            type: "string",
+            minLength: 1,
+            maxLength: MAX_FEATURE_KEY_LENGTH,
+            pattern: "^[A-Za-z][A-Za-z0-9 _-]{0,63}$",
+          },
+          text: { type: "string", minLength: 1, maxLength: MAX_FEATURE_TEXT_LENGTH },
+        },
+        required: ["key", "text"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["features"],
+  additionalProperties: false,
+} as const;
+
+export type ObserveConfig = {
+  model: string;
+  seed: number;
+  schemaVersion: string;
+  promptVersion: string;
+};
+
+export type ObserveModelRequest = {
+  imagePath: string;
+  prompt: string;
+  schema: typeof OBSERVE_SCHEMA;
+};
+
+export type ObserveDeps = {
+  config?: ObserveConfig;
+  cacheDir?: string;
+  model?: (input: ObserveModelRequest) => Promise<string | null>;
+};
+
+const DEFAULT_MODEL = process.env.OBSERVE_MODEL ?? process.env.GEOLOCATE_MODEL ?? "google/gemma-4-31b-it";
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 const TEMPERATURE = Number(process.env.OBSERVE_TEMPERATURE ?? 0);
-const SEED = Number(process.env.GEOLOCATE_SEED ?? 1);
+const DEFAULT_SEED = Number(process.env.GEOLOCATE_SEED ?? 1);
+const CACHE_DIR = process.env.OBSERVE_CACHE_DIR ?? join("tmp", "cache", "observe");
 
 /** Same routing policy as the solver, see `src/agent.ts`. */
 const PROVIDER = {
@@ -43,136 +98,228 @@ const PROVIDER = {
   quantizations: [process.env.OPENROUTER_QUANTIZATION ?? "bf16"],
 } as const;
 
-const CACHE_DIR = process.env.OBSERVE_CACHE_DIR ?? join("tmp", "cache", "observe");
+export const OBSERVE_CONFIG: ObserveConfig = {
+  model: DEFAULT_MODEL,
+  seed: DEFAULT_SEED,
+  schemaVersion: OBSERVE_SCHEMA_VERSION,
+  promptVersion: OBSERVE_PROMPT_VERSION,
+};
+
+const GENERIC_FEATURE_KEY = /^(?:other|misc|unknown|feature|cue|item)(?:_?[0-9]+)?$/;
+const NORMALIZED_FEATURE_KEY = /^[a-z][a-z0-9_]{0,63}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+export function unicodeCodePointLength(value: string): number {
+  return [...value].length;
+}
+
+export function normalizeFeatureKey(value: string): string | null {
+  const normalized = value.normalize("NFKC").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!NORMALIZED_FEATURE_KEY.test(normalized) || GENERIC_FEATURE_KEY.test(normalized)) return null;
+  return normalized;
+}
+
+export function isNormalizedFeatureKey(value: unknown): value is FeatureKey {
+  return typeof value === "string" && NORMALIZED_FEATURE_KEY.test(value) && !GENERIC_FEATURE_KEY.test(value);
+}
+
+function normalizeFeatureObservation(value: unknown): FeatureObservation | null {
+  if (!isRecord(value) || !hasExactKeys(value, ["key", "text"])) return null;
+  if (typeof value.key !== "string" || typeof value.text !== "string") {
+    return null;
+  }
+  const key = normalizeFeatureKey(value.key);
+  if (
+    key === null ||
+    unicodeCodePointLength(value.key) < 1 ||
+    unicodeCodePointLength(value.key) > MAX_FEATURE_KEY_LENGTH ||
+    unicodeCodePointLength(key) > MAX_FEATURE_KEY_LENGTH ||
+    value.text.trim() === "" ||
+    unicodeCodePointLength(value.text) < 1 ||
+    unicodeCodePointLength(value.text) > MAX_FEATURE_TEXT_LENGTH
+  ) {
+    return null;
+  }
+  return { key, text: value.text };
+}
+
+function normalizeObservationFeatures(values: readonly unknown[]): FeatureObservation[] | null {
+  if (values.length > MAX_FEATURES) return null;
+  const normalized: FeatureObservation[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < values.length; index += 1) {
+    if (!(index in values)) return null;
+    const feature = normalizeFeatureObservation(values[index]);
+    if (feature === null || seen.has(feature.key)) return null;
+    seen.add(feature.key);
+    normalized.push(feature);
+  }
+  return normalized;
+}
+
+function parseObservation(raw: string | null): ObserveResult {
+  if (raw === null || raw.trim() === "") return { features: [], error: "missing observation response" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { features: [], error: "malformed observation response" };
+  }
+  if (!isRecord(parsed) || !hasExactKeys(parsed, ["features"]) || !Array.isArray(parsed.features)) {
+    return { features: [], error: "malformed observation response" };
+  }
+  const features = normalizeObservationFeatures(parsed.features);
+  return features === null
+    ? { features: [], error: "malformed observation response" }
+    : { features, error: null };
+}
 
 /**
- * Slot list, from the feature table a professional player works through
- * (docs/research/geo-guessr/rainbolt-wired.md). Slots are mandatory and answered
- * with "not visible" when absent: a silent omission cannot be told apart from a
- * feature the model never looked for, and both end up as a missing search term.
- *
- * The Street View row of that table is dropped - these are dashcam frames.
+ * Re-validates an observation result crossing an injected runtime boundary.
+ * `observe` already returns this shape, but locate also accepts an observe hook;
+ * hooks are untrusted inputs and must not be able to bypass feature budgets.
  */
-const PROMPT = `You are a visual observation instrument. Report only what is literally visible in this photograph.
+export function normalizeObserveResult(value: unknown): ObserveResult {
+  if (!isRecord(value) || !hasExactKeys(value, ["features", "error"]) || !Array.isArray(value.features)) {
+    return { features: [], error: "invalid observation result" };
+  }
+  if (value.error !== null && typeof value.error !== "string") {
+    return { features: [], error: "invalid observation result" };
+  }
+  const features = normalizeObservationFeatures(value.features);
+  if (features === null) return { features: [], error: "invalid observation result" };
+  return value.error === null ? { features, error: null } : { features: [], error: value.error };
+}
 
-Emit exactly one entry per slot, in this order. If a slot is not visible, emit it with the value "not visible". Never omit a slot.
+function normalizeCachedObservation(value: unknown): ObserveResult | null {
+  if (!isRecord(value) || !hasExactKeys(value, ["features", "error"]) || value.error !== null) return null;
+  if (!Array.isArray(value.features)) return null;
+  const features = normalizeObservationFeatures(value.features);
+  return features === null ? null : { features, error: null };
+}
 
-1. "traffic side: ..." - side vehicles drive on, camera position in the lane, side of the steering wheel.
-2. "script and language: ..." - writing system and language of ANY text, including partial or blurred. Name the script and any diacritics.
-3. "visible text: ..." - readable strings, quoted verbatim, including fragments.
-4. "plates: ..." - colour and proportions of number plates, front and rear.
-5. "poles: ..." - material, shape, crossarms, insulators of utility and light poles.
-6. "bollards and barriers: ..." - bollard shape and reflector colour, guardrail profile, fencing.
-7. "road markings: ..." - colour, pattern and position of every line, including edge and centre.
-8. "road surface: ..." - material, colour, width, condition.
-9. "vegetation: ..." - species or type, density, colour, season.
-10. "terrain and soil: ..." - relief, soil colour and texture, rocks, water, horizon shape.
-11. "built environment: ..." - building materials, roof shapes, fences, utility boxes, sign shapes and colours.
-12. "vehicles: ..." - makes, body types, roof racks, bull bars, liveries.
+function effectiveConfig(deps: ObserveDeps): ObserveConfig {
+  const config = deps.config ?? OBSERVE_CONFIG;
+  return {
+    model: config.model,
+    seed: config.seed,
+    schemaVersion: config.schemaVersion,
+    promptVersion: config.promptVersion,
+  };
+}
 
-Hard rules:
-- Never name a country, region, city or continent, and never say what a feature implies.
-- One short phrase per slot, after the slot prefix.
+function validateConfig(config: ObserveConfig): void {
+  if (
+    typeof config.model !== "string" ||
+    config.model.trim() === "" ||
+    !Number.isSafeInteger(config.seed) ||
+    typeof config.schemaVersion !== "string" ||
+    config.schemaVersion.trim() === "" ||
+    typeof config.promptVersion !== "string" ||
+    config.promptVersion.trim() === ""
+  ) {
+    throw new Error("invalid observation configuration");
+  }
+}
 
-Answer with JSON only:
-{"features": ["traffic side: ...", "script and language: ...", "..."]}`;
+function cacheIdentity(config: ObserveConfig, imagePath: string, imageDigest: string): string {
+  return [
+    config.schemaVersion,
+    config.promptVersion,
+    config.model,
+    String(config.seed),
+    imagePath,
+    imageDigest,
+  ].join("\0");
+}
 
-/** Bumping this invalidates the cache: a changed prompt is a changed observation. */
-const PROMPT_VERSION = createHash("sha256").update(PROMPT).digest("hex").slice(0, 8);
+function cachePath(cacheDir: string, config: ObserveConfig, imagePath: string, imageDigest: string): string {
+  const key = createHash("sha256").update(cacheIdentity(config, imagePath, imageDigest), "utf8").digest("hex");
+  return join(cacheDir, `${key}.json`);
+}
 
-const SCHEMA = {
-  type: "object",
-  properties: { features: { type: "array", items: { type: "string" } } },
-  required: ["features"],
-  additionalProperties: false,
-} as const;
-
-let cached: OpenAI | undefined;
+let cachedClient: OpenAI | undefined;
 function client(): OpenAI {
-  cached ??= new OpenAI({
-    apiKey: process.env.OPENROUTER_API_KEY ?? "",
-    baseURL: BASE_URL,
-  });
-  return cached;
+  cachedClient ??= new OpenAI({ apiKey: process.env.OPENROUTER_API_KEY ?? "", baseURL: BASE_URL });
+  return cachedClient;
+}
+
+async function defaultObserveModel(request: ObserveModelRequest, config: ObserveConfig): Promise<string | null> {
+  const response = await throttleOpenRouterRequest(async () =>
+    client().chat.completions.create({
+      model: config.model,
+      temperature: TEMPERATURE,
+      seed: config.seed,
+      provider: PROVIDER,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: request.prompt },
+            { type: "image_url", image_url: { url: await toDataUri(request.imagePath) } },
+          ],
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "observation", strict: true, schema: request.schema },
+      },
+    } as OpenAI.ChatCompletionCreateParamsNonStreaming),
+  );
+  return response.choices[0]?.message.content ?? null;
 }
 
 const tracer = trace.getTracer("observe");
 
 /**
- * Where one frame's features are cached. Exported so the parent can unit-check it.
- *
- * Keyed on the bytes that were sent, so the entry cannot outlive the picture it describes.
- * A pure function of the payload: nothing about the file's name or location enters the key,
- * because neither is what the model was asked about.
+ * Returns the model-selected visual features. A malformed or failed observation
+ * is represented as an empty result so the image task can continue without
+ * fabricated retrieval cues.
  */
-export function observeCachePath(bytes: Buffer): string {
-  const key = createHash("sha256")
-    .update(PROMPT_VERSION)
-    .update(":")
-    .update(bytes)
-    .digest("hex")
-    .slice(0, 16);
-  return join(CACHE_DIR, `${key}.json`);
-}
-
-/**
- * Returns the observed features, or an empty list when the call fails.
- *
- * A failure here must not fail the task. Losing the search query costs relevance;
- * losing the row costs the denominator, which is worse and harder to notice.
- */
-export async function observe(imagePath: string): Promise<string[]> {
-  const { bytes, dataUri } = await readFrame(imagePath);
-  const path = observeCachePath(bytes);
+export async function observe(imagePath: string, deps: ObserveDeps = {}): Promise<ObserveResult> {
+  const config = effectiveConfig(deps);
   try {
-    return JSON.parse(await readFile(path, "utf8")) as string[];
-  } catch {
-    // Not cached yet.
-  }
-
-  return tracer.startActiveSpan("observe", async (span) => {
+    validateConfig(config);
+    const imageDigest = createHash("sha256").update(await readFile(imagePath)).digest("hex");
+    const path = cachePath(deps.cacheDir ?? CACHE_DIR, config, imagePath, imageDigest);
     try {
-      const response = await client().chat.completions.create({
-        model: MODEL,
-        temperature: TEMPERATURE,
-        seed: SEED,
-        provider: PROVIDER,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: PROMPT },
-              { type: "image_url", image_url: { url: dataUri } },
-            ],
-          },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: { name: "observation", strict: true, schema: SCHEMA },
-        },
-      } as OpenAI.ChatCompletionCreateParamsNonStreaming);
-
-      const raw = response.choices[0]?.message.content;
-      const parsed = raw ? (JSON.parse(raw) as { features?: unknown }) : {};
-      const features = Array.isArray(parsed.features)
-        ? parsed.features
-            .filter((f): f is string => typeof f === "string" && f.trim() !== "")
-            .map((f) => f.trim().toLowerCase())
-        : [];
-
-      span.setAttributes({
-        "observe.feature_count": features.length,
-        "observe.prompt_version": PROMPT_VERSION,
-      });
-
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, JSON.stringify(features), "utf8");
-      return features;
-    } catch (error) {
-      span.recordException(error as Error);
-      return [];
-    } finally {
-      span.end();
+      const cachedResult = normalizeCachedObservation(JSON.parse(await readFile(path, "utf8")) as unknown);
+      if (cachedResult !== null) return cachedResult;
+    } catch {
+      // Cache miss or stale/malformed cache entry.
     }
-  });
+
+    return tracer.startActiveSpan("observe", async (span) => {
+      try {
+        const raw = deps.model === undefined
+          ? await defaultObserveModel({ imagePath, prompt: OBSERVE_PROMPT, schema: OBSERVE_SCHEMA }, config)
+          : await deps.model({ imagePath, prompt: OBSERVE_PROMPT, schema: OBSERVE_SCHEMA });
+        const result = parseObservation(raw);
+        span.setAttributes({
+          "observe.feature_count": result.features.length,
+          "observe.prompt_version": config.promptVersion,
+        });
+        if (result.error === null) {
+          await mkdir(dirname(path), { recursive: true });
+          await writeFile(path, JSON.stringify(result), "utf8");
+        }
+        return result;
+      } catch (error) {
+        span.recordException(error as Error);
+        return { features: [], error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        span.end();
+      }
+    });
+  } catch (error) {
+    return { features: [], error: error instanceof Error ? error.message : String(error) };
+  }
 }

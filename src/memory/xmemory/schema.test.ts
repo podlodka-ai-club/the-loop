@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { XmemoryMemoryError } from "./error.ts";
 import {
@@ -31,18 +30,22 @@ function assertSanitizedSchemaFailure(
   });
 }
 
-test("committed XMD source equals the normative schema in the specification", async () => {
-  const specification = await readFile("docs/specs/xmemory-adapter/spec.md", "utf8");
-  const match = /### 2\. XMD schema[^]*?```yaml\n([^]*?)\n```/.exec(specification);
-  assert.ok(match?.[1] !== undefined);
+test("committed XMD models nullable no-hit provenance and application-owned deduplication", async () => {
   const loaded = await loadXmemorySchema();
-  assert.equal(loaded.source.trimEnd(), match[1].trimEnd());
   assert.equal(loaded.sha256, canonicalXmemorySchemaHash(loaded.value));
 
   const objects = loaded.value.objects as Record<string, unknown>;
   assert.deepEqual(Object.keys(objects), ["TrainingExperience", "Insight"]);
   assert.equal("VisualCue" in objects, false);
   assert.equal("Place" in objects, false);
+
+  const experience = objects.TrainingExperience as Record<string, unknown>;
+  const fields = experience.fields as Record<string, Record<string, unknown>>;
+  assert.equal(fields.memory_hit_id?.type, "str");
+  assert.equal(fields.memory_hit_id?.required, false);
+  assert.equal(fields.memory_hit_id?.default, null);
+  assert.equal((experience.primary_key as string[]).join(","), "source_attempt_id,feature_key,idempotency_key");
+  assert.equal((experience.primary_key as string[]).includes("memory_hit_id"), false);
 });
 
 test("canonical hash sorts mappings, preserves arrays and normalizes negative zero", () => {

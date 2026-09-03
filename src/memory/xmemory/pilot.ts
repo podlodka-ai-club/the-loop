@@ -3,13 +3,14 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Hint, LessonInput } from "../memory.ts";
+import { MemoryWriteError } from "../memory.ts";
+import type { Hint, LegacyLessonInput, MemoryWriteResult } from "../memory.ts";
+import { loadPrompt } from "../../promts.ts";
 import { xmemoryIntegrationEnabled, loadXmemoryIntegrationConfig } from "./integration.ts";
 import {
   XmemoryMemoryError,
   createXmemoryMemory,
   loadXmemoryMemoryConfig,
-  type XmemoryMemory,
   type XmemoryMemoryConfig,
   type XmemoryQuarantineResult,
   type XmemoryRememberResult,
@@ -32,12 +33,13 @@ export const XMEMORY_PILOT_QUERIES_PATH =
   "benchmark/samples/xmemory-pilot-v1-queries.jsonl";
 export const XMEMORY_PILOT_SUMMARY_PATH = "tmp/xmemory-pilot-v1-summary.json";
 
-export const XMEMORY_PILOT_EMPTY_QUERY =
-  "List every TrainingExperience record. Return source_attempt_id only.";
+export const XMEMORY_PILOT_EMPTY_QUERY = `${loadPrompt("memory-retrieve")}\n\n${JSON.stringify({
+  pilot_operation: "empty_training_experience_read",
+})}`;
 
 export type XmemoryPilotLessonCase = {
   caseId: string;
-  lesson: LessonInput;
+  lesson: LegacyLessonInput;
   expectedInsights: Array<{ kind: XmemoryInsightKind; allOf: string[] }>;
   forbiddenSubstrings: string[];
 };
@@ -332,18 +334,17 @@ export async function loadXmemoryPilotManifests(options: {
 }
 
 function sourceQuery(sourceAttemptId: string): string {
-  return (
-    `Return source_attempt_id for the TrainingExperience whose source_attempt_id is "${sourceAttemptId}".\n` +
-    "Use exactly one column named source_attempt_id."
-  );
+  return `${loadPrompt("memory-retrieve")}\n\n${JSON.stringify({
+    pilot_operation: "source_attempt_id",
+    source_attempt_id: sourceAttemptId,
+  })}`;
 }
 
 function insightQuery(sourceAttemptId: string): string {
-  return (
-    "Return every Insight connected through derived_from to the TrainingExperience whose\n" +
-    `source_attempt_id is "${sourceAttemptId}". Use exactly these columns in this order:\n` +
-    "source_attempt_id, insight_statement, insight_kind."
-  );
+  return `${loadPrompt("memory-retrieve")}\n\n${JSON.stringify({
+    pilot_operation: "derived_insights",
+    source_attempt_id: sourceAttemptId,
+  })}`;
 }
 
 export function xmemoryPilotP95(values: readonly number[]): number {
@@ -442,6 +443,13 @@ function countForbidden(texts: readonly string[], forbidden: readonly string[]):
   return count;
 }
 
+export type XmemoryPilotMemory = {
+  remember(lesson: LegacyLessonInput): Promise<void | MemoryWriteResult>;
+  recall(features: string[], limit: number): Promise<Hint[]>;
+  snapshot(): Promise<string>;
+  restore(id: string): Promise<void>;
+};
+
 export type XmemoryPilotMemoryFactory = (
   config: XmemoryMemoryConfig,
   platform: XmemoryPlatformPort,
@@ -449,7 +457,7 @@ export type XmemoryPilotMemoryFactory = (
     onRememberCompleted: (result: XmemoryRememberResult) => void;
     onInstanceQuarantined: (result: XmemoryQuarantineResult) => void;
   },
-) => Promise<XmemoryMemory>;
+) => Promise<XmemoryPilotMemory>;
 
 export async function runXmemoryPilot(options: {
   manifests: XmemoryPilotManifests;
@@ -496,7 +504,7 @@ export async function runXmemoryPilot(options: {
 
   let activeSourceAttemptId: string | undefined;
   let observerCalls = 0;
-  let memory: XmemoryMemory;
+  let memory: XmemoryPilotMemory;
   try {
     memory = await options.createMemory(options.config, options.platform, {
       onRememberCompleted: (result) => {
@@ -536,8 +544,9 @@ export async function runXmemoryPilot(options: {
         summary.writeFailures += 1;
       }
       if (
-        error instanceof XmemoryMemoryError &&
-        (error.code === "write_outcome_unknown" || error.code === "instance_quarantined")
+        (error instanceof XmemoryMemoryError &&
+          (error.code === "write_outcome_unknown" || error.code === "instance_quarantined")) ||
+        (error instanceof MemoryWriteError && error.code === "write_outcome_unknown")
       ) {
         summary.aborted = true;
         summary.instanceQuarantined = true;

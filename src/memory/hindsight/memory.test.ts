@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  MemoryBindingError,
+  MemoryWriteError,
+  encodeMemoryRetrieveQuery,
+  normalizeMemoryQuery,
+  sharedMemoryPromptMetadata,
+} from "../memory.ts";
+import {
   HINDSIGHT_CAPABILITIES,
   HINDSIGHT_DEFAULT_MAX_TOKENS,
-  HINDSIGHT_DEFAULT_PRIOR_QUERY,
   HINDSIGHT_DEFAULT_READ_TIMEOUT_MS,
   HINDSIGHT_DEFAULT_RECALL_BUDGET,
   HINDSIGHT_DEFAULT_WRITE_TIMEOUT_MS,
-  buildHindsightRecallQuery,
   buildHindsightRetainRequest,
   createHindsightMemory,
   loadHindsightMemoryConfig,
@@ -72,6 +77,15 @@ async function assertAsyncMemoryError(
   retryable = false,
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (operation === "write" && error instanceof MemoryBindingError) {
+      assert.equal(error.code, code === "rate_limited" ? "unavailable" : code);
+      return true;
+    }
+    if (operation === "write" && error instanceof MemoryWriteError) {
+      assert.equal(error.code, code === "write_outcome_unknown" ? "write_outcome_unknown" : "write_failed");
+      assert.equal("cause" in error, false);
+      return true;
+    }
     assert.ok(error instanceof HindsightMemoryError);
     assert.equal(error.code, code);
     assert.equal(error.operation, operation);
@@ -121,7 +135,6 @@ test("package, scripts and env contract are exact and Hindsight config reads one
   assert.equal(config.readTimeoutMs, HINDSIGHT_DEFAULT_READ_TIMEOUT_MS);
   assert.equal(config.maxTokens, HINDSIGHT_DEFAULT_MAX_TOKENS);
   assert.equal(config.recallBudget, HINDSIGHT_DEFAULT_RECALL_BUDGET);
-  assert.equal(config.priorQuery, HINDSIGHT_DEFAULT_PRIOR_QUERY);
 
   assert.match(await readFile(".env.example", "utf8"), /HINDSIGHT_API_KEY=\n/);
   const hindsightEnvironmentEntries = (await readFile(".env.example", "utf8"))
@@ -194,7 +207,6 @@ test("source and policy validation rejects non-Cloud or malformed configuration"
     { ...config, maxTokens: 1.5 },
     { ...config, maxTokens: 0 },
     { ...config, recallBudget: "max" },
-    { ...config, priorQuery: "" },
   ]) {
     assertConfigError(() => createHindsightMemory({ snapshots: false }, invalid as never));
   }
@@ -252,6 +264,11 @@ test("valid capability gate returns exact unsupported snapshot capabilities with
   assert.equal(typeof memory.recall, "function");
 });
 
+test("configured Hindsight memory exposes the application-owned common prompt metadata", () => {
+  const memory = createHindsightMemory({ snapshots: false }, config(), { platform: platform() });
+  assert.deepEqual(memory.promptMetadata, sharedMemoryPromptMetadata());
+});
+
 test("retain builder validates lesson boundaries and emits the exact canonical envelope", () => {
   const lesson = {
     content: "  preserve this lesson exactly\n",
@@ -264,6 +281,7 @@ test("retain builder validates lesson boundaries and emits the exact canonical e
   assert.equal(request.bankId, source.bankId);
   assert.equal(request.content, lesson.content);
   assert.equal(request.documentId, "attempt-01:west");
+  assert.equal(request.retainMission, sharedMemoryPromptMetadata().store.text);
   assert.equal(request.context, "loci_training_reflection");
   assert.deepEqual(request.metadata, {
     loci_source_attempt_id: "attempt-01:west",
@@ -293,24 +311,19 @@ test("retain builder validates lesson boundaries and emits the exact canonical e
       "write",
     );
   }
-});
 
-test("recall builder normalizes features and preserves an empty-feature prior verbatim", () => {
-  assert.equal(
-    buildHindsightRecallQuery(["  yellow\tposts ", "", "yellow posts", "road signs"], "prior"),
-    "Relevant visual geolocation features:\n- yellow posts\n- road signs",
+  const noHitRequest = buildHindsightRetainRequest(
+    source.bankId,
+    {
+      ...lesson,
+      featureKey: "road_markings",
+      memoryHitId: null,
+      effect: "insufficient",
+      idempotencyKey: "attempt-01:west/road_markings/no-hit",
+    },
+    1_000,
   );
-  assert.equal(buildHindsightRecallQuery([], "  configured prior  "), "  configured prior  ");
-
-  const sparse = new Array(1) as string[];
-  for (const invalid of [
-    sparse,
-    Array.from({ length: 65 }, () => "cue"),
-    ["x".repeat(257)],
-    ["valid", 1] as never,
-  ]) {
-    assertMemoryError(() => buildHindsightRecallQuery(invalid as never, "prior"), "invalid_input", "read");
-  }
+  assert.equal(noHitRequest.metadata.loci_memory_hit_id, null);
 });
 
 test("remember is FIFO, uses replace identity, accepts zero-fact success and observes completion", async () => {
@@ -461,7 +474,10 @@ test("recall sends exact native options, preserves provider order and defensivel
     { lessonId: "fact-1", text: "first" },
   ]);
   assert.equal(received.bankId, source.bankId);
-  assert.equal(received.query, "Relevant visual geolocation features:\n- yellow posts");
+  assert.equal(
+    received.query,
+    encodeMemoryRetrieveQuery(sharedMemoryPromptMetadata().retrieve, normalizeMemoryQuery(["yellow\tposts", "yellow posts"])),
+  );
   assert.deepEqual(received.types, ["world", "experience", "observation"]);
   assert.equal(received.preferObservations, true);
   assert.equal(received.maxTokens, config().maxTokens);
@@ -472,15 +488,16 @@ test("recall sends exact native options, preserves provider order and defensivel
   assert.equal(received.timeoutMs, config().readTimeoutMs);
   assert.equal(typeof received.signal.aborted, "boolean");
 
-  const priorMemory = createHindsightMemory({ snapshots: false }, config(), {
-    platform: platform({
-      recall: async (request) => {
-        assert.equal(request.query, config().priorQuery);
-        return { results: [] };
-      },
-    }),
+  let emptyQueryCalls = 0;
+  const emptyQueryMemory = createHindsightMemory({ snapshots: false }, config(), {
+    platform: platform({ recall: async (request) => {
+      emptyQueryCalls += 1;
+      assert.equal(request.query, encodeMemoryRetrieveQuery(sharedMemoryPromptMetadata().retrieve, ""));
+      return { results: [] };
+    } }),
   });
-  assert.deepEqual(await priorMemory.recall([], 1), []);
+  assert.deepEqual(await emptyQueryMemory.recall([], 1), []);
+  assert.equal(emptyQueryCalls, 1);
 });
 
 test("recall validates limit and features before platform calls and rejects malformed results", async () => {
@@ -497,7 +514,7 @@ test("recall validates limit and features before platform calls and rejects malf
     await assertAsyncMemoryError(memory.recall([], limit), "invalid_input", "read");
   }
   await assertAsyncMemoryError(memory.recall(new Array(1) as string[], 1), "invalid_input", "read");
-  await assertAsyncMemoryError(memory.recall(["x".repeat(257)], 1), "invalid_input", "read");
+  await assertAsyncMemoryError(memory.recall(["x".repeat(513)], 1), "invalid_input", "read");
   assert.equal(calls, 0);
 
   for (const results of [

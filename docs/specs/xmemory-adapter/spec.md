@@ -2,17 +2,26 @@
 type: Specification
 title: "xmemory Cloud adapter v1"
 description: Контракт xmemory Cloud-адаптера, XMD-схемы, provisioning и disposable pilot без поддержки snapshot и restore.
-timestamp: 2026-08-29T00:00:00+03:00
-date: 2026-08-29
+timestamp: 2026-08-31T00:00:00+03:00
+date: 2026-08-31
 model: gpt-5
-version: 2
+version: 3
 tags: [loci, memory, xmemory, cloud, xmd, typescript, adapter, specification]
 ---
 
 # Spec: xmemory Cloud adapter v1
 
-Operationalizes [the accepted ADR](adr.md). Produces an implementation of `Memory`, a committed
+Operationalizes [the accepted ADR](adr.md). Produces an implementation of dynamic `Memory`, a committed
 XMD v1 schema, explicit Cloud provisioning, normalized errors and a frozen disposable pilot.
+
+Changes from v2: the public adapter boundary uses one dynamic query and a typed write result; older
+array-query examples are provider-internal compatibility details.
+
+The `features: string[]` values in pilot manifests are fixture inputs. They are converted before the
+public dynamic `Memory.recall(query, limit)` boundary and are not accepted by the agent tool.
+
+Dynamic training envelopes persist source attempt, feature key, memory hit ID, effect, region, triggers
+and idempotency key; the XMD primary key includes the attempt, feature and hit identity.
 
 ## Goal
 
@@ -82,6 +91,30 @@ objects:
         description: >-
           Literal source_attempt_id from the provenance block. Preserve case and punctuation;
           never infer, translate, normalize or generate this value.
+      feature_key:
+        type: str
+        required: true
+        enum: null
+        default: null
+        description: Literal dynamic feature key from the provenance block.
+      memory_hit_id:
+        type: str
+        required: true
+        enum: null
+        default: null
+        description: Literal application-owned memory hit ID from the provenance block.
+      effect:
+        type: str
+        required: true
+        enum: [helped, irrelevant, misleading, insufficient]
+        default: null
+        description: Reflection effect from the provenance block.
+      idempotency_key:
+        type: str
+        required: true
+        enum: null
+        default: null
+        description: Deterministic application-owned store key from the provenance block.
       lesson_content:
         type: str
         required: true
@@ -104,7 +137,7 @@ objects:
         default: null
         description: >-
           Canonical JSON array string copied from observed_triggers_json; do not add or remove cues.
-    primary_key: [source_attempt_id]
+    primary_key: [source_attempt_id, feature_key, memory_hit_id]
 
   Insight:
     description: >-
@@ -279,7 +312,7 @@ export interface XmemoryAdminPort {
 ### 5. Adapter surface — `src/memory/xmemory/memory.ts`
 
 ```ts
-import type { Hint, LessonInput, Memory } from "../memory.ts";
+import type { Hint, LessonInput, Memory, MemoryWriteResult } from "../memory.ts";
 
 export const XMEMORY_CAPABILITIES = { snapshot: false, restore: false } as const;
 
@@ -311,8 +344,8 @@ export type XmemoryMemoryDependencies = {
 };
 
 export interface XmemoryMemory extends Memory {
-  recall(features: string[], limit: number): Promise<Hint[]>;
-  remember(lesson: LessonInput): Promise<void>;
+  recall(query: string, limit: number): Promise<Hint[]>;
+  remember(lesson: LessonInput): Promise<MemoryWriteResult>;
   snapshot(): Promise<string>;
   restore(id: string): Promise<void>;
 }
@@ -331,6 +364,10 @@ export function createXmemoryMemory(
 <loci_training_experience_v1>
 <loci_provenance_v1>
 source_attempt_id: {trimmed sourceAttemptId}
+feature_key: {trimmed featureKey}
+memory_hit_id: {trimmed memoryHitId}
+effect: {effect}
+idempotency_key: {trimmed idempotencyKey}
 region_json: {JSON.stringify(trimmed region)}
 observed_triggers_json: {JSON.stringify(trimmed, non-empty, stable-deduplicated triggers)}
 </loci_provenance_v1>
@@ -485,6 +522,9 @@ source_attempt_id, insight_statement, insight_kind.
 
 ## Rules
 
+The `features` arrays in the pilot sections below are fixture inputs only. The public dynamic adapter
+boundary receives one already-formed query string from the dispatcher.
+
 ### C — Configuration and construction
 
 | # | Rule |
@@ -529,14 +569,15 @@ source_attempt_id, insight_statement, insight_kind.
 | W.6 | Write timeout, abort, transport failure, HTTP 408/5xx, malformed success, conflicting code/status or unknown error becomes `write_outcome_unknown`, quarantines once, invokes quarantine observer once and never retries. Observer failure does not replace the original error. |
 | W.7 | Calls already queued behind the ambiguous write and calls made afterward reject `instance_quarantined` when they reach the head/before validation, with no provider call. Quarantine is process-local; the pilot observer provides retirement evidence. Snapshot/restore remain unsupported-operation errors. |
 | W.8 | Observer failure becomes non-retryable `observer_failed` after committed success and does not quarantine the instance. |
+| W.9 | The XMD primary key uses the exact dynamic idempotency key; a repeated key returns `already_stored` without a pre-write lookup and does not create a second training experience. |
 
 ### R — Recall
 
 | # | Rule |
 |---|---|
-| R.1 | Order is quarantine check, limit validation, feature validation/normalization, trace creation, query build and one provider read. |
-| R.2 | Limit is an integer 1–1,000 and controls only the requested count inside the synthesized answer; adapter enforces only the one-Hint outer cap. Features are an array of ≤64 strings; each normalizes by trim plus internal whitespace collapse, must be ≤256 and contain no sentinel. Stable duplicates are removed. |
-| R.3 | Non-empty normalized features use the feature template; empty normalized features use the prior template. Templates and punctuation equal Contract §6 exactly. |
+| R.1 | Order is quarantine check, limit validation, public query validation, trace creation and one provider read. |
+| R.2 | Limit is an integer 1–1,000 and controls only the requested count inside the synthesized answer; the public query is one bounded string. Feature arrays in pilot fixtures are private inputs. |
+| R.3 | The adapter receives one already-formed dynamic query string; any feature template is an internal pilot/helper concern and is not the public recall boundary. |
 | R.4 | Read uses `single-answer`, configured timeout and a lowercase UUID client trace ID. Cloud may return its own non-null provider trace instead of echoing the client value; the port validates it as string/null, while the adapter keeps the client trace for stable `lessonId` correlation. |
 | R.5 | `readerResult` must be a mapping with string `answer`. A blank trimmed answer returns `[]`; missing/non-string answer is `protocol_error`. |
 | R.6 | A non-empty answer returns exactly `[{ lessonId: "xmemory-read:<clientTraceId>", text: answer.trim() }]`; result length never exceeds one regardless of limit. |
@@ -570,7 +611,7 @@ source_attempt_id, insight_statement, insight_kind.
 - Snapshot/restore implementation, emulation, export/import, canonical log or replay.
 - Production use, shared/reused instances, multi-process writers and automatic cleanup.
 - `VisualCue`, `Place`, cross-episode insight merge, schema suggestions or migrations.
-- Changes to `Memory`, train/experiment, product memory tools or other adapters.
+- Dynamic feature extraction and train/experiment orchestration remain specified in the dynamic feature iteration.
 - Async `writeAsync`/polling, structured mutations and automatic provider retry.
 - Image upload, ground-truth fields beyond approved lesson text, PII or secrets in Cloud data.
 
@@ -590,7 +631,7 @@ source_attempt_id, insight_statement, insight_kind.
 | 10 | same | Known rejection matrix does not quarantine/retry | W.5, E.3 |
 | 11 | same | Ambiguous write/malformed success quarantines once; callback fires; FIFO queued/new calls are blocked | W.3, W.6, W.7 |
 | 12 | same | Observer failure is sanitized and leaves adapter usable | W.8, E.1, E.2 |
-| 13 | same | Limit/features validation order and both exact query templates | R.1, R.2, R.3 |
+| 13 | same | Limit/query validation order and exact public dynamic query handling | R.1, R.2, R.3 |
 | 14 | same | Trace echo, blank/invalid/non-empty answer mapping and one-Hint cap | R.4, R.5, R.6 |
 | 15 | same | Read errors are not empty results; retryable flags are read-only | R.7, E.1, E.2, E.3 |
 | 16 | same | Snapshot/restore exact rejected Promises, messages and no calls/state change | E.5, W.7 |

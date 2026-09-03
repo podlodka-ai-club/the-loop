@@ -172,6 +172,8 @@ export type XmemoryReadRequest = {
 };
 
 export interface XmemoryPlatformPort {
+  /** The committed XMD primary key is the provider-visible atomic lesson identity. */
+  readonly supportsAtomicIdempotency?: true;
   getSchema(timeoutMs: number): Promise<Record<string, unknown>>;
   write(request: XmemoryWriteRequest): Promise<{
     writeId: string;

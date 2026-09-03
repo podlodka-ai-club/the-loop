@@ -6,12 +6,39 @@
  */
 import { UnparseableOutputError, geolocate } from "./agent.ts";
 import type { Guess } from "./agent.ts";
+import { buildAttemptMetrics } from "./benchmark-metrics.ts";
+import type { RetrievalFixtureCase } from "./benchmark-metrics.ts";
+import type { LocateDeps } from "./locate.ts";
 import { NullMemory } from "./memory/null/memory.ts";
 import { observe } from "./observe.ts";
-import { RECALL_LIMIT } from "./memory/memory.ts";
-import type { Hint, Memory } from "./memory/memory.ts";
+import type { FeatureObservation } from "./observe.ts";
+import { memoryBindingFailureCode, RECALL_LIMIT, parseRecallLimit } from "./memory/memory.ts";
+import type {
+  Hint,
+  LegacyMemory,
+  MemoryBinding,
+  MemoryReader,
+  MemorySourceResolver,
+} from "./memory/memory.ts";
+import { runFeatureScopedTask } from "./task-feature-scoped.internal.ts";
+import type { SampleRetryPolicy } from "./retry-policy.ts";
+import { RETRY_DELAYS_MS } from "./retry-policy.ts";
+import type {
+  AttemptTrace,
+  AttemptMetrics,
+  EpisodeTrace,
+  FeatureMemoryGroup,
+  MemoryRunConfig,
+} from "./tools/memory.ts";
 
-export type FailureKind = "unparseable" | "api_error" | "missing_image";
+export type FailureKind =
+  | "unparseable"
+  | "api_error"
+  | "missing_image"
+  | "memory_not_found"
+  | "memory_mismatch"
+  | "unavailable"
+  | "timeout";
 
 /**
  * Every result carries what memory put into the prompt: how many lessons, which ones
@@ -19,10 +46,15 @@ export type FailureKind = "unparseable" | "api_error" | "missing_image";
  * is just a better number - there is nothing tying it to the lessons.
  */
 export type MemoryUse = {
+  observations: FeatureObservation[];
+  memoryGroups: FeatureMemoryGroup[];
+  episodes: EpisodeTrace[];
+  trace: AttemptTrace | null;
   hints: Hint[];
   hintCount: number;
   hintIds: string[];
   hintTokens: number;
+  attemptMetrics: AttemptMetrics;
   /** The query recall was given. Empty means the search ran blind. */
   features: string[];
 };
@@ -34,6 +66,8 @@ export type TaskResult =
 export type ExampleInput = {
   imageId: string;
   imagePath: string;
+  attemptId?: string;
+  truth?: { latitude: number; longitude: number; country: string };
   /**
    * Observed features to rank lessons against, when something has already looked at
    * the image. The single-call agent has none, and recall falls back to a global
@@ -42,13 +76,37 @@ export type ExampleInput = {
   features?: string[];
 };
 
+export type BenchmarkTaskMetricsConfig = {
+  retrievalFixture: readonly RetrievalFixtureCase[];
+  legacyGlobalProviderIds?: readonly string[];
+};
+
 /**
  * What a task may do with memory. Evaluation passes a store and no learner, so it
  * reads lessons and never writes one. Training passes both.
  */
-export type TaskDeps = {
-  memory?: Memory;
+export type FeatureScopedTaskDeps = {
+  /**
+   * New feature-scoped path. When present, runTask delegates observe/retrieve/analyze
+   * to locate and keeps flattened hints only as a telemetry projection.
+   */
+  run: MemoryRunConfig;
+  /** The single resolved source of reader, writer, prompt port and snapshot policy. */
+  memoryBinding?: MemoryBinding;
+  memory?: MemoryReader;
+  memorySourceResolver?: MemorySourceResolver;
+  locateDeps?: Partial<Pick<LocateDeps, "maxToolAttemptsPerFeature">>;
+  benchmark?: BenchmarkTaskMetricsConfig;
+  sampleRetryPolicy?: SampleRetryPolicy;
+  recallLimit?: never;
+  twoStep?: never;
+  learn?: never;
+};
+
+export type LegacyTaskDeps = {
+  memory?: LegacyMemory;
   recallLimit?: number;
+  benchmark?: BenchmarkTaskMetricsConfig;
   /**
    * Look at the image first and use what it sees as the recall query.
    *
@@ -57,6 +115,8 @@ export type TaskDeps = {
    * at all - and the only way a query-based backend can work.
    */
   twoStep?: boolean;
+  run?: undefined;
+  locateDeps?: never;
   /**
    * Called after a successful guess, with the hints that were in the prompt. This is
    * where training turns an outcome into a lesson; it is absent during evaluation.
@@ -64,14 +124,14 @@ export type TaskDeps = {
   learn?: (guess: Guess, input: ExampleInput, hints: Hint[]) => Promise<void>;
 };
 
+export type TaskDeps = FeatureScopedTaskDeps | LegacyTaskDeps;
+
 /**
  * Novita rate-limits per minute, and a sequential 200-image run still trips it: half
  * the first OpenRouter baseline came back `429 Provider returned error`. Retrying is
  * not optional here - `allow_fallbacks: false` means a 429 cannot be answered by
  * routing elsewhere, which is the trade we accepted to keep the quantization pinned.
  */
-const RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 60_000];
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function isRateLimit(error: unknown): boolean {
@@ -101,34 +161,124 @@ export function estimateHintTokens(hints: readonly Hint[]): number {
 }
 
 export async function runTask(input: ExampleInput, deps: TaskDeps = {}): Promise<TaskResult> {
+  const startedAt = Date.now();
+  if (deps.run !== undefined) {
+    const featureScopedDeps: FeatureScopedTaskDeps = { run: deps.run };
+    if (deps.memoryBinding !== undefined) featureScopedDeps.memoryBinding = deps.memoryBinding;
+    if (deps.memory !== undefined) featureScopedDeps.memory = deps.memory;
+    if (deps.memorySourceResolver !== undefined) featureScopedDeps.memorySourceResolver = deps.memorySourceResolver;
+    if (deps.locateDeps !== undefined) featureScopedDeps.locateDeps = deps.locateDeps;
+    if (deps.benchmark !== undefined) featureScopedDeps.benchmark = deps.benchmark;
+    if (deps.sampleRetryPolicy !== undefined) featureScopedDeps.sampleRetryPolicy = deps.sampleRetryPolicy;
+    return runFeatureScopedTask(input, featureScopedDeps);
+  }
+
   const memory = deps.memory ?? new NullMemory();
+  if (!isLegacyMemory(memory)) {
+    throw new Error("legacy runTask path requires LegacyMemory; pass deps.run for feature-scoped MemoryReader");
+  }
 
   // Observation runs before recall because recall needs a query. Its output is used
   // for search only: the solver below still receives the image, so anything this
   // step misses is not lost to the answer.
+  const recallLimit =
+    deps.recallLimit === undefined ? RECALL_LIMIT : parseRecallLimit(deps.recallLimit, "recallLimit");
   const features =
-    input.features ?? (deps.twoStep === true ? await observe(input.imagePath) : []);
+    input.features ??
+    (deps.twoStep === true
+      ? (await observe(input.imagePath)).features
+          .filter((item) => item.text.trim() !== "")
+          .map((item) => item.text)
+      : []);
 
-  const hints = await memory.recall(features, deps.recallLimit ?? RECALL_LIMIT);
+  let hints: Hint[] = [];
+  let successfulMemoryCalls = 0;
+  let recallError: unknown = null;
+  try {
+    hints = await memory.recall(features, recallLimit);
+    successfulMemoryCalls = memory instanceof NullMemory ? 0 : 1;
+  } catch (error) {
+    recallError = error;
+  }
   const use: MemoryUse = {
+    observations: [],
+    memoryGroups: [],
+    episodes: [],
+    trace: null,
     hints: [...hints],
     hintCount: hints.length,
     hintIds: hints.map((hint) => hint.lessonId),
     hintTokens: estimateHintTokens(hints),
+    attemptMetrics: buildAttemptMetrics({
+      attemptId: input.attemptId ?? input.imageId,
+      observations: [],
+      memoryGroups: [],
+      episodes: [],
+      validOutput: false,
+      latencyMs: Date.now() - startedAt,
+      successfulMemoryCalls,
+      truth: input.truth,
+      fixture: deps.benchmark?.retrievalFixture,
+      legacyGlobalProviderIds: deps.benchmark?.legacyGlobalProviderIds ?? hints.map((hint) => hint.lessonId),
+    }),
     features,
   };
+  if (recallError !== null) {
+    const message = recallError instanceof Error ? recallError.message : String(recallError);
+    return {
+      ok: false,
+      failure: memoryBindingFailureCode(recallError),
+      message,
+      ...use,
+    };
+  }
   try {
     const guess = await geolocateWithBackoff(input.imagePath, hints);
     if (deps.learn) await deps.learn(guess, input, hints);
-    return { ok: true, guess, ...use };
+    return {
+      ok: true,
+      guess,
+      ...use,
+      attemptMetrics: buildAttemptMetrics({
+        attemptId: input.attemptId ?? input.imageId,
+        observations: [],
+        memoryGroups: [],
+        episodes: [],
+        validOutput: true,
+        latencyMs: Date.now() - startedAt,
+        successfulMemoryCalls,
+        guess,
+        truth: input.truth,
+        fixture: deps.benchmark?.retrievalFixture,
+        legacyGlobalProviderIds: deps.benchmark?.legacyGlobalProviderIds ?? hints.map((hint) => hint.lessonId),
+      }),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const failedUse = {
+      ...use,
+      attemptMetrics: {
+        ...use.attemptMetrics,
+        latencyMs: Date.now() - startedAt,
+      },
+    };
     if (error instanceof UnparseableOutputError) {
-      return { ok: false, failure: "unparseable", message, ...use };
+      return { ok: false, failure: "unparseable", message, ...failedUse };
     }
     if (message.includes("ENOENT")) {
-      return { ok: false, failure: "missing_image", message, ...use };
+      return { ok: false, failure: "missing_image", message, ...failedUse };
     }
-    return { ok: false, failure: "api_error", message, ...use };
+    return { ok: false, failure: "api_error", message, ...failedUse };
   }
+}
+
+function isLegacyMemory(value: unknown): value is LegacyMemory {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.recall === "function" &&
+    typeof candidate.remember === "function" &&
+    typeof candidate.snapshot === "function" &&
+    typeof candidate.restore === "function"
+  );
 }

@@ -21,6 +21,10 @@ export type Mem0AddRequest = {
     loci_source_attempt_id: string;
     loci_triggers: string[];
     loci_region: string;
+    loci_feature_key?: string;
+    loci_memory_hit_id?: string | null;
+    loci_effect?: string;
+    loci_idempotency_key?: string;
   };
 };
 
@@ -34,6 +38,8 @@ export type Mem0SearchRequest = {
 };
 
 export interface Mem0PlatformPort {
+  /** Mem0's list-then-add API is not atomic unless a port explicitly proves it. */
+  readonly supportsAtomicIdempotency?: true;
   add(request: Mem0AddRequest): Promise<{ eventId: string; status: "PENDING" }>;
   getEvent(eventId: string): Promise<{
     eventId: string;
