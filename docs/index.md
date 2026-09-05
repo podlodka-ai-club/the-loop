@@ -18,6 +18,7 @@ okf_version: "0.1"
 # Subdirectories
 
 * [benchmark](benchmark/index.md) - Замороженные корпуса OSV-5M, метрики и порядок воспроизведения прогона.
+* [experiments](experiments/index.md) - Замеры эффекта памяти и порядок их воспроизведения.
 * [data](data/index.md) - Источники изображений с координатами и план выгрузки снапшота.
 * [research](research/index.md) - Исследования геолокации, агентской памяти, memory backends и xmemory.
 * [specs](specs/index.md) - Рабочие материалы для проектирования и реализации адаптеров Mem0, Hindsight и xmemory.
