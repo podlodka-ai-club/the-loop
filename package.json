@@ -27,7 +27,8 @@
     "typecheck": "tsc --noEmit",
     "train": "node --env-file-if-exists=.env src/train.ts",
     "shuffle-memory": "node --env-file-if-exists=.env src/shuffle-memory.ts",
-    "load-memory": "node --env-file-if-exists=.env src/load-memory.ts"
+    "load-memory": "node --env-file-if-exists=.env src/load-memory.ts",
+    "stopwords": "node src/stopwords.ts"
   },
   "dependencies": {
     "@arizeai/openinference-instrumentation-openai": "4.1.9",

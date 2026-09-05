@@ -25,7 +25,7 @@ import { DEFAULT_TRAIN_MANIFEST, loadFrozenSample } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
 import { RECALL_LIMIT } from "./memory/memory.ts";
 import { FileMemory, parseRecallMode } from "./memory/file/memory.ts";
-import { loadRows } from "./osv5m.ts";
+import { loadLabels } from "./osv5m.ts";
 import { reflect } from "./reflect.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
@@ -42,9 +42,74 @@ const snapshotEvery = Number(flag("snapshot-every", "10"));
 const recallMode = parseRecallMode(flag("recall", "all"));
 const twoStep = process.argv.includes("--two-step");
 
-const { rows: pool } = await loadRows();
+const { rows: pool } = await loadLabels();
 const corpus = await loadFrozenSample(pool, flag("manifest", DEFAULT_TRAIN_MANIFEST), "train");
-const rows = limit > 0 ? corpus.rows.slice(0, limit) : corpus.rows;
+
+/**
+ * Aim the stream at the countries the benchmark will actually score.
+ *
+ * The frozen corpora already match country for country, which is what makes a lesson
+ * scoreable at all. Aiming narrows that further: the eval corpus is 147 countries with
+ * a long tail, and training uniformly across it spends most of the run on countries
+ * that appear once.
+ *
+ * Countries, not regions, even though a lesson names a region. The eval corpus holds
+ * 512 regions across 863 frames - 1.7 frames per region - so a per-region split of the
+ * result would compare groups of one. Country is the smallest unit that yields groups
+ * worth reading. What a lesson says and how the result is grouped are different
+ * questions: the lesson stays regional because that is where the error lives, and the
+ * report groups by country because that is where the sample size lives.
+ */
+const countriesFrom = flag("countries-from", "");
+let rows = corpus.rows;
+let targetCountries = new Set<string>();
+
+if (countriesFrom !== "") {
+  const evalHead = Number(flag("eval-head", "0"));
+  const countryCount = Number(flag("countries", "15"));
+  const perCountry = Number(flag("per-country", "5"));
+
+  const evalCorpus = await loadFrozenSample(pool, countriesFrom, "eval");
+  const evalRows = evalHead > 0 ? evalCorpus.rows.slice(0, evalHead) : evalCorpus.rows;
+
+  const frequency = new Map<string, number>();
+  for (const row of evalRows) {
+    if (row.country.trim() === "") continue;
+    frequency.set(row.country, (frequency.get(row.country) ?? 0) + 1);
+  }
+  const ranked = [...frequency.entries()]
+    .sort(([a, ca], [b, cb]) => cb - ca || (a < b ? -1 : 1))
+    .slice(0, countryCount);
+  targetCountries = new Set(ranked.map(([country]) => country));
+
+  const picked: typeof corpus.rows = [];
+  const taken = new Map<string, number>();
+  const short: string[] = [];
+  for (const row of corpus.rows) {
+    if (!targetCountries.has(row.country)) continue;
+    const used = taken.get(row.country) ?? 0;
+    if (used >= perCountry) continue;
+    taken.set(row.country, used + 1);
+    picked.push(row);
+  }
+  for (const [country] of ranked) {
+    const got = taken.get(country) ?? 0;
+    if (got < perCountry) short.push(`${country} ${got}/${perCountry}`);
+  }
+  rows = picked;
+
+  const covered = ranked.reduce((sum, [, count]) => sum + count, 0);
+  console.log(
+    `aim      top ${targetCountries.size} countries of ${frequency.size} in ${evalRows.length} eval frames, ` +
+      `up to ${perCountry} train frames each`,
+  );
+  console.log(`targets  ${ranked.map(([c, n]) => `${c}(${n})`).join(" ")}`);
+  console.log(`covers   ${covered} of ${evalRows.length} eval frames (${((covered / evalRows.length) * 100).toFixed(0)}%)`);
+  if (short.length > 0) console.log(`short    ${short.join(", ")}`);
+} else if (limit > 0) {
+  rows = corpus.rows.slice(0, limit);
+}
+if (countriesFrom !== "" && limit > 0) rows = rows.slice(0, limit);
 
 const memory = new FileMemory(undefined, recallMode);
 
@@ -57,6 +122,9 @@ console.log(
 
 let learned = 0;
 let refused = 0;
+// Refusals are counted by reason: a store that stays empty because every lesson was
+// rejected looks identical to one that was never trained, and only this tells them apart.
+const refusals = new Map<string, number>();
 const distances: number[] = [];
 
 for (const [index, row] of rows.entries()) {
@@ -73,19 +141,30 @@ for (const [index, row] of rows.entries()) {
       });
       distances.push(distanceKm);
 
-      const lesson = await reflect({
+      const outcome = await reflect({
         attemptId,
         imagePath: row.imagePath,
         guess: { latitude: guess.latitude, longitude: guess.longitude, place: guess.place },
-        truth: { latitude: row.latitude, longitude: row.longitude, country: row.country },
+        truth: {
+          latitude: row.latitude,
+          longitude: row.longitude,
+          country: row.country,
+          region: row.region,
+          subRegion: row.subRegion,
+          city: row.city,
+        },
         distanceKm,
       });
 
-      if (lesson === null) {
+      if (!outcome.ok) {
         refused++;
+        refusals.set(outcome.reason, (refusals.get(outcome.reason) ?? 0) + 1);
+        console.log(
+          `         refused ${outcome.reason}${outcome.detail === "" ? "" : `: ${outcome.detail.slice(0, 60)}`}`,
+        );
         return;
       }
-      await memory.remember(lesson);
+      await memory.remember(outcome.lesson);
       learned++;
     },
   });
@@ -114,7 +193,11 @@ const median = sorted.length === 0 ? Number.NaN : (sorted[sorted.length >> 1] ??
 console.log("---");
 console.log(`attempts scored   ${distances.length}/${rows.length}`);
 console.log(`median distance   ${median.toFixed(1)} km  (training stream, not a benchmark)`);
-console.log(`lessons written   ${learned}, reflection produced nothing ${refused} times`);
+console.log(`lessons written   ${learned}, refused ${refused}`);
+if (refusals.size > 0) {
+  const byReason = [...refusals.entries()].sort(([, a], [, b]) => b - a);
+  console.log(`refusals          ${byReason.map(([r, c]) => `${r}=${c}`).join(", ")}`);
+}
 console.log(`memory size       ${await memory.size()} lessons`);
 console.log(`final snapshot    ${finalSnapshot}`);
 console.log(`evaluate it with  npm run experiment -- --snapshot ${finalSnapshot} --concurrency 1`);

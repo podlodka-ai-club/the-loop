@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { RECALL_LIMIT, renderHint } from "../memory.ts";
+import { loadStopwords } from "../../stopwords.ts";
 import type { Hint, Lesson, LessonInput, Memory } from "../memory.ts";
 
 export const MEMORY_DIR = process.env.MEMORY_DIR ?? join("data", "memory");
@@ -35,16 +36,34 @@ export function parseRecallMode(value: string): RecallMode {
   throw new Error(`unknown recall mode "${value}", expected one of ${RECALL_MODES.join("|")}`);
 }
 
-/** Lowercased word set, so ranking compares features the way they were written. */
-function tokenize(values: readonly string[]): Set<string> {
+/**
+ * Words that carry a match, which is every word except the ones that carry none.
+ *
+ * Raw overlap gave the match to whichever lesson used the most ordinary vocabulary.
+ * An observation names all twelve slots, so `road`, `terrain` and `vegetation` sit in
+ * 100% of frames and `grey`, `green`, `flat` in over 85%; a lesson triggered on
+ * "paved road" scored on every frame on Earth. With those dropped, a match has to
+ * happen on something the frame actually distinguishes.
+ */
+function tokenize(values: readonly string[], stopwords: ReadonlySet<string>): Set<string> {
   const tokens = new Set<string>();
   for (const value of values) {
     for (const token of value.toLowerCase().split(/[^a-z0-9]+/)) {
-      if (token.length > 2) tokens.add(token);
+      if (token.length > 2 && !stopwords.has(token)) tokens.add(token);
     }
   }
   return tokens;
 }
+
+/**
+ * How many rare triggers a lesson must share with the observation to be shown.
+ *
+ * One was too few even after stopwords: a single incidental word opens the prompt to
+ * a rule about somewhere else, and a measurement on 430 frames found 97% of them
+ * receiving hints regardless of relevance. Two forces the lesson and the frame to
+ * agree on more than a coincidence.
+ */
+const MIN_OVERLAP = Number(process.env.MEMORY_MIN_OVERLAP ?? 2);
 
 function parseLessons(text: string): Lesson[] {
   const lessons: Lesson[] = [];
@@ -96,31 +115,28 @@ export class FileMemory implements Memory {
       return every.map(renderHint);
     }
 
-    const query = tokenize(features);
+    const stopwords = await loadStopwords();
+    const query = tokenize(features, stopwords);
 
-    // NOT retrieval. With no observed features there is no query to rank against, so
-    // this returns the most-applied lessons - the same set for every task, i.e. a
-    // global prior. It is listed under `top` for continuity, but read it as "the
-    // memory the agent always carries", not "the memory relevant to this image".
-    // Real ranking needs a query, which needs something to have looked at the frame
-    // first - see the two-step mode.
-    if (query.size === 0) {
-      const prior = lessons
-        .slice()
-        .sort((a, b) => b.hits - a.hits || (a.id < b.id ? -1 : 1))
-        .slice(0, limit);
-      await this.countHits(prior.map((lesson) => lesson.id));
-      return prior.map(renderHint);
-    }
+    // No query, no hints.
+    //
+    // This used to fall back to the most-applied lessons - the same set for every
+    // frame, a standing prior rather than retrieval. A prior is exactly what the
+    // 863-frame run showed to be harmful: naming 61 regions in every prompt put the
+    // prediction inside one of them on 75% of frames against 5% without memory, and
+    // on 67% of the frames whose true country no lesson mentions. Memory acted as a
+    // menu and the model ordered from it. A frame that matches nothing must therefore
+    // see nothing, so that no menu exists where no lesson applies.
+    if (query.size === 0) return [];
 
     const ranked = lessons
       .map((lesson) => {
-        const triggers = tokenize(lesson.triggers);
+        const triggers = tokenize(lesson.triggers, stopwords);
         let overlap = 0;
         for (const token of triggers) if (query.has(token)) overlap++;
         return { lesson, overlap };
       })
-      .filter((entry) => entry.overlap > 0)
+      .filter((entry) => entry.overlap >= MIN_OVERLAP)
       // Ties break on id so the order never depends on file order or Map iteration.
       .sort((a, b) => b.overlap - a.overlap || (a.lesson.id < b.lesson.id ? -1 : 1))
       .slice(0, limit);
