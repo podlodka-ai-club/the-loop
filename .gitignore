@@ -16,7 +16,9 @@ tmp/
 !benchmark/images/eval/*.jpg
 !benchmark/images/train/*.jpg
 
-runs/
+# Только в корне: выгрузка прогонов лежит в data/runs и коммитится, иначе числа
+# отчётов нельзя ни проверить, ни пересчитать на другой машине.
+/runs/
 checkpoints/
 *.sqlite
 *.sqlite3
