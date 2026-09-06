@@ -16,6 +16,10 @@ tmp/
 !benchmark/images/eval/*.jpg
 !benchmark/images/train/*.jpg
 
+# Витрина возит с собой свои 25 кадров: иначе демка не запустится без
+# датасета в 116 МБ, который для неё скачивать незачем.
+!demo/public/frames/*.jpg
+
 # Только в корне: выгрузка прогонов лежит в data/runs и коммитится, иначе числа
 # отчётов нельзя ни проверить, ни пересчитать на другой машине.
 /runs/
@@ -28,6 +32,7 @@ node_modules/
 dist/
 build/
 .next/
+demo/out/
 coverage/
 *.tsbuildinfo
 
