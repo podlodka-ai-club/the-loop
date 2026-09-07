@@ -1,0 +1,430 @@
+{"id":"1006442963094082","country":"RU","lat":50.45,"lon":30.52,"place":"Ukraine","errorKm":994.162,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1008151256597783","country":"SR","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":17724.678,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1012908519242002","country":"EE","lat":54.5,"lon":25,"place":"Lithuania","errorKm":399.081,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1018847975519309","country":"NZ","lat":51.2,"lon":-113.5,"place":"Alberta, Canada","errorKm":12086.417,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1029000427630876","country":"VN","lat":21,"lon":102,"place":"Yunnan Province, China","errorKm":224.673,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1031017470764576","country":"NO","lat":61.5,"lon":25,"place":"Finland","errorKm":847.489,"hintCount":3,"hintIds":["lesson-0038","lesson-0024","lesson-0042"],"provider":"Novita"}
+{"id":"103556902367710","country":"PT","lat":38.52,"lon":-28.6,"place":"Azores, Portugal (specifically São Miguel Island)","errorKm":38.967,"hintCount":1,"hintIds":["lesson-0004"],"provider":"Novita"}
+{"id":"1047222609015689","country":"RO","lat":48,"lon":25,"place":"Ukraine","errorKm":349.714,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1064734917398395","country":"ES","lat":40.4168,"lon":-3.7038,"place":"Madrid, Spain","errorKm":333.513,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1065955857261804","country":"DE","lat":51.05,"lon":13.73,"place":"Saxony, Germany","errorKm":279.965,"hintCount":2,"hintIds":["lesson-0004","lesson-0040"],"provider":"Novita"}
+{"id":"1070256200421131","country":"DE","lat":52.3676,"lon":4.9041,"place":"Netherlands","errorKm":124.449,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1091149901410323","country":"RU","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":1703.603,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1091710211410691","country":"TZ","lat":-1.286389,"lon":36.817222,"place":"Kenya","errorKm":674.954,"hintCount":2,"hintIds":["lesson-0005","lesson-0040"],"provider":"Novita"}
+{"id":"1092316461289679","country":"TV","lat":-10,"lon":140,"place":"Micronesia/Melanesia region, South Pacific Islands","errorKm":4016.773,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1103990750088126","country":"BG","lat":45.5,"lon":15,"place":"Central Europe (likely Slovenia or Austria)","errorKm":801.594,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"1104473520059663","country":"IN","lat":12.9716,"lon":77.5946,"place":"Bangalore, India","errorKm":883.92,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1116575888852919","country":"CO","lat":-12.046374,"lon":-77.042793,"place":"Lima, Peru","errorKm":1719.24,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1120270815116474","country":"CA","lat":43.6,"lon":-97.3,"place":"Nebraska, USA","errorKm":1321.82,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"1121001268411069","country":"ZW","lat":-1.286389,"lon":36.817222,"place":"Kenya","errorKm":1932.211,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1122011428298451","country":"MY","lat":4.2105,"lon":101.9758,"place":"Malaysia (likely Pahang or Perak region)","errorKm":1803.861,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"1123672604793334","country":"LA","lat":13.7563,"lon":100.5018,"place":"Thailand","errorKm":697.867,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"112457330915171","country":"CL","lat":25,"lon":121,"place":"Taiwan","errorKm":17686.311,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1126237321187202","country":"NC","lat":-19.5,"lon":-43.5,"place":"Minas Gerais, Brazil","errorKm":14365.548,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1126593901175057","country":"CN","lat":25,"lon":110,"place":"China","errorKm":137.767,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1126705471169466","country":"US","lat":39.7,"lon":-105.6,"place":"Colorado, USA","errorKm":149.194,"hintCount":2,"hintIds":["lesson-0039","lesson-0040"],"provider":"Novita"}
+{"id":"112743438227050","country":"IN","lat":27.1767,"lon":78.0233,"place":"Uttar Pradesh, India","errorKm":339.872,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1130181491104016","country":"NZ","lat":-41.4,"lon":174.1,"place":"New Zealand","errorKm":484.502,"hintCount":2,"hintIds":["lesson-0066","lesson-0024"],"provider":"Novita"}
+{"id":"1131077874025398","country":"CN","lat":39.9042,"lon":116.4074,"place":"Beijing, China","errorKm":563.953,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1132427237220294","country":"GB","lat":52.3,"lon":-1.5,"place":"United Kingdom","errorKm":202.675,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1138176703415940","country":"ET","lat":-1.286389,"lon":36.817222,"place":"Kenya","errorKm":1007.632,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1143843042770618","country":"ET","lat":19.4326,"lon":-99.1332,"place":"Mexico City, Mexico","errorKm":14222.857,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1144014676099783","country":"TH","lat":13.7563,"lon":100.5018,"place":"Thailand","errorKm":365.55,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1147497572381215","country":"IN","lat":0,"lon":110,"place":"West Kalimantan, Indonesia","errorKm":3381.039,"hintCount":1,"hintIds":["lesson-0050"],"provider":"Novita"}
+{"id":"1152955628487775","country":"NZ","lat":-41.2,"lon":174.8,"place":"New Zealand","errorKm":324.086,"hintCount":3,"hintIds":["lesson-0038","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"1160012417846641","country":"KH","lat":-8.4095,"lon":115.1889,"place":"Bali, Indonesia","errorKm":2555.741,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1161883980902774","country":"CL","lat":-41.133,"lon":-71.403,"place":"Los Lagos Region, Chile","errorKm":574.905,"hintCount":1,"hintIds":["lesson-0038"],"provider":"Novita"}
+{"id":"1164121807342361","country":"GB","lat":53.4,"lon":-2.1,"place":"United Kingdom","errorKm":321.343,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1164915830597485","country":"KZ","lat":43.222,"lon":76.8512,"place":"Almaty, Kazakhstan","errorKm":601.372,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"1170015203451379","country":"LK","lat":10.5,"lon":76.5,"place":"Western Ghats, Kerala, India","errorKm":604.727,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1175339142919391","country":"US","lat":38.8951,"lon":-77.0364,"place":"Virginia, USA","errorKm":1906.287,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1177148412766758","country":"AT","lat":47.5,"lon":11.5,"place":"Austria","errorKm":301.803,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1177418063190229","country":"AU","lat":-34,"lon":148,"place":"New South Wales, Australia","errorKm":693.029,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1178210155947563","country":"DE","lat":51.5,"lon":-0.1,"place":"United Kingdom","errorKm":437.79,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1180300995725561","country":"LY","lat":30.0444,"lon":31.2357,"place":"Cairo, Egypt","errorKm":1556.456,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1183839742042258","country":"DE","lat":48,"lon":11,"place":"Bavaria, Germany","errorKm":359.682,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1184620001969317","country":"BA","lat":46,"lon":12,"place":"The Alps, Europe","errorKm":468.897,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1187737001672836","country":"PH","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":996.398,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1189051474971092","country":"TN","lat":33.3128,"lon":44.3661,"place":"Iraq","errorKm":3160.434,"hintCount":2,"hintIds":["lesson-0013","lesson-0024"],"provider":"Novita"}
+{"id":"1189337111537240","country":"RU","lat":62.15,"lon":105.32,"place":"Yakutsk, Russia","errorKm":1893.332,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1190405568087928","country":"FI","lat":62,"lon":25,"place":"Finland","errorKm":115.384,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1196965714081763","country":"CA","lat":45.5,"lon":-70,"place":"Maine, USA","errorKm":660.469,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1209693096130779","country":"CN","lat":30,"lon":110,"place":"China","errorKm":490.38,"hintCount":2,"hintIds":["lesson-0013","lesson-0032"],"provider":"Novita"}
+{"id":"1211029049684170","country":"US","lat":39.2904,"lon":-76.6129,"place":"Virginia, USA","errorKm":78.379,"hintCount":2,"hintIds":["lesson-0004","lesson-0040"],"provider":"Novita"}
+{"id":"1214929965612005","country":"CL","lat":46.5,"lon":10.5,"place":"Italian Alps, Northern Italy","errorKm":12840.127,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1235385536881300","country":"GM","lat":12.5,"lon":-15,"place":"Mali","errorKm":122.58,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"126441536100385","country":"LV","lat":56.9496,"lon":24.1595,"place":"Estonia","errorKm":120.379,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1276483382745877","country":"BR","lat":-19.5,"lon":-43.5,"place":"Minas Gerais, Brazil","errorKm":813.383,"hintCount":4,"hintIds":["lesson-0005","lesson-0038","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"129370972468156","country":"EE","lat":56,"lon":20,"place":"Sweden","errorKm":583.077,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"129873539134666","country":"DE","lat":50.1109,"lon":8.6821,"place":"Hesse, Germany","errorKm":241.37,"hintCount":1,"hintIds":["lesson-0038"],"provider":"Novita"}
+{"id":"130512185793024","country":"SZ","lat":-18.5,"lon":-44.5,"place":"Minas Gerais, Brazil","errorKm":7761.466,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"131999275926838","country":"GR","lat":35.145,"lon":24.25,"place":"Englouvi, Kefalonia, Greece","errorKm":515.788,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"134581041992754","country":"MA","lat":41.8,"lon":12.5,"place":"Rome, Italy","errorKm":1723.506,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"135246411916355","country":"LV","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":752.663,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1354583788248121","country":"DK","lat":52.37,"lon":4.89,"place":"Netherlands","errorKm":632.103,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"135994178547304","country":"NZ","lat":-38,"lon":175,"place":"New Zealand","errorKm":687.121,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"136042991893165","country":"DE","lat":52.2297,"lon":21.0122,"place":"Poland","errorKm":827.727,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"136179898501082","country":"US","lat":30.4515,"lon":-91.1871,"place":"Louisiana, USA","errorKm":248.653,"hintCount":2,"hintIds":["lesson-0004","lesson-0040"],"provider":"Novita"}
+{"id":"136438981813441","country":"ME","lat":42.5,"lon":20,"place":"Balkans, likely Serbia or Montenegro","errorKm":124.731,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1365013680547445","country":"CD","lat":-18.5,"lon":-44.5,"place":"Minas Gerais, Brazil","errorKm":6746.652,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"136712805150724","country":"GR","lat":37.8,"lon":24.2,"place":"Greece","errorKm":332.22,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"137493051740553","country":"IN","lat":10.8505,"lon":76.2711,"place":"Kerala, India","errorKm":515.43,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"137825741697799","country":"ID","lat":-2.5,"lon":118,"place":"Sulawesi, Indonesia","errorKm":2131.527,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1387300531669648","country":"US","lat":21.3069,"lon":-157.8583,"place":"Oahu, Hawaii, USA","errorKm":260.117,"hintCount":3,"hintIds":["lesson-0005","lesson-0023","lesson-0040"],"provider":"Novita"}
+{"id":"1388061898238917","country":"VE","lat":-19.9167,"lon":-43.9333,"place":"Minas Gerais, Brazil","errorKm":4197.04,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1391426417857280","country":"PR","lat":-19,"lon":-43,"place":"Minas Gerais, Brazil","errorKm":4840.64,"hintCount":4,"hintIds":["lesson-0005","lesson-0038","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"139213344933709","country":"GR","lat":42.5,"lon":24.5,"place":"Bulgaria","errorKm":263.002,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1393520891013909","country":"FR","lat":48.8566,"lon":2.3522,"place":"France","errorKm":485.071,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1396093627435658","country":"CN","lat":36.064,"lon":103.825,"place":"Shanxi University of Traditional Chinese Medicine, Taiyuan, Shanxi, China","errorKm":806.881,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"139652154808008","country":"PH","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":634.003,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"139768914837931","country":"PH","lat":14.676,"lon":120.95,"place":"Cavite, Philippines","errorKm":143.869,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"1398463280524268","country":"CN","lat":28.2,"lon":112.1,"place":"Hunan Province, China","errorKm":383.928,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"139875294911908","country":"AU","lat":-31.25,"lon":115.85,"place":"Western Australia, Australia","errorKm":2636.959,"hintCount":1,"hintIds":["lesson-0023"],"provider":"Novita"}
+{"id":"1403576646685471","country":"DO","lat":18.4,"lon":-73.9,"place":"Dominican Republic","errorKm":436.39,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"1408960799476554","country":"CR","lat":18.5,"lon":-101.5,"place":"Mexico","errorKm":1985.41,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"141232107987551","country":"FR","lat":46.5,"lon":-1.2,"place":"Brittany, France","errorKm":125.56,"hintCount":1,"hintIds":["lesson-0032"],"provider":"Novita"}
+{"id":"142373077791070","country":"NO","lat":60.3913,"lon":5.3233,"place":"Norway","errorKm":181.65,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"1425251004499456","country":"BE","lat":52.3,"lon":-1.5,"place":"United Kingdom","errorKm":584.71,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"142796797834461","country":"JP","lat":35.3606,"lon":138.7315,"place":"Japan","errorKm":760.01,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"142884571092652","country":"UZ","lat":34,"lon":45,"place":"Iraq","errorKm":2406.696,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1429218644089225","country":"LB","lat":30.0444,"lon":31.2357,"place":"Cairo, Egypt","errorKm":576.079,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1439933133146632","country":"HN","lat":-18.5,"lon":-44.5,"place":"Minas Gerais, Brazil","errorKm":5897.382,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1445834062461560","country":"US","lat":36,"lon":-90,"place":"United States (Midwest/South)","errorKm":315.236,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"146195574141934","country":"AX","lat":59.3293,"lon":24.7531,"place":"Finland","errorKm":294.952,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"147014920777975","country":"ET","lat":12.9716,"lon":77.5946,"place":"Bangalore, India","errorKm":4312.998,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1476883635976321","country":"DE","lat":46.8,"lon":10.2,"place":"Italian Alps, Northern Italy","errorKm":88.38,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"147879100588220","country":"US","lat":38.8951,"lon":-77.0364,"place":"Virginia, USA","errorKm":615.581,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"147909180916541","country":"CW","lat":20.6,"lon":-89.2,"place":"Quintana Roo, Mexico","errorKm":2328.146,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1483206522040932","country":"US","lat":39.9612,"lon":-82.9988,"place":"Ohio, USA","errorKm":64.878,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"148485914437121","country":"GB","lat":58.5,"lon":-6.5,"place":"Scottish Highlands, Scotland","errorKm":13.331,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1493115117698219","country":"IN","lat":22.5726,"lon":88.3639,"place":"Kolkata, India","errorKm":6.43,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"149428817193873","country":"BY","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":697.348,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"150417673725625","country":"RU","lat":55.7558,"lon":37.6173,"place":"Moscow, Russia","errorKm":3836.472,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"151107490297043","country":"ES","lat":43.6,"lon":1.4,"place":"France","errorKm":826.82,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"151890693617320","country":"UZ","lat":39.9,"lon":66.9,"place":"Tashkent, Uzbekistan","errorKm":382.005,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"152816180141550","country":"AR","lat":-25,"lon":133,"place":"Northern Territory, Australia","errorKm":13955.673,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"154770379860078","country":"ZA","lat":-18.5,"lon":-44.5,"place":"Minas Gerais, Brazil","errorKm":7395.145,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"155250306487512","country":"JP","lat":35.6895,"lon":139.6917,"place":"Japan","errorKm":36.11,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1558183964379807","country":"JP","lat":35.6895,"lon":139.6917,"place":"Japan","errorKm":264.599,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"157031423048221","country":"IR","lat":34.3615,"lon":69.1775,"place":"Kabul, Afghanistan","errorKm":1938.074,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"157593746266435","country":"MX","lat":18.4,"lon":-70.1,"place":"Dominican Republic","errorKm":2806.865,"hintCount":4,"hintIds":["lesson-0004","lesson-0005","lesson-0023","lesson-0040"],"provider":"Novita"}
+{"id":"1577226569370154","country":"GB","lat":45.4,"lon":-75.7,"place":"Ontario, Canada","errorKm":4892.23,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"158132112908913","country":"AU","lat":-37.8136,"lon":144.9631,"place":"Australia","errorKm":570.43,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"158146696254945","country":"LV","lat":61.5,"lon":25,"place":"Finland","errorKm":449.818,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"158605456212036","country":"ZA","lat":-25.7479,"lon":28.2293,"place":"Gauteng, South Africa","errorKm":652.033,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"158692939530231","country":"RU","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":834.5,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"158888306191707","country":"BR","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":7207.046,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"159028862834350","country":"LA","lat":18.5,"lon":99,"place":"Northern Thailand / Laos border region","errorKm":470.337,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"159105832811230","country":"US","lat":36.5,"lon":-83.5,"place":"Tennessee, USA","errorKm":938.204,"hintCount":4,"hintIds":["lesson-0004","lesson-0038","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"159525386128392","country":"KZ","lat":24.5,"lon":46.5,"place":"Saudi Arabia","errorKm":3530.717,"hintCount":1,"hintIds":["lesson-0023"],"provider":"Novita"}
+{"id":"159761279437863","country":"EG","lat":48.8566,"lon":2.3522,"place":"Paris, France","errorKm":3200.96,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1598164197048796","country":"BY","lat":61.5,"lon":25,"place":"Finland","errorKm":1109.63,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"160112219383700","country":"IT","lat":37.9,"lon":23.7,"place":"Greece","errorKm":614.325,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"161535355977143","country":"CN","lat":42.6,"lon":20.9,"place":"North Macedonia, near Skopje/Mount Vodno area","errorKm":7489.137,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"161781359227704","country":"PT","lat":-34.6037,"lon":-58.3816,"place":"Argentina","errorKm":9592.738,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"162958062431015","country":"IR","lat":35.72,"lon":51.42,"place":"Tehran, Iran","errorKm":216.705,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"1630798687296770","country":"BR","lat":-15.7942,"lon":-47.8822,"place":"Brasília, Brazil","errorKm":1313.29,"hintCount":2,"hintIds":["lesson-0005","lesson-0011"],"provider":"Novita"}
+{"id":"163761962352185","country":"PH","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":998.034,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"163884055548625","country":"IT","lat":43.7696,"lon":11.2558,"place":"Tuscany, Italy","errorKm":229.293,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"164221108885342","country":"BW","lat":-8.5,"lon":-37.5,"place":"Pernambuco, Brazil","errorKm":6909.532,"hintCount":3,"hintIds":["lesson-0023","lesson-0024","lesson-0040"],"provider":"Novita"}
+{"id":"1643265869364202","country":"GF","lat":19.1736,"lon":-96.1342,"place":"Veracruz, Mexico","errorKm":4957.014,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"165185892204000","country":"FR","lat":48.8566,"lon":2.3522,"place":"France","errorKm":467.105,"hintCount":2,"hintIds":["lesson-0004","lesson-0024"],"provider":"Novita"}
+{"id":"1659240644287113","country":"ML","lat":14.4974,"lon":-14.1497,"place":"Mali","errorKm":294.443,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1662939457232665","country":"HU","lat":52,"lon":25,"place":"Poland","errorKm":621.248,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1673653542820152","country":"TW","lat":14.1,"lon":121,"place":"Philippines","errorKm":1040.264,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"167718382020564","country":"UZ","lat":41.3275,"lon":46.4058,"place":"Georgia (Country)","errorKm":1905.204,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"169008891895196","country":"KZ","lat":45,"lon":40,"place":"Russia","errorKm":1894.359,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1693937444111846","country":"CN","lat":30,"lon":103,"place":"Sichuan Province, China","errorKm":476.611,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"169750721734147","country":"GH","lat":5.6037,"lon":-0.187,"place":"Ghana","errorKm":262.904,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"169809631708315","country":"ID","lat":-6.2,"lon":106.8,"place":"Indonesia","errorKm":22.465,"hintCount":1,"hintIds":["lesson-0014"],"provider":"Novita"}
+{"id":"170121545022782","country":"PH","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":169.235,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"170377084996913","country":"IN","lat":28.6139,"lon":77.209,"place":"New Delhi, India","errorKm":2.758,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"170436974874458","country":"CI","lat":12.9716,"lon":77.5946,"place":"Bangalore, India","errorKm":8953.153,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"170627021732035","country":"MZ","lat":12.5,"lon":-1.5,"place":"Mali","errorKm":5356.785,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1707219116145089","country":"IN","lat":31.1,"lon":-6.5,"place":"Atlas Mountains, Morocco","errorKm":7674.623,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"171205434904052","country":"MM","lat":16.8409,"lon":96.194,"place":"Yangon, Myanmar","errorKm":597.278,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"171561661636674","country":"DZ","lat":33.8869,"lon":1.6215,"place":"Algeria","errorKm":1160.095,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"171612628226489","country":"KZ","lat":44,"lon":75,"place":"Kazakhstan","errorKm":1504.736,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"1720278514846210","country":"PL","lat":52.52,"lon":13.405,"place":"Germany","errorKm":625.48,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"173564341337493","country":"VN","lat":14.1,"lon":101.5,"place":"Thailand","errorKm":664.349,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1736828856665678","country":"GB","lat":48.8566,"lon":2.3522,"place":"France","errorKm":561.344,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"174074521260701","country":"BR","lat":-12.97,"lon":-38.5,"place":"Salvador, Bahia, Brazil","errorKm":1325.388,"hintCount":1,"hintIds":["lesson-0032"],"provider":"Novita"}
+{"id":"174252961271063","country":"IN","lat":23.8103,"lon":90.4125,"place":"Bangladesh","errorKm":313.436,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"174311024576087","country":"SA","lat":36.65,"lon":117.12,"place":"Shandong Province, China","errorKm":7341.187,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"1745728595619168","country":"MX","lat":16.5,"lon":120.8,"place":"Baguio, Philippines","errorKm":13940.283,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"174598754536869","country":"US","lat":45.5,"lon":-73.5,"place":"Quebec, Canada","errorKm":1207.368,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"174945111245316","country":"TW","lat":36.65,"lon":117.12,"place":"Shandong Province, China","errorKm":1512.159,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"175031294492607","country":"PH","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":14482.199,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"175537637784328","country":"MM","lat":28.6139,"lon":77.209,"place":"Delhi, India","errorKm":1959.193,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1771062003074588","country":"US","lat":38.5,"lon":-80.5,"place":"West Virginia, USA","errorKm":545.232,"hintCount":5,"hintIds":["lesson-0038","lesson-0005","lesson-0024","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"177701347549948","country":"FR","lat":48.4,"lon":-3,"place":"Brittany, France","errorKm":772.293,"hintCount":1,"hintIds":["lesson-0032"],"provider":"Novita"}
+{"id":"178039811262004","country":"PA","lat":-17.713,"lon":-149.432,"place":"Hawaii, USA","errorKm":8141.338,"hintCount":1,"hintIds":["lesson-0004"],"provider":"Novita"}
+{"id":"1780594512112629","country":"US","lat":21.3069,"lon":-157.8583,"place":"Kauai, Hawaii, USA","errorKm":322.392,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"1780901782109758","country":"CO","lat":-19,"lon":-43,"place":"Minas Gerais, Brazil","errorKm":4404.027,"hintCount":5,"hintIds":["lesson-0005","lesson-0032","lesson-0038","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"178794467427755","country":"PH","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":565.805,"hintCount":5,"hintIds":["lesson-0004","lesson-0014","lesson-0024","lesson-0038","lesson-0040"],"provider":"Novita"}
+{"id":"1793163654186784","country":"KG","lat":44,"lon":102,"place":"Alberta, Canada","errorKm":2130.471,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"1815096498651336","country":"FI","lat":62,"lon":25,"place":"Finland","errorKm":159.824,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"182131727098634","country":"BY","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":581.171,"hintCount":2,"hintIds":["lesson-0005","lesson-0058"],"provider":"Novita"}
+{"id":"182876234213369","country":"FR","lat":50.1109,"lon":8.6821,"place":"Germany","errorKm":501.991,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"183175620241096","country":"ML","lat":24,"lon":15,"place":"Libya","errorKm":2961.818,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"184973323541284","country":"RU","lat":61.5,"lon":25,"place":"Finland","errorKm":1501.239,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"185642386644036","country":"AR","lat":25.6,"lon":-100.1,"place":"Nuevo León, Mexico","errorKm":6718.991,"hintCount":1,"hintIds":["lesson-0039"],"provider":"Novita"}
+{"id":"1860299624120339","country":"GR","lat":41.8,"lon":12.5,"place":"Italy","errorKm":896.464,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"186032050061168","country":"ES","lat":40.4168,"lon":-3.7038,"place":"Spain","errorKm":77.146,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"187252186585450","country":"CN","lat":30.5,"lon":114.3,"place":"China","errorKm":680.27,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"187357749878004","country":"SE","lat":62,"lon":-100,"place":"Northern Canada/Alaska (Boreal Forest region)","errorKm":5236.69,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"187510273226579","country":"BD","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":3116.433,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1876235305878116","country":"MX","lat":37.9,"lon":23.7,"place":"Greece","errorKm":11312.127,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"187946436516335","country":"PH","lat":14.5995,"lon":120.9844,"place":"Philippines","errorKm":627.604,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"188212123171032","country":"ES","lat":33.5731,"lon":-7.5898,"place":"Casablanca, Morocco","errorKm":754.316,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"1886455711510400","country":"BY","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":693.285,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"189428559691942","country":"SE","lat":62,"lon":20,"place":"Finland","errorKm":667.732,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"189606749553432","country":"DK","lat":52.5,"lon":13.4,"place":"Germany","errorKm":496.095,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"190237626258692","country":"JP","lat":43.06417,"lon":142.69185,"place":"Hokkaido, Japan","errorKm":83.563,"hintCount":2,"hintIds":["lesson-0005","lesson-0040"],"provider":"Novita"}
+{"id":"1907093542773318","country":"US","lat":35.2271,"lon":-80.8431,"place":"North Carolina, USA","errorKm":423.62,"hintCount":2,"hintIds":["lesson-0011","lesson-0040"],"provider":"Novita"}
+{"id":"1927683270730472","country":"US","lat":30.4,"lon":-91.1,"place":"Louisiana, USA","errorKm":793.553,"hintCount":3,"hintIds":["lesson-0004","lesson-0007","lesson-0040"],"provider":"Novita"}
+{"id":"193926169236501","country":"RU","lat":43.5,"lon":41.5,"place":"Caucasus Mountains, Russia/Georgia border region","errorKm":3401.268,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"1944812625672708","country":"RU","lat":62,"lon":105,"place":"Siberia, Russia","errorKm":3084.655,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"195747125727940","country":"AU","lat":-23.5,"lon":133,"place":"Australian Outback, Northern Territory/South Australia border region","errorKm":1378.427,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"195815242271672","country":"IR","lat":35.6892,"lon":51.389,"place":"Iran","errorKm":224.434,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"195867145699202","country":"EE","lat":56.8,"lon":24.5,"place":"Estonia","errorKm":339.81,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"196119892346077","country":"CO","lat":19.1,"lon":-96.2,"place":"Veracruz, Mexico","errorKm":2851.41,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"196237278985102","country":"PT","lat":39.6,"lon":-2.4,"place":"Spain (likely near the Sierra Morena or Central System)","errorKm":442.188,"hintCount":3,"hintIds":["lesson-0034","lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"197101258915336","country":"KI","lat":17.9,"lon":-88.2,"place":"Roatán, Honduras","errorKm":10874.737,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"197115765571377","country":"AT","lat":46.6,"lon":10.5,"place":"Italian Alps, South Tyrol region (likely near the Dolomites)","errorKm":216.174,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"198053762142202","country":"GB","lat":53.4808,"lon":-2.2426,"place":"United Kingdom","errorKm":148.55,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"198060348654256","country":"LV","lat":56,"lon":37,"place":"Russia","errorKm":862.116,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"201069365020895","country":"IL","lat":30.2672,"lon":-97.7431,"place":"Austin, Texas, USA","errorKm":11507.193,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"201150331634579","country":"HU","lat":45.4642,"lon":9.19,"place":"Northern Apennines, Italy","errorKm":694.536,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"202622835035834","country":"US","lat":-19.8,"lon":-155.5,"place":"Hawaii, USA","errorKm":4385.977,"hintCount":3,"hintIds":["lesson-0038","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"203704898101739","country":"MX","lat":14.6349,"lon":-90.5069,"place":"Guatemala City, Guatemala","errorKm":1085.921,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"2040891692717142","country":"TR","lat":41.0082,"lon":28.9784,"place":"Istanbul, Turkey","errorKm":178.924,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"204992844887146","country":"US","lat":38.5,"lon":-90.5,"place":"Midwestern United States (likely Missouri or Illinois)","errorKm":442.521,"hintCount":2,"hintIds":["lesson-0005","lesson-0040"],"provider":"Novita"}
+{"id":"205078488106547","country":"TR","lat":41.0082,"lon":28.9784,"place":"Istanbul, Turkey","errorKm":724.744,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"206267874414233","country":"HT","lat":-8.6,"lon":120.8,"place":"East Nusa Tenggara, Indonesia","errorKm":18079.693,"hintCount":2,"hintIds":["lesson-0044","lesson-0052"],"provider":"Novita"}
+{"id":"206463837760060","country":"TH","lat":14.1,"lon":100.5,"place":"Thailand","errorKm":214.069,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2067498383393106","country":"BF","lat":12.37,"lon":-1.65,"place":"Niger","errorKm":5.538,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"207472640957131","country":"PY","lat":-23.5505,"lon":-46.6333,"place":"São Paulo, Brazil","errorKm":932.049,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"207541424243512","country":"TM","lat":41,"lon":69,"place":"Uzbekistan","errorKm":713.625,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"209736277369047","country":"US","lat":44,"lon":-72,"place":"New Hampshire, USA","errorKm":202.463,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"210565967238121","country":"DE","lat":52.37,"lon":4.89,"place":"Netherlands","errorKm":234.472,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"211403237221313","country":"ID","lat":-8.4095,"lon":115.1889,"place":"Bali, Indonesia","errorKm":909.174,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"211570503874784","country":"PG","lat":4.5,"lon":12,"place":"Cameroon","errorKm":15044.784,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"212629767091321","country":"HR","lat":45,"lon":15,"place":"Balkans, Southeast Europe","errorKm":139.42,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"213847820302886","country":"RU","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":1254.137,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"214306493471153","country":"BR","lat":-19.8,"lon":-43.9,"place":"Minas Gerais, Brazil","errorKm":527.182,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"216054823363879","country":"DZ","lat":19.4326,"lon":-99.1332,"place":"Mexico City, Mexico","errorKm":9791.411,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"216237796705112","country":"GM","lat":12.5,"lon":-1.5,"place":"Burkina Faso","errorKm":1484.609,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"216481116655696","country":"BR","lat":-15.7801,"lon":-47.9292,"place":"Brazil","errorKm":1117.398,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"216769426571819","country":"VE","lat":-7.15,"lon":110.3,"place":"Central Java, Indonesia","errorKm":19601.685,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"216777206506805","country":"DK","lat":56,"lon":12,"place":"Denmark","errorKm":208.242,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"216863039930827","country":"IT","lat":40.4168,"lon":-3.7038,"place":"Spain","errorKm":1390.736,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"217134110228521","country":"FI","lat":61.5,"lon":25,"place":"Finland","errorKm":171.983,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"218380720054234","country":"NI","lat":14.5,"lon":-90.5,"place":"Costa Rica","errorKm":711.783,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"218846407001101","country":"RU","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":393.185,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"219296816288285","country":"SE","lat":50,"lon":14,"place":"Czech Republic","errorKm":765.825,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"219568882931619","country":"RU","lat":55.75,"lon":37.61,"place":"Russia","errorKm":212.425,"hintCount":2,"hintIds":["lesson-0004","lesson-0024"],"provider":"Novita"}
+{"id":"219912759569710","country":"CN","lat":39.9,"lon":116.4,"place":"Beijing, China","errorKm":401.816,"hintCount":1,"hintIds":["lesson-0032"],"provider":"Novita"}
+{"id":"219996656550725","country":"CO","lat":-1,"lon":-78,"place":"Andean Highlands, Ecuador/Colombia region","errorKm":431.696,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"221726129335984","country":"BE","lat":51.05,"lon":13.73,"place":"Saxony, Germany","errorKm":641.954,"hintCount":1,"hintIds":["lesson-0004"],"provider":"Novita"}
+{"id":"2217585155045179","country":"US","lat":40.7128,"lon":-74.006,"place":"United States (likely Midwest or Northeast)","errorKm":1504.749,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"222701052638992","country":"CV","lat":32.6,"lon":-16.7,"place":"Azores, Portugal","errorKm":1914.646,"hintCount":3,"hintIds":["lesson-0013","lesson-0032","lesson-0034"],"provider":"Novita"}
+{"id":"223360615823144","country":"BR","lat":-23.5505,"lon":-46.6333,"place":"São Paulo, Brazil","errorKm":864.577,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"223366112895404","country":"ID","lat":19.1,"lon":-96.5,"place":"Veracruz, Mexico","errorKm":15577.085,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"223782596177145","country":"JP","lat":43.06417,"lon":142.36488,"place":"Hokkaido, Japan","errorKm":68.053,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2243952345740874","country":"BR","lat":35.4,"lon":103.3,"place":"Maijishan Grottoes, Gansu, China","errorKm":15463.685,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"225599805570186","country":"NG","lat":6.5244,"lon":3.3792,"place":"Lagos, Nigeria","errorKm":7.382,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"226417162587344","country":"GB","lat":45,"lon":-75,"place":"Ontario, Canada","errorKm":5339.914,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"226988985537419","country":"AU","lat":-33.8688,"lon":151.2093,"place":"New South Wales, Australia","errorKm":306.924,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"227439612518326","country":"US","lat":21.3069,"lon":-157.8583,"place":"Hawaii, USA","errorKm":311.726,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"228145278648620","country":"PK","lat":33.3128,"lon":44.3651,"place":"Baghdad, Iraq","errorKm":2393.517,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"2285459428275472","country":"JP","lat":36.1,"lon":138.5,"place":"Nagano Prefecture, Japan","errorKm":408.664,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2287668438031230","country":"IN","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":14638.3,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"231641668730712","country":"TR","lat":38.4167,"lon":37.5,"place":"Suşehri, Sivas, Turkey","errorKm":200.632,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2333056760182208","country":"EC","lat":-12.046374,"lon":-77.042793,"place":"Lima, Peru","errorKm":1388.988,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"234938081764077","country":"ZM","lat":12.37,"lon":-16.48,"place":"Senegal","errorKm":5832.789,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"235543418369622","country":"CN","lat":28.2,"lon":84.1,"place":"Himalayas, Nepal/India border region","errorKm":1892.594,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"236898024874689","country":"US","lat":35,"lon":-85,"place":"United States","errorKm":864.378,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2378007389009476","country":"IN","lat":19.4326,"lon":-99.1332,"place":"Mexico City, Mexico","errorKm":15731.023,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"238209134770015","country":"CA","lat":45.5,"lon":-121.8,"place":"Oregon, USA","errorKm":365.124,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"239943934683187","country":"NO","lat":68.35,"lon":20.2,"place":"Northern Norway (Finnmark region)","errorKm":190.839,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2413897832088541","country":"FR","lat":46.8,"lon":9.6,"place":"Swiss Alps, Switzerland","errorKm":270.454,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"243534544125677","country":"PL","lat":52.2297,"lon":21.0122,"place":"Poland","errorKm":159.592,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"243596024206175","country":"IN","lat":28.6139,"lon":77.209,"place":"India","errorKm":458.577,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"244059064145963","country":"TN","lat":34.4,"lon":10.8,"place":"Tunisia","errorKm":183.093,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"248194923858278","country":"DE","lat":53.4,"lon":18.6,"place":"Pomeranian Voivodeship, Poland","errorKm":849.685,"hintCount":2,"hintIds":["lesson-0011","lesson-0024"],"provider":"Novita"}
+{"id":"248210777083257","country":"MX","lat":35,"lon":-100,"place":"Texas, USA","errorKm":1262.057,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"248222750428965","country":"CU","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":15304.897,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"250763850167292","country":"BZ","lat":18.4663,"lon":-69.9312,"place":"Dominican Republic","errorKm":1950.789,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"251065100135464","country":"GR","lat":40,"lon":22,"place":"Greece","errorKm":171.449,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"251458930255014","country":"MY","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":16867.115,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"252122446696478","country":"ES","lat":48.2,"lon":16.3,"place":"Austria","errorKm":2036.642,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"2527023960939779","country":"RU","lat":48,"lon":15,"place":"Central Europe (likely Germany or Poland)","errorKm":8005.706,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"252959852828062","country":"TH","lat":-7.15,"lon":110,"place":"Central Java, Indonesia","errorKm":2829.305,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"2562509130710978","country":"US","lat":39.7392,"lon":-104.9903,"place":"Denver, Colorado, USA","errorKm":278.861,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2569651506672182","country":"AU","lat":-17.713,"lon":149.129,"place":"Queensland, Australia","errorKm":384.711,"hintCount":3,"hintIds":["lesson-0004","lesson-0011","lesson-0040"],"provider":"Novita"}
+{"id":"2574032836239510","country":"TH","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":2331.295,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2585473018424429","country":"IN","lat":15.4,"lon":74.1,"place":"Western Ghats, Karnataka, India","errorKm":501.27,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"261410932350673","country":"US","lat":45.5,"lon":-73.5,"place":"Quebec, Canada","errorKm":570.052,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"262785452708835","country":"AR","lat":36.05,"lon":-114.7,"place":"Lake Mead National Recreation Area, Nevada/Arizona, USA","errorKm":8614.926,"hintCount":2,"hintIds":["lesson-0004","lesson-0040"],"provider":"Novita"}
+{"id":"2629027857395119","country":"PL","lat":52.2297,"lon":21.0122,"place":"Poland","errorKm":247.272,"hintCount":2,"hintIds":["lesson-0005","lesson-0040"],"provider":"Novita"}
+{"id":"263646408827179","country":"EG","lat":24.7136,"lon":46.6753,"place":"Riyadh, Saudi Arabia","errorKm":1682.833,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2637778459854136","country":"IN","lat":23.7166,"lon":90.3975,"place":"Dhaka, Bangladesh","errorKm":1207.639,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2642857686023438","country":"ES","lat":42.3,"lon":2.1,"place":"Catalonia, Spain","errorKm":207.766,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"265758671945213","country":"CA","lat":45.523062,"lon":-122.676482,"place":"Oregon, USA","errorKm":528.085,"hintCount":2,"hintIds":["lesson-0005","lesson-0040"],"provider":"Novita"}
+{"id":"267168005087850","country":"RS","lat":45.8327,"lon":15.8733,"place":"Croatia","errorKm":550.417,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"267406111733456","country":"US","lat":35,"lon":-85,"place":"Tennessee, USA","errorKm":626.299,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"267493231658175","country":"ZA","lat":32.5,"lon":-105,"place":"New Mexico, USA","errorKm":14871.805,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2685886661707512","country":"SN","lat":-15,"lon":28,"place":"Zambia","errorKm":5717.75,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"269355878220934","country":"NZ","lat":43.5,"lon":-102.5,"place":"Wyoming, USA","errorKm":12969.264,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"2695923870698166","country":"RU","lat":14.1,"lon":121.2,"place":"Calabarzon, Philippines","errorKm":8231.828,"hintCount":1,"hintIds":["lesson-0054"],"provider":"Novita"}
+{"id":"269806091550131","country":"US","lat":38.5,"lon":-121.5,"place":"California, USA","errorKm":643.363,"hintCount":4,"hintIds":["lesson-0004","lesson-0024","lesson-0040","lesson-0054"],"provider":"Novita"}
+{"id":"271542371323964","country":"US","lat":35.2271,"lon":-80.8431,"place":"North Carolina, USA","errorKm":197.33,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"271857724646563","country":"MX","lat":18.4,"lon":-73.8,"place":"Santo Domingo, Dominican Republic","errorKm":1676.965,"hintCount":1,"hintIds":["lesson-0007"],"provider":"Novita"}
+{"id":"273304037852858","country":"EG","lat":13.7563,"lon":100.5018,"place":"Bangkok, Thailand","errorKm":7177.584,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"275067247627131","country":"ID","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":16859.346,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"275085424347030","country":"SA","lat":24.7136,"lon":46.6753,"place":"Riyadh, Saudi Arabia","errorKm":329.668,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"275369854284246","country":"EC","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":17256.452,"hintCount":4,"hintIds":["lesson-0004","lesson-0005","lesson-0024","lesson-0040"],"provider":"Novita"}
+{"id":"278102747321362","country":"PY","lat":-23.5505,"lon":-46.6333,"place":"São Paulo, Brazil","errorKm":1086.815,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"278537887250450","country":"LT","lat":60.1699,"lon":24.9384,"place":"Finland","errorKm":573.034,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"279195147173944","country":"ID","lat":-6.2,"lon":106.8,"place":"Jakarta, Indonesia","errorKm":9.966,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"279238913933649","country":"AE","lat":24.7136,"lon":46.6753,"place":"Riyadh, Saudi Arabia","errorKm":970.339,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2793207021008467","country":"PF","lat":19.1,"lon":-96.2,"place":"Veracruz, Mexico","errorKm":7291.801,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"2795770980682799","country":"AU","lat":-33.8688,"lon":151.2093,"place":"New South Wales, Australia","errorKm":149.98,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"280153313810917","country":"NL","lat":52.3,"lon":4.9,"place":"Netherlands","errorKm":62.899,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"280484520477863","country":"BR","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":6162.86,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"281763013628566","country":"GB","lat":54.5,"lon":-3.5,"place":"United Kingdom (Northern England/Scotland border region)","errorKm":207.229,"hintCount":1,"hintIds":["lesson-0034"],"provider":"Novita"}
+{"id":"2837833536461438","country":"GB","lat":52.4862,"lon":-1.8904,"place":"United Kingdom","errorKm":456.347,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2848775712055639","country":"MZ","lat":-15,"lon":-47,"place":"Brazil","errorKm":8901.685,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"285322723078232","country":"IR","lat":34,"lon":-105,"place":"New Mexico, USA","errorKm":12103.76,"hintCount":3,"hintIds":["lesson-0023","lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"2858509004405207","country":"CA","lat":51.1,"lon":-114.1,"place":"Alberta, Canada","errorKm":482.959,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"2861591020722727","country":"IN","lat":19.7605,"lon":75.7125,"place":"Maharashtra, India","errorKm":638.511,"hintCount":2,"hintIds":["lesson-0013","lesson-0025"],"provider":"Novita"}
+{"id":"286349309825511","country":"HR","lat":45.4,"lon":10.2,"place":"Northern Italy (Po Valley/Foot-hills region)","errorKm":457.706,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"286443496475720","country":"SA","lat":23.8857,"lon":39.6111,"place":"Medina, Saudi Arabia","errorKm":67.254,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"2868688193460180","country":"RU","lat":48.8566,"lon":2.3522,"place":"France","errorKm":2838.375,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"287046939743606","country":"CM","lat":-0.303,"lon":32.581,"place":"Kampala, Uganda","errorKm":2583.604,"hintCount":2,"hintIds":["lesson-0024","lesson-0004"],"provider":"Novita"}
+{"id":"2871527163088729","country":"RU","lat":62,"lon":105,"place":"Siberia, Russia","errorKm":1047.919,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2874845529420890","country":"IR","lat":35.6892,"lon":51.389,"place":"Iran","errorKm":320.51,"hintCount":3,"hintIds":["lesson-0004","lesson-0005","lesson-0024"],"provider":"Novita"}
+{"id":"2877683189185827","country":"ES","lat":40.4,"lon":-3.7,"place":"Central Spain (Sistema Central mountains)","errorKm":330.657,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2878993945714431","country":"RU","lat":55.7558,"lon":37.6173,"place":"Russia (likely Siberia or the Ural region)","errorKm":1400.751,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2881710398737658","country":"US","lat":39,"lon":-77,"place":"Virginia, USA","errorKm":869.021,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"288255512947868","country":"SE","lat":52.3676,"lon":4.9041,"place":"Netherlands","errorKm":707.823,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"288517392770275","country":"DE","lat":47.3769,"lon":8.5417,"place":"Swiss Alps, Switzerland","errorKm":395.592,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2887994558109274","country":"SN","lat":12.9716,"lon":77.5946,"place":"Karnataka, India","errorKm":10136.508,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"288931476238659","country":"CL","lat":40.4168,"lon":-3.7038,"place":"Spain","errorKm":11050.501,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"2895338970784027","country":"AR","lat":52.5,"lon":35,"place":"Ukraine","errorKm":13278.475,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2897655207218044","country":"CO","lat":-3.4653,"lon":-62.2159,"place":"Amazon Rainforest, Brazil","errorKm":1594.427,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"290107185995439","country":"RU","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":3833.893,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"290184146160804","country":"FR","lat":48.533,"lon":-1.12,"place":"France","errorKm":351.208,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2905006216448571","country":"BR","lat":-23.5505,"lon":-46.6333,"place":"Brazil","errorKm":51.906,"hintCount":2,"hintIds":["lesson-0004","lesson-0040"],"provider":"Novita"}
+{"id":"2909589662646730","country":"FI","lat":61.15,"lon":27.6,"place":"Finland","errorKm":61.241,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2911241569116968","country":"VN","lat":14.5,"lon":121,"place":"Philippines","errorKm":1980.844,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"291250675954961","country":"BR","lat":-18.5,"lon":-44.5,"place":"Minas Gerais, Brazil","errorKm":484.127,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"2914153572165341","country":"MM","lat":13.7563,"lon":121.0089,"place":"Philippines","errorKm":2730.133,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"291665575919806","country":"BR","lat":34.0522,"lon":-118.2437,"place":"California, USA","errorKm":9980.528,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"292039952544187","country":"JP","lat":35.6895,"lon":139.6917,"place":"Japan","errorKm":508.37,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"292242972391138","country":"ES","lat":39.5696,"lon":2.6779,"place":"Mallorca, Balearic Islands, Spain","errorKm":559.089,"hintCount":1,"hintIds":["lesson-0034"],"provider":"Novita"}
+{"id":"2923399607907615","country":"TN","lat":41,"lon":28,"place":"Turkey","errorKm":1599.762,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"292479182474336","country":"AO","lat":24.8607,"lon":67.0011,"place":"Karachi, Pakistan","errorKm":7259.584,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"292603635746285","country":"IT","lat":37.1,"lon":-1.5,"place":"Spain","errorKm":1375.713,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"293214062284774","country":"ZA","lat":-25.7479,"lon":28.2293,"place":"South Africa","errorKm":167.228,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2934221900230833","country":"TR","lat":38.4,"lon":43.2,"place":"Turkey","errorKm":972.506,"hintCount":3,"hintIds":["lesson-0025","lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"2936465286637670","country":"US","lat":32.7767,"lon":-96.797,"place":"Texas, USA","errorKm":701.227,"hintCount":4,"hintIds":["lesson-0004","lesson-0011","lesson-0024","lesson-0040"],"provider":"Novita"}
+{"id":"2938081419813391","country":"US","lat":34,"lon":-80,"place":"North Carolina, USA","errorKm":111.719,"hintCount":3,"hintIds":["lesson-0004","lesson-0005","lesson-0040"],"provider":"Novita"}
+{"id":"294336035504000","country":"RU","lat":42.8746,"lon":74.5902,"place":"Bishkek, Kyrgyzstan","errorKm":2319.905,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"294426425473373","country":"FR","lat":51.2,"lon":-1.5,"place":"United Kingdom","errorKm":385.074,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2946404199013065","country":"FR","lat":36.6,"lon":117.1,"place":"Shandong Province, China","errorKm":8899.635,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"2947870988825180","country":"ID","lat":19.1736,"lon":-96.1342,"place":"Veracruz, Mexico","errorKm":16666.709,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"294950318963870","country":"RU","lat":55.7558,"lon":37.6173,"place":"Moscow, Russia","errorKm":2814.487,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"295133675529523","country":"PL","lat":52.2297,"lon":21.0122,"place":"Warsaw, Poland","errorKm":181.2,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"295174002096998","country":"GP","lat":19.17,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":3686.341,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"295418638898932","country":"JP","lat":35.5,"lon":136,"place":"Japan","errorKm":625.094,"hintCount":1,"hintIds":["lesson-0004"],"provider":"Novita"}
+{"id":"295447585492136","country":"IT","lat":43.7,"lon":7.2,"place":"Liguria, Italy","errorKm":395.92,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"295552449252502","country":"AM","lat":40.1,"lon":45,"place":"Georgia (country)","errorKm":130.206,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"295666052135475","country":"CA","lat":45.523062,"lon":-122.676482,"place":"Portland, Oregon, USA","errorKm":366.621,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"295676072059844","country":"IT","lat":43.7,"lon":10.5,"place":"Tuscany, Italy","errorKm":200.158,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"296581738627928","country":"FR","lat":51.05,"lon":13.73,"place":"Saxony, Germany","errorKm":1319.326,"hintCount":3,"hintIds":["lesson-0004","lesson-0024","lesson-0040"],"provider":"Novita"}
+{"id":"296897965313464","country":"MA","lat":24.5,"lon":45,"place":"Saudi Arabia","errorKm":5378.506,"hintCount":1,"hintIds":["lesson-0039"],"provider":"Novita"}
+{"id":"297440581915199","country":"IT","lat":43.7696,"lon":11.2558,"place":"Tuscany, Italy","errorKm":162.294,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"297469905427523","country":"FR","lat":45,"lon":15,"place":"Central Europe (likely Germany or France)","errorKm":1134.426,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"297626558564044","country":"PT","lat":40.4,"lon":-3.7,"place":"Spain","errorKm":321.972,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"297713341832537","country":"RU","lat":55.7558,"lon":37.6173,"place":"Russia","errorKm":1247.775,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"297737508484812","country":"RU","lat":40,"lon":115,"place":"Shandong Sheng, China","errorKm":5754.247,"hintCount":5,"hintIds":["lesson-0004","lesson-0005","lesson-0023","lesson-0024","lesson-0040"],"provider":"Novita"}
+{"id":"2979489095666742","country":"CN","lat":39.9042,"lon":116.4074,"place":"Beijing, China","errorKm":410.002,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"298782785286175","country":"TH","lat":13.7563,"lon":100.5018,"place":"Thailand","errorKm":399.041,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"298933271732243","country":"ID","lat":13.7563,"lon":100.5018,"place":"Bangkok, Thailand","errorKm":2698.908,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"299289461676553","country":"RU","lat":48,"lon":22,"place":"Ukraine","errorKm":2800.339,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"299487878454674","country":"RU","lat":52.52,"lon":13.405,"place":"Germany","errorKm":1901.513,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"299652788336509","country":"UG","lat":14.5,"lon":-12,"place":"Mali","errorKm":4989.717,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"2998286240497405","country":"SE","lat":62,"lon":25,"place":"Finland","errorKm":432.807,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"300292071561827","country":"GT","lat":-18.5,"lon":-44.5,"place":"Minas Gerais, Brazil","errorKm":6289.881,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"300324108328398","country":"IN","lat":17.385,"lon":78.4867,"place":"Hyderabad, India","errorKm":1377.912,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"3006651392899419","country":"ET","lat":18.5204,"lon":73.8567,"place":"Maharashtra, India","errorKm":4205.616,"hintCount":1,"hintIds":["lesson-0025"],"provider":"Novita"}
+{"id":"300974838398383","country":"IR","lat":35.6895,"lon":139.6917,"place":"Tokyo, Japan","errorKm":7753.74,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"301126881617807","country":"CZ","lat":49.8,"lon":14.4,"place":"Czech Republic","errorKm":104.787,"hintCount":2,"hintIds":["lesson-0032","lesson-0034"],"provider":"Novita"}
+{"id":"301373188253393","country":"FR","lat":52.2297,"lon":21.0122,"place":"Poland","errorKm":1274.416,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"3013786622281843","country":"KZ","lat":41,"lon":69,"place":"Uzbekistan","errorKm":798.694,"hintCount":2,"hintIds":["lesson-0023","lesson-0025"],"provider":"Novita"}
+{"id":"301489884784326","country":"MG","lat":9,"lon":38.7,"place":"Ethiopia","errorKm":3388.981,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"3020432778190040","country":"NL","lat":52.1,"lon":5.3,"place":"Netherlands","errorKm":54.1,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"302410084713662","country":"FR","lat":48.8566,"lon":2.3522,"place":"France","errorKm":629.116,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"302458041324633","country":"FR","lat":52.2297,"lon":21.0122,"place":"Warsaw, Poland","errorKm":1467.708,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"302819828031651","country":"US","lat":45.523062,"lon":-122.676482,"place":"Pacific Northwest, USA (likely Oregon or Washington)","errorKm":338.286,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"303748141314424","country":"MM","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":15463.446,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"3038491996474390","country":"BR","lat":-23.5505,"lon":-46.6333,"place":"São Paulo, Brazil","errorKm":482.134,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"304828024352392","country":"RU","lat":54.5,"lon":25,"place":"Lithuania","errorKm":879.569,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"305272870969414","country":"ID","lat":13,"lon":100,"place":"The Sundarbans, India/Bangladesh border region","errorKm":3007.385,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"305349427825671","country":"IE","lat":53.3,"lon":-8.2,"place":"Ireland","errorKm":126.601,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"305700027749275","country":"IN","lat":17.385,"lon":78.4867,"place":"Hyderabad, Telangana, India","errorKm":148.691,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"305746891100671","country":"US","lat":35,"lon":-85,"place":"Tennessee, USA","errorKm":259.298,"hintCount":1,"hintIds":["lesson-0038"],"provider":"Novita"}
+{"id":"305805547704710","country":"SE","lat":59.3293,"lon":18.0686,"place":"Stockholm, Sweden","errorKm":192.681,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"305828321037311","country":"CN","lat":39.91,"lon":116.41,"place":"Beijing, China","errorKm":2415.751,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"305961364399729","country":"BR","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":17318.096,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"306031207583620","country":"PL","lat":52.52,"lon":13.405,"place":"Germany","errorKm":352.108,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"306032347818577","country":"BW","lat":-25.7479,"lon":28.2293,"place":"Pretoria, South Africa","errorKm":257.002,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"3065434910355344","country":"ID","lat":-8.4095,"lon":115.1889,"place":"Bali, Indonesia","errorKm":290.192,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"3067015293622819","country":"LA","lat":15.5,"lon":101,"place":"Northern Thailand / Laos border region","errorKm":428.093,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"307043947837123","country":"AU","lat":-34,"lon":138,"place":"South Australia, Australia","errorKm":568.203,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"308596147471912","country":"AR","lat":-8.05,"lon":-36,"place":"Pernambuco, Brazil","errorKm":3687.574,"hintCount":1,"hintIds":["lesson-0023"],"provider":"Novita"}
+{"id":"308836214188677","country":"US","lat":42.3601,"lon":-71.0589,"place":"Massachusetts, USA","errorKm":182.891,"hintCount":2,"hintIds":["lesson-0004","lesson-0024"],"provider":"Novita"}
+{"id":"309097317318309","country":"BD","lat":13.7563,"lon":100.5018,"place":"Bangkok, Thailand","errorKm":1550.149,"hintCount":3,"hintIds":["lesson-0004","lesson-0011","lesson-0024"],"provider":"Novita"}
+{"id":"309473224071238","country":"LV","lat":56,"lon":35,"place":"Russia","errorKm":780.14,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"311104003948173","country":"CO","lat":10.8505,"lon":76.2711,"place":"Kerala, India","errorKm":16787.601,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"3114146002178207","country":"NG","lat":-7.15,"lon":110.14,"place":"Central Java, Indonesia","errorKm":10926.844,"hintCount":1,"hintIds":["lesson-0005"],"provider":"Novita"}
+{"id":"312946950283263","country":"IN","lat":28.6139,"lon":77.209,"place":"India","errorKm":126.167,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"313128897006822","country":"RO","lat":42.5,"lon":24.5,"place":"Bulgaria","errorKm":390.586,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"313612076808199","country":"US","lat":36,"lon":-97,"place":"Oklahoma, USA","errorKm":583.898,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"314954003366021","country":"TN","lat":31,"lon":10,"place":"Tunisia","errorKm":386.309,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"315295066860496","country":"FI","lat":61.2167,"lon":21.2,"place":"Finland","errorKm":153.06,"hintCount":1,"hintIds":["lesson-0038"],"provider":"Novita"}
+{"id":"316100236624785","country":"JP","lat":35.3606,"lon":138.7833,"place":"Izu Peninsula, Shizuoka Prefecture, Japan","errorKm":417.439,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"316344963349856","country":"DK","lat":52.52,"lon":13.405,"place":"Germany","errorKm":470.13,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"3166470526913852","country":"NI","lat":-18.5,"lon":-44.5,"place":"Minas Gerais, Brazil","errorKm":5772.66,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"316846713157334","country":"MX","lat":19.18,"lon":-96.13,"place":"Veracruz, Mexico","errorKm":243.651,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"317064433456112","country":"TR","lat":37.5,"lon":37,"place":"Southeastern Turkey (Anatolia)","errorKm":366.51,"hintCount":1,"hintIds":["lesson-0039"],"provider":"Novita"}
+{"id":"317831209778568","country":"BR","lat":-19.5,"lon":-43.9,"place":"Minas Gerais, Brazil","errorKm":1332.17,"hintCount":4,"hintIds":["lesson-0005","lesson-0038","lesson-0040","lesson-0042"],"provider":"Novita"}
+{"id":"318249743004684","country":"KG","lat":40.1,"lon":44.5,"place":"Georgia (Country)","errorKm":2645.255,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"318458193126894","country":"US","lat":40.7128,"lon":-74.006,"place":"New Jersey, USA","errorKm":263.657,"hintCount":1,"hintIds":["lesson-0040"],"provider":"Novita"}
+{"id":"318998159574336","country":"HU","lat":52.2297,"lon":21.0122,"place":"Poland","errorKm":567.018,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"320027992796215","country":"SE","lat":62,"lon":25,"place":"Finland","errorKm":513.958,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"320304112812049","country":"ES","lat":41,"lon":28,"place":"Turkey","errorKm":2734.588,"hintCount":1,"hintIds":["lesson-0023"],"provider":"Novita"}
+{"id":"320464172823118","country":"IN","lat":28.6139,"lon":77.209,"place":"India","errorKm":1551.371,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"321235156739298","country":"MX","lat":32.2226,"lon":-110.9747,"place":"Tucson, Arizona, USA","errorKm":1044.168,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"322646395895977","country":"NO","lat":62,"lon":25,"place":"Finland","errorKm":756.834,"hintCount":2,"hintIds":["lesson-0005","lesson-0040"],"provider":"Novita"}
+{"id":"323583155828490","country":"ID","lat":14.1,"lon":108.2,"place":"Vietnam","errorKm":2288.713,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"323864355779689","country":"TH","lat":14.5,"lon":120.9,"place":"Philippines","errorKm":2306.609,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"324336625844482","country":"RU","lat":56,"lon":37,"place":"Central Russia (likely between Moscow and the Ural Mountains)","errorKm":1411.124,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"324917148992881","country":"US","lat":45.5,"lon":-73.5,"place":"Quebec, Canada","errorKm":1202.807,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"325905278971127","country":"KZ","lat":43.6,"lon":103.4,"place":"Altai Mountains, Russia/Kazakhstan border region","errorKm":1926.13,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"326024325530759","country":"RU","lat":54.5,"lon":25,"place":"Lithuania","errorKm":943.285,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"326035609039530","country":"CO","lat":14.5995,"lon":120.9842,"place":"Philippines","errorKm":16823.968,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"327659052196751","country":"US","lat":34,"lon":-80,"place":"South Carolina, USA","errorKm":356.453,"hintCount":2,"hintIds":["lesson-0004","lesson-0040"],"provider":"Novita"}
+{"id":"327961432277854","country":"MX","lat":18.4663,"lon":-69.9312,"place":"Dominican Republic","errorKm":2071.547,"hintCount":1,"hintIds":["lesson-0024"],"provider":"Novita"}
+{"id":"330539718561909","country":"RU","lat":47.5,"lon":25,"place":"Romania","errorKm":4588.568,"hintCount":2,"hintIds":["lesson-0038","lesson-0042"],"provider":"Novita"}
+{"id":"331570405052382","country":"IN","lat":23.8103,"lon":90.4125,"place":"Bangladesh","errorKm":168.444,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"331889688644710","country":"FR","lat":41.3851,"lon":2.1734,"place":"Barcelona, Spain","errorKm":602.858,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"332769088248106","country":"KH","lat":13.7563,"lon":100.5018,"place":"Bangkok, Thailand","errorKm":531.995,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"332851411776281","country":"US","lat":42.3,"lon":-72.5,"place":"Massachusetts, USA","errorKm":580.472,"hintCount":3,"hintIds":["lesson-0004","lesson-0038","lesson-0040"],"provider":"Novita"}
+{"id":"333959074823235","country":"DE","lat":50.1109,"lon":8.6821,"place":"Germany","errorKm":266.998,"hintCount":1,"hintIds":["lesson-0013"],"provider":"Novita"}
+{"id":"334379571358585","country":"US","lat":40,"lon":-120,"place":"Sierras, California, USA","errorKm":795.089,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"335128421450363","country":"DE","lat":48.8566,"lon":2.3522,"place":"France","errorKm":500.665,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"335230431444825","country":"MY","lat":13.7563,"lon":100.5018,"place":"Bangkok, Thailand","errorKm":1362.411,"hintCount":0,"hintIds":[],"provider":"Novita"}
+{"id":"336037694610093","country":"NO","lat":48.5,"lon":-64.5,"place":"Nova Scotia, Canada","errorKm":5148.161,"hintCount":0,"hintIds":[],"provider":"Novita"}

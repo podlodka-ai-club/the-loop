@@ -1,0 +1,167 @@
+:root {
+  --bg: #0a0e14;
+  --panel: #121821;
+  --panel-2: #18202b;
+  --line: #263244;
+  --text: #e8eef6;
+  --dim: #93a3b8;
+  --truth: #4ade80;
+  --guess: #e0603a;
+  --accent: #7dd3fc;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+
+.page {
+  max-width: 1760px;
+  margin: 0 auto;
+  padding: 22px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.top { display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap; }
+.top h1 { font-size: 30px; }
+.top .meta { color: var(--dim); font-size: 16px; font-variant-numeric: tabular-nums; }
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(520px, 44fr) minmax(560px, 56fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1200px) { .grid { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.frame img {
+  width: 100%;
+  border-radius: 10px;
+  display: block;
+  background: #000;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
+.truth {
+  margin-top: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.truth .place { font-size: 26px; font-weight: 650; }
+.truth .coords { color: var(--dim); font-size: 16px; font-variant-numeric: tabular-nums; }
+.dot { width: 13px; height: 13px; border-radius: 50%; display: inline-block; }
+.dot.truth-dot { background: var(--truth); }
+.dot.guess-dot { background: var(--guess); }
+
+.strip {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.strip button {
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  line-height: 0;
+}
+.strip button img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; opacity: 0.55; }
+.strip button:hover img { opacity: 0.85; }
+.strip button[data-active="true"] { border-color: var(--accent); }
+.strip button[data-active="true"] img { opacity: 1; }
+
+.modes { display: flex; gap: 10px; flex-wrap: wrap; }
+.modes button {
+  flex: 1 1 170px;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 17px;
+}
+.modes button strong { display: block; font-size: 20px; color: var(--text); font-weight: 620; }
+.modes button[data-active="true"] { border-color: var(--accent); background: #1b2b3a; color: var(--text); }
+
+.volume { margin-top: 16px; display: flex; align-items: center; gap: 16px; }
+.volume label { color: var(--dim); font-size: 17px; white-space: nowrap; }
+.volume input { flex: 1; accent-color: var(--accent); height: 26px; }
+.volume .value { font-size: 22px; font-variant-numeric: tabular-nums; min-width: 150px; text-align: right; }
+.volume[data-disabled="true"] { opacity: 0.4; }
+
+.readout { display: flex; gap: 28px; align-items: baseline; flex-wrap: wrap; margin-top: 4px; }
+.readout .error { font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.readout .error[data-bad="true"] { color: var(--guess); }
+.readout .error[data-good="true"] { color: var(--truth); }
+.readout .guessed { font-size: 22px; }
+.readout .delta { color: var(--dim); font-size: 18px; font-variant-numeric: tabular-nums; }
+
+.hints {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* The whole-memory mode puts 73 lessons in one prompt. Showing them all would push
+     the corpus summary off the screen, and the screen is the point. */
+  max-height: 330px;
+  overflow-y: auto;
+}
+.hints .empty { color: var(--dim); font-size: 18px; }
+.hint {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 9px;
+  padding: 11px 14px;
+  background: var(--panel-2);
+}
+.hint .region { font-size: 15px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+.hint .text { font-size: 18px; margin-top: 3px; }
+.hint .triggers { margin-top: 7px; display: flex; gap: 7px; flex-wrap: wrap; }
+.hint .triggers span {
+  font-size: 14px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.hints .more { color: var(--dim); font-size: 16px; }
+
+.summary table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.summary th, .summary td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--line); font-size: 17px; }
+.summary th:first-child, .summary td:first-child { text-align: left; }
+.summary thead th { color: var(--dim); font-weight: 500; font-size: 15px; }
+.summary tr[data-active="true"] td { background: #1b2b3a; }
+.summary .note { color: var(--dim); font-size: 15px; margin-top: 10px; }
+.summary .scope { color: var(--dim); font-size: 14px; }
+
+.map { width: 100%; border-radius: 10px; display: block; border: 1px solid var(--line); }
