@@ -16,6 +16,7 @@ import {
   createXmemoryMemory,
   loadXmemoryMemoryConfig,
   type XmemoryMemoryDependencies,
+  XMEMORY_READ_COLUMNS,
 } from "./memory.ts";
 import type { XmemoryMemoryErrorCode } from "./error.ts";
 import {
@@ -1099,17 +1100,21 @@ test("recall sends exact normalized feature and prior templates", async () => {
   assert.deepEqual(await memory.recall([" ", "\n"], 7), []);
   assert.deepEqual(requests, [
     {
-      query: encodeMemoryRetrieveQuery(
+      query: `${encodeMemoryRetrieveQuery(
         sharedMemoryPrompt("retrieve"),
         normalizeMemoryQuery(["yellow roadside posts", "lava field"]),
-      ),
-      readMode: "single-answer",
+      )}
+
+${XMEMORY_READ_COLUMNS}`,
+      readMode: "raw-tables",
       traceId,
       timeoutMs: 60_000,
     },
     {
-      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), ""),
-      readMode: "single-answer",
+      query: `${encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "")}
+
+${XMEMORY_READ_COLUMNS}`,
+      readMode: "raw-tables",
       traceId,
       timeoutMs: 60_000,
     },
@@ -1127,7 +1132,9 @@ test("recall accepts a bounded dynamic feature query and uses the shared instruc
   const features = ["yellow roadside posts", "lava field", "black volcanic surface"];
   assert.deepEqual(await memory.recall(features, 1), []);
   assert.ok(request !== undefined);
-  assert.equal(request.query, encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), normalizeMemoryQuery(features)));
+  assert.equal(request.query, `${encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), normalizeMemoryQuery(features))}
+
+${XMEMORY_READ_COLUMNS}`);
 });
 
 test("recall accepts provider trace metadata and maps blank or non-empty answer to at most one Hint", async () => {
@@ -1172,11 +1179,19 @@ test("recall accepts provider trace metadata and maps blank or non-empty answer 
     assert.deepEqual(await memory.recall(["cue"], 1_000), scenario.expected);
   }
 
+  // A reader that finds no rows answers with a null result: empty, not malformed.
+  const emptyMemory = await behaviorMemory({ read: async () => ({ traceId: null, readerResult: null }) });
+  assert.deepEqual(await emptyMemory.recall(["cue"], 5), []);
+  const tableMemory = await behaviorMemory({ read: async () => ({ traceId: null, readerResult: { columns: [{ name: "lesson_content" }, { name: "effect" }, { name: "feature_key" }, { name: "region" }, { name: "observed_triggers_json" }, { name: "idempotency_key" }], rows: [["Wooden poles carry two crossarms.", "helped", "poles", "BR", "[\"wooden poles\"]", "key-1"], ["Cue x was observed and did not narrow the location.", "irrelevant", "surface", "IN", "[]", "key-2"], [null, "helped", "poles", "BR", null, "key-3"]] } }) });
+  const table = await tableMemory.recall(["cue"], 5);
+  assert.equal(table.length, 2);
+  assert.deepEqual(table[0], { lessonId: table[0]!.lessonId, text: "Wooden poles carry two crossarms.", effect: "helped", featureKey: "poles", region: "BR", triggers: ["wooden poles"] });
+  assert.deepEqual(table[1], { lessonId: table[1]!.lessonId, text: "[effect=irrelevant] Cue x was observed and did not narrow the location.", effect: "irrelevant", featureKey: "surface", region: "IN" });
+
   const malformed: unknown[] = [
     null,
     {},
     { traceId: 1, readerResult: { answer: "fact" } },
-    { traceId: null, readerResult: null },
     { traceId: null, readerResult: {} },
     { traceId: null, readerResult: { answer: 42 } },
   ];

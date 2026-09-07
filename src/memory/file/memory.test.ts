@@ -117,6 +117,8 @@ test("remember stores episode provenance and duplicate idempotency returns exist
       text: "BR: Wooden crossarms helped separate the region.",
       featureKey: "poles",
       effect: "helped",
+      region: "BR",
+      triggers: ["wooden crossarms"],
     },
   ]);
 });
@@ -178,6 +180,8 @@ test("recall rendering keeps non-helped effects visible in text and metadata", a
       text: "BR: [effect=misleading] Single yellow center lines were too broad for this road type.",
       featureKey: "road_markings",
       effect: "misleading",
+      region: "BR",
+      triggers: ["single yellow center lines"],
     },
   ]);
   assert.deepEqual(await sut.recall(["wooden poles"], 2), [
@@ -186,6 +190,8 @@ test("recall rendering keeps non-helped effects visible in text and metadata", a
       text: "BR: [effect=insufficient] Wooden poles alone were not enough.",
       featureKey: "poles",
       effect: "insufficient",
+      region: "BR",
+      triggers: ["wooden poles"],
     },
   ]);
 });
@@ -216,8 +222,8 @@ test("recall all returns every lesson in id order and increments every hit", asy
   const hints = await sut.recall(["ignored"], 1);
 
   assert.deepEqual(hints, [
-    { lessonId: "lesson-0001", text: "XX: earlier" },
-    { lessonId: "lesson-0002", text: "XX: later" },
+    { lessonId: "lesson-0001", text: "XX: earlier", region: "XX", triggers: ["default cue"] },
+    { lessonId: "lesson-0002", text: "XX: later", region: "XX", triggers: ["default cue"] },
   ]);
   assert.deepEqual(await readLessons(path), [
     { ...later, hits: 5 },
@@ -235,8 +241,8 @@ test("recall top without features uses hit count and stable id ordering", async 
   const hints = await sut.recall([], 2);
 
   assert.deepEqual(hints, [
-    { lessonId: "lesson-0001", text: "XX: earlier" },
-    { lessonId: "lesson-0002", text: "XX: later" },
+    { lessonId: "lesson-0001", text: "XX: earlier", region: "XX", triggers: ["default cue"] },
+    { lessonId: "lesson-0002", text: "XX: later", region: "XX", triggers: ["default cue"] },
   ]);
   assert.deepEqual(await readLessons(path), [
     { ...later, hits: 5 },
@@ -263,8 +269,8 @@ test("recall top ranks normalized trigger overlap and breaks ties by id", async 
   const hints = await sut.recall(["YELLOW, roadside; dry!"], 2);
 
   assert.deepEqual(hints, [
-    { lessonId: "lesson-0001", text: "XX: first" },
-    { lessonId: "lesson-0002", text: "XX: second" },
+    { lessonId: "lesson-0001", text: "XX: first", region: "XX", triggers: ["yellow dry"] },
+    { lessonId: "lesson-0002", text: "XX: second", region: "XX", triggers: ["yellow roadside"] },
   ]);
   assert.deepEqual(await readLessons(path), [
     { ...second, hits: 1 },
@@ -528,7 +534,7 @@ test("FrozenMemory recalls without changing the snapshot and rejects remember", 
   const before = await readFile(snapshotPath, "utf8");
   const frozen = await source.sut.loadSnapshot(snapshotId, "legacy");
 
-  assert.deepEqual(await frozen.recall([]), [{ lessonId: "lesson-0001", text: `XX: ${input.content}` }]);
+  assert.deepEqual(await frozen.recall([]), [{ lessonId: "lesson-0001", text: `XX: ${input.content}`, region: "XX", triggers: ["frozen cue"] }]);
   assert.equal(await readFile(snapshotPath, "utf8"), before);
   await assert.rejects(frozen.remember(), /FrozenMemory is read-only/);
   await assert.rejects(frozen.restore(snapshotId), /FileMemory is read-only/);
@@ -551,7 +557,7 @@ test("FrozenMemory state cannot be changed through runtime property mutation", a
   );
 
   assert.deepEqual(await frozen.recall("immutable cue", 1), [
-    { lessonId: "lesson-0001", text: "XX: immutable lesson" },
+    { lessonId: "lesson-0001", text: "XX: immutable lesson", region: "XX", triggers: ["immutable cue"] },
   ]);
   await assert.rejects(frozen.remember(), /FrozenMemory is read-only/);
 });
@@ -670,12 +676,12 @@ test("validated snapshot projections keep immutable data after the file is chang
   const changed = { ...original, content: "changed live lesson" };
   await writeFile(snapshotPath, `${JSON.stringify(changed)}\n`, "utf8");
   assert.deepEqual(await selected.recall("immutable cue", 1), [
-    { lessonId: "lesson-0001", text: "BR: original immutable lesson" },
+    { lessonId: "lesson-0001", text: "BR: original immutable lesson", region: "BR", triggers: ["immutable cue"] },
   ]);
 
   await unlink(snapshotPath);
   assert.deepEqual(await selected.recall("immutable cue", 1), [
-    { lessonId: "lesson-0001", text: "BR: original immutable lesson" },
+    { lessonId: "lesson-0001", text: "BR: original immutable lesson", region: "BR", triggers: ["immutable cue"] },
   ]);
 });
 
@@ -691,7 +697,7 @@ test("frozen feature and read-only projections fail closed after their snapshot 
 
   for (const reader of [featureScoped, readOnly]) {
     assert.deepEqual(await reader.recall("projection integrity", 1), [
-      { lessonId: "lesson-0001", text: "XX: projection integrity" },
+      { lessonId: "lesson-0001", text: "XX: projection integrity", region: "XX", triggers: ["projection integrity"] },
     ]);
   }
 });

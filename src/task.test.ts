@@ -76,7 +76,7 @@ class MemoryReaderSpy implements MemoryReader {
     if (this.emptyQueries.has(query)) return [];
     return [
       { lessonId: `lesson-${this.invocations.length}-a`, text: `first memory for ${query}`, effect: "helped" },
-      { lessonId: `lesson-${this.invocations.length}-b`, text: `second memory for ${query}`, effect: "misleading" },
+      { lessonId: `lesson-${this.invocations.length}-b`, text: `second memory for ${query}`, effect: "helped" },
     ];
   }
 }
@@ -355,8 +355,8 @@ test("runTask feature-scoped path keeps a valid guess with failed and no-hit gro
     provider: "fake",
   });
   assert.deepEqual(memory.invocations, [
-    { query: "poles visual cue", limit: 5 },
-    { query: "vegetation visual cue", limit: 5 },
+    { query: "poles visual cue", limit: 20 },
+    { query: "vegetation visual cue", limit: 20 },
   ]);
   assert.deepEqual(
     result.memoryGroups.map((group) => [group.feature.key, group.status, group.failure, group.hits.length]),
@@ -396,10 +396,11 @@ test("runTask feature-scoped path keeps a valid guess with failed and no-hit gro
   const analyzePrompt = loadPrompt("analyze");
   assert.equal(text.startsWith(analyzePrompt), true);
   assert.equal(text.includes('"memory_groups"'), true);
-  assert.equal(text.includes("treat them as hypotheses"), true);
-  assert.equal(text.includes("use them only where they match the image"), true);
+  assert.equal(text.includes("Treat it as a hypothesis"), true);
+  assert.equal(text.includes("A lesson is evidence only where its cue is visible in this image"), true);
   assert.equal(text.includes("hints"), false);
-  assert.equal(text.includes("lesson-1-a"), true);
+  assert.equal(text.includes("lesson-1-a"), false);
+  assert.equal(text.includes("first memory for poles visual cue"), true);
 });
 
 test("runTask feature-scoped path does not allow locateDeps to override authoritative memory or run config", async () => {
@@ -603,8 +604,8 @@ test("runTask feature-scoped path retries analyze rate limits without repeating 
 
   assert.equal(result.ok, true);
   assert.deepEqual(memory.invocations, [
-    { query: "plates visual cue", limit: 5 },
-    { query: "poles visual cue", limit: 5 },
+    { query: "plates visual cue", limit: 20 },
+    { query: "poles visual cue", limit: 20 },
   ]);
   assert.deepEqual(
     client.invocations
@@ -805,6 +806,7 @@ test("runTask feature-scoped training preserves typed reflection runtime error c
       text: "wooden pole lesson",
       score: 1,
       effect: "helped",
+      region: null,
     };
     const locateSpy: LocateFunction = async (input): Promise<LocateResult> => {
       const groups: FeatureMemoryGroup[] = [
@@ -1090,6 +1092,7 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
         text: "wooden poles",
         score: null,
         effect: null,
+        region: null,
       };
       const groups = [
         {
@@ -1220,6 +1223,8 @@ test("runTask feature-scoped reflection is training-only and memory bindings exp
         text: "BR: Wooden crossarms match the frozen snapshot.",
         featureKey: "poles",
         effect: "helped",
+        region: "BR",
+        triggers: ["wooden crossarms"],
       },
     ]);
     assert.match(await readFile(snapshotPath, "utf8"), /Wooden crossarms match the frozen snapshot/);
@@ -1246,10 +1251,10 @@ test("runTask evaluation and production strip writable methods from read-only ad
       assert.equal("restore" in memory, false, scenario.mode);
       assert.deepEqual(await memory.recall("wooden poles", 5), [
         ...(scenario.mode === "evaluation"
-          ? [{ lessonId: "lesson-0001", text: "BR: A validated fixture lesson.", featureKey: "poles", effect: "helped" as const }]
+          ? [{ lessonId: "lesson-0001", text: "BR: A validated fixture lesson.", featureKey: "poles", effect: "helped" as const, region: "BR", triggers: ["wooden poles"] }]
           : [
               { lessonId: "lesson-1-a", text: "first memory for wooden poles", effect: "helped" as const },
-              { lessonId: "lesson-1-b", text: "second memory for wooden poles", effect: "misleading" as const },
+              { lessonId: "lesson-1-b", text: "second memory for wooden poles", effect: "helped" as const },
             ]),
       ]);
       return {

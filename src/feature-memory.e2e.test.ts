@@ -59,7 +59,7 @@ test("model-selected dynamic features preserve cardinality budgets duplicate sto
       feature_key: input.feature.key,
       memory_hit_id: input.memoryHit?.memoryHitId ?? null,
       effect: reflectionCalls % 4 === 0 ? "misleading" : "helped",
-      content: `Lesson ${reflectionCalls} stays grounded in ${input.feature.key}.`,
+      content: `Rule ${reflectionCalls} stays grounded in ${input.feature.key}, not in the plain form seen elsewhere.`,
       triggers: [input.feature.text],
       region: input.truth.country,
     } as const;
@@ -268,6 +268,7 @@ function makeDynamicFeatureGroups(attemptId: string, featureKeys: readonly strin
         text,
         score: null,
         effect: null,
+        region: null,
       };
     });
     return { attemptId, feature, query: `${featureKey} query`, status: "hits", hits, failure: null, retryCount: 0 };

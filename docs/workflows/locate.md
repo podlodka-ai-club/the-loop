@@ -73,6 +73,13 @@ retrieval failure task продолжает работу с оригинальн
 Analyze получает оригинальное изображение, dynamic observations и все memory groups в порядке
 observe. На этом этапе memory tools и ground truth недоступны. Ответом остаётся строгий `Guess`.
 
+Группы передаются в минимальной проекции: `feature.key`, `status`, `failure` и hits вида
+`{region, lesson, effect}`. Текст lesson очищен от префиксов региона и effect; `provider_id`,
+`memory_hit_id` и `score` в analyze не попадают. Суммарный текст lessons ограничен 3000 символами,
+лишние hits отбрасываются в порядке групп. После гейта в группе остаются только `helped` и lessons
+без verdict. Prompt объясняет, что правило — свидетельство только там, где в кадре виден его cue;
+если виден контраст из правила, оно свидетельствует против `region`.
+
 ### 4. Геокодинг
 
 [`geocode_search`](../tools/geocode_search.md) разрешает уже сформированное название или адрес в

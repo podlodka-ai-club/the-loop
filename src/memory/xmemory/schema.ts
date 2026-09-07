@@ -74,7 +74,12 @@ function canonicalize(value: unknown, active: WeakSet<object>): JsonValue {
     }
 
     if (!isPlainMapping(value) || !ownKeysAreEnumerableStrings(value)) throw schemaError();
-    const sortedKeys = Object.keys(value).sort();
+    // The xmemory API echoes `description: null` on every schema node it stores, while
+    // the committed YAML omits descriptions. An absent description and a null one
+    // describe the same schema, so the null form does not take part in the hash.
+    const sortedKeys = Object.keys(value)
+      .filter((key) => !(key === "description" && value[key] === null))
+      .sort();
     const result: { [key: string]: JsonValue } = Object.create(null);
     for (const key of sortedKeys) {
       Object.defineProperty(result, key, {

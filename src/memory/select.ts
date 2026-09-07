@@ -9,6 +9,9 @@
  */
 import { FileMemory, parseRecallMode, type RecallMode } from "./file/memory.ts";
 import { createMem0Memory, loadMem0MemoryConfig } from "./mem0/memory.ts";
+import { createHindsightMemory, loadHindsightMemoryConfig, type HindsightMemoryConfig } from "./hindsight/memory.ts";
+import { resolveHindsightMemorySource } from "./hindsight/platform-contract.ts";
+import { createXmemoryMemory, loadXmemoryMemoryConfig } from "./xmemory/memory.ts";
 import { NullMemory } from "./null/memory.ts";
 import {
   createMemorySourceBinding,
@@ -26,13 +29,28 @@ import {
 import type { BenchmarkMemoryMode } from "../benchmark-metrics.ts";
 import type { MemoryRunConfig } from "../tools/memory.ts";
 
-export type Backend = "file" | "mem0";
+export type Backend = "file" | "mem0" | "hindsight" | "xmemory";
 
-export const BACKENDS: readonly Backend[] = ["file", "mem0"];
+export const BACKENDS: readonly Backend[] = ["file", "mem0", "hindsight", "xmemory"];
 
 export function parseBackend(value: string): Backend {
   if ((BACKENDS as readonly string[]).includes(value)) return value as Backend;
   throw new Error(`unknown memory backend "${value}", expected one of ${BACKENDS.join("|")}`);
+}
+
+/**
+ * Hindsight has no run-scoped env pair like Mem0; the bank is the namespace. Read it
+ * from HINDSIGHT_BANK_ID so a run names its scope the same way infra names pilots.
+ */
+export function loadHindsightConfigFromEnv(env: NodeJS.ProcessEnv = process.env): HindsightMemoryConfig {
+  const bankId = env.HINDSIGHT_BANK_ID?.trim();
+  if (bankId === undefined || bankId === "") {
+    throw new Error("HINDSIGHT_BANK_ID is required for the hindsight backend");
+  }
+  return loadHindsightMemoryConfig(
+    resolveHindsightMemorySource({ memoryRef: "hindsight", bankId, purpose: "pilot" }),
+    env,
+  );
 }
 
 export type MemorySelection = {
@@ -79,6 +97,28 @@ export async function selectMemory(options: {
     return {
       memory: createMem0Memory({ snapshots: false }, config),
       describe: `mem0 agent ${config.agentId}, ranking by the service`,
+      frozen: false,
+      recallMode,
+      recallLimit: RECALL_LIMIT,
+    };
+  }
+
+  if (options.backend === "hindsight") {
+    const config = loadHindsightConfigFromEnv();
+    return {
+      memory: createHindsightMemory({ snapshots: false }, config),
+      describe: `hindsight bank ${config.source.bankId}, ranking by the service`,
+      frozen: false,
+      recallMode,
+      recallLimit: RECALL_LIMIT,
+    };
+  }
+
+  if (options.backend === "xmemory") {
+    const config = loadXmemoryMemoryConfig();
+    return {
+      memory: await createXmemoryMemory({ snapshots: false }, config),
+      describe: `xmemory instance ${config.instanceId}, synthesized single answer`,
       frozen: false,
       recallMode,
       recallLimit: RECALL_LIMIT,
@@ -154,6 +194,62 @@ export async function selectFeatureScopedEvaluationMemory(options: {
       ),
       run,
       describe: `feature-scoped mem0 agent ${config.agentId}, recall top`,
+      frozen: false,
+      memoryMode: options.memoryMode,
+      recallMode: "top",
+      recallLimit: RECALL_LIMIT,
+    };
+  }
+
+  if (options.backend === "hindsight") {
+    const config = loadHindsightConfigFromEnv();
+    const memory = createHindsightMemory({ snapshots: false }, config);
+    const run = {
+      memoryRef: "hindsight",
+      mode: "production" as const,
+      snapshotId: null,
+      readOnly: true as const,
+      recallLimit: RECALL_LIMIT,
+    };
+    return {
+      memoryBinding: await resolveMemoryBinding(
+        run,
+        createMemorySourceResolver(createMemorySourceBinding({
+          memoryRef: "hindsight",
+          memory,
+          provider: "hindsight",
+        })),
+      ),
+      run,
+      describe: `feature-scoped hindsight bank ${config.source.bankId}, recall top`,
+      frozen: false,
+      memoryMode: options.memoryMode,
+      recallMode: "top",
+      recallLimit: RECALL_LIMIT,
+    };
+  }
+
+  if (options.backend === "xmemory") {
+    const config = loadXmemoryMemoryConfig();
+    const memory = await createXmemoryMemory({ snapshots: false }, config);
+    const run = {
+      memoryRef: "xmemory",
+      mode: "production" as const,
+      snapshotId: null,
+      readOnly: true as const,
+      recallLimit: RECALL_LIMIT,
+    };
+    return {
+      memoryBinding: await resolveMemoryBinding(
+        run,
+        createMemorySourceResolver(createMemorySourceBinding({
+          memoryRef: "xmemory",
+          memory,
+          provider: "xmemory",
+        })),
+      ),
+      run,
+      describe: `feature-scoped xmemory instance ${config.instanceId}, synthesized single answer`,
       frozen: false,
       memoryMode: options.memoryMode,
       recallMode: "top",

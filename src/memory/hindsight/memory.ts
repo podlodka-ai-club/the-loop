@@ -101,6 +101,21 @@ function readEffect(value: unknown): ReflectionEffect | undefined {
     : undefined;
 }
 
+function readRegion(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Z]{2}$/.test(value) ? value : undefined;
+}
+
+function readTriggersJson(value: unknown): string[] | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) return undefined;
+    return parsed.length === 0 ? undefined : (parsed as string[]);
+  } catch {
+    return undefined;
+  }
+}
+
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
 }
@@ -405,11 +420,17 @@ function projectRecallResponse(response: unknown, limit: number): Hint[] {
       const metadata = isRecord(result.metadata) ? result.metadata : {};
       const featureKey = readFeatureKey(metadata.loci_feature_key);
       const effect = readEffect(metadata.loci_effect);
+      const region = readRegion(metadata.loci_region);
+      const triggers = readTriggersJson(metadata.loci_triggers_json);
+      // Hindsight scores are a per-strategy map on an undocumented scale, so the
+      // relevance gate falls back to trigger overlap instead of a score threshold.
       hints.push({
         lessonId: result.id,
         text: result.text,
         ...(featureKey === undefined ? {} : { featureKey }),
         ...(effect === undefined ? {} : { effect }),
+        ...(region === undefined ? {} : { region }),
+        ...(triggers === undefined ? {} : { triggers }),
       });
     }
     return hints.slice(0, limit);

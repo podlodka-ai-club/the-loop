@@ -29,6 +29,9 @@ export async function runIdempotentWrite(
       typeof value === "string" ? { status: "stored", lessonId: value } : value,
     );
   const lessonId = operation.then((value) => value.lessonId);
+  // The rejection surfaces through `await operation` below; without this handler the
+  // derived promise's copy of the same rejection crashes the process as unhandled.
+  lessonId.catch(() => {});
   completed.set(key, lessonId);
   try {
     return await operation;

@@ -117,9 +117,10 @@ export const OBSERVE_PROMPT = [
 
 Before persistence, application normalization applies Unicode NFKC, trims, lowercases and replaces
 runs of spaces or hyphens with `_`. The normalized key must match `^[a-z][a-z0-9_]{0,63}$`, must not
-match `/^(?:other|misc|unknown|feature|cue|item)(?:_?[0-9]+)?$/`, and must be unique within the
-response. A structural or key validation failure rejects the complete response; raw and normalized
-keys are not both retained. No substring, entity, implication or semantic rule is applied to `text`.
+match `/^(?:other|misc|unknown|feature|cue|item)(?:_?[0-9]+)?$/`. Entries that normalize to the same
+key are merged into the first occurrence, texts joined with `; ` and cut at the text bound, because the
+model routinely emits one entry per vehicle or sign. A structural or key validation failure rejects the
+complete response; raw and normalized keys are not both retained. No substring, entity, implication or semantic rule is applied to `text`.
 
 The cache key is exactly:
 `sha256(OBSERVE_SCHEMA_VERSION + "\\0" + OBSERVE_PROMPT_VERSION + "\\0" + model + "\\0" + seed + "\\0" + imagePath + "\\0" + imageDigest)`.

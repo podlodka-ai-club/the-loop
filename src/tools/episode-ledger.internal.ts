@@ -65,13 +65,25 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
   return actual.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
 }
 
+const GATE_DROP_KEYS = ["effect", "feature", "unrelated", "duplicate", "overflow"] as const;
+
+function validateGateDrops(value: unknown): void {
+  if (!isRecord(value)) rejectForeignHit();
+  validateExactKeys(value, GATE_DROP_KEYS);
+  for (const key of GATE_DROP_KEYS) {
+    if (!Number.isSafeInteger(value[key]) || (value[key] as number) < 0) rejectForeignHit();
+  }
+}
+
 function validateGroupKeys(value: Record<string, unknown>): void {
   const required = ["attemptId", "feature", "query", "status", "hits", "failure", "retryCount"] as const;
+  const hasGate = Object.hasOwn(value, "gate");
   const actual = Object.keys(value);
-  if (actual.length !== required.length) rejectForeignHit();
+  if (actual.length !== required.length + (hasGate ? 1 : 0)) rejectForeignHit();
   for (const key of required) {
     if (!Object.hasOwn(value, key)) rejectForeignHit();
   }
+  if (hasGate) validateGateDrops(value.gate);
   if (!Number.isSafeInteger(value.retryCount) || (value.retryCount as number) < 0) {
     rejectForeignHit();
   }
@@ -152,7 +164,7 @@ export function episodeCandidatesFromGroups(
     if (status !== "hits") continue;
     for (const [occurrence, hit] of hits.entries()) {
       if (!isRecord(hit)) rejectForeignHit();
-      validateExactKeys(hit, ["attemptId", "featureKey", "memoryHitId", "providerId", "text", "score", "effect"]);
+      validateExactKeys(hit, ["attemptId", "featureKey", "memoryHitId", "providerId", "text", "score", "effect", "region"]);
       if (!isFeatureKey(hit.featureKey) || hit.attemptId !== attemptId || hit.featureKey !== rawFeature.key) {
         rejectForeignHit();
       }
@@ -163,6 +175,7 @@ export function episodeCandidatesFromGroups(
       if (typeof hit.text !== "string" || hit.text.trim() === "") rejectForeignHit();
       if (hit.score !== null && (typeof hit.score !== "number" || !Number.isFinite(hit.score))) rejectForeignHit();
       if (hit.effect !== null && !isReflectionEffect(hit.effect)) rejectForeignHit();
+      if (hit.region !== null && (typeof hit.region !== "string" || !/^[A-Z]{2}$/.test(hit.region))) rejectForeignHit();
       if (hit.memoryHitId !== makeMemoryHitId(attemptId, rawFeature.key, hit.providerId, hit.text, occurrence)) {
         rejectForeignHit();
       }

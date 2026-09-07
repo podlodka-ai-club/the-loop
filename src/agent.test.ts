@@ -354,8 +354,8 @@ test("retrieve loop processes visible features in order, retries once and disabl
       assert.deepEqual(tool.function.parameters.required, ["feature_key", "query"]);
     }
     assert.deepEqual(memory.calls, [
-      { query: "plates visual cue", limit: 5 },
-      { query: "poles visual cue", limit: 5 },
+      { query: "plates visual cue", limit: 20 },
+      { query: "poles visual cue", limit: 20 },
     ]);
     assert.deepEqual(
       result.memoryGroups.map((group) => [group.feature.key, group.status, group.hits.length]),
@@ -415,7 +415,7 @@ test("only model-emitted dynamic observations are retrieved and passed to final 
       }),
       ["poles"],
     );
-    assert.deepEqual(memory.calls, [{ query: "poles visual cue", limit: 5 }]);
+    assert.deepEqual(memory.calls, [{ query: "poles visual cue", limit: 20 }]);
     assert.deepEqual(
       result.memoryGroups.map((group) => group.feature.key),
       ["poles"],
@@ -532,8 +532,8 @@ test("final analyze receives one failed group after two missing retrieval calls 
       ["plates", "plates", "poles", "vegetation"],
     );
     assert.deepEqual(memory.calls, [
-      { query: "poles visual cue", limit: 5 },
-      { query: "vegetation visual cue", limit: 5 },
+      { query: "poles visual cue", limit: 20 },
+      { query: "vegetation visual cue", limit: 20 },
     ]);
 
     assert.deepEqual(
@@ -634,10 +634,10 @@ test("retrieve loop retries malformed, wrong-feature, multiple and invalid-args 
       ["plates", "plates", "poles", "poles", "road_markings", "road_markings", "vegetation", "vegetation"],
     );
     assert.deepEqual(memory.calls, [
-      { query: "plates visual cue", limit: 5 },
-      { query: "poles visual cue", limit: 5 },
-      { query: "road_markings visual cue", limit: 5 },
-      { query: "vegetation visual cue", limit: 5 },
+      { query: "plates visual cue", limit: 20 },
+      { query: "poles visual cue", limit: 20 },
+      { query: "road_markings visual cue", limit: 20 },
+      { query: "vegetation visual cue", limit: 20 },
     ]);
     assert.deepEqual(
       result.trace.events.map((event) => [event.featureKey, event.status]),
@@ -753,7 +753,7 @@ test("locate rethrows the original final analyze error when partial result canno
       caught = error;
     }
     assert.equal(caught, analyzeError);
-    assert.deepEqual(memory.calls, [{ query: "poles visual cue", limit: 5 }]);
+    assert.deepEqual(memory.calls, [{ query: "poles visual cue", limit: 20 }]);
     assert.deepEqual(
       client.requests
         .filter((request) => request.tools !== undefined)

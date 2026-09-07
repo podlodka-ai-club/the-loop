@@ -54,12 +54,29 @@ legacy memory_store
   content     string, required  # произвольная UTF-8 проза; предпочтительно Markdown
 ```
 
-В dynamic agent flow `content` формирует агент рефлексии как самостоятельное текстовое описание
-одного эпизода. Для `no_hit` агент получает и возвращает `memory_hit_id: null`; это означает, что
+В dynamic agent flow `content` — правило «видимый cue → region» для будущего blind attempt, а не
+описание эпизода. Для `no_hit` агент получает и возвращает `memory_hit_id: null`; это означает, что
 lesson относится к влиянию признака без найденного memory hit. Dispatcher проверяет strict schema:
 feature key и hit ID/null, один из четырёх effects,
 content 1–2,000 символов и не более двух предложений, 1–8 bounded triggers и двухбуквенный uppercase
 region. В legacy provider envelope ниже остаётся только проверка непустого content на native boundary.
+
+### Гигиена content
+
+После schema dispatcher применяет правила из
+[ADR о relevance gate](/specs/memory-tools-relevance-gate/adr.md):
+
+- Для `irrelevant` content заменяется канонической формой
+  `Cue "<triggers>" was observed and did not narrow the location.` Такой lesson хранится для
+  статистики и никогда не выдаётся analyze.
+- Для `helped`, `insufficient` и `misleading` content не должен описывать эпизод (memory, hit,
+  lesson, retrieval, blind guess, this image) и не должен называть страну, территорию или демоним,
+  кроме тех, что относятся к `region`. Список имён строится из `Intl.DisplayNames` и короткого
+  списка alias.
+- Нарушение — `invalid_tool_arguments`; episode получает `reflection_failed`, запись не выполняется.
+- Для `helped` content должен содержать контраст с альтернативой (`not`, `unlike`, `rather than`,
+  `instead of`, `whereas`). Без контраста lesson сохраняется с verdict `insufficient`; результат
+  `memory_store` и episode несут сохранённый verdict, а не запрошенный.
 
 ### Желаемая структура Markdown
 

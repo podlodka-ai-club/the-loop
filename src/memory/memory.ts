@@ -16,7 +16,7 @@ import {
 /** Default number of lessons a single recall may put into the prompt. */
 export type RecallLimit = 1 | 2 | 3 | 4 | 5;
 
-export const RECALL_LIMIT = parseRecallLimit(process.env.MEMORY_RECALL_LIMIT ?? "5", "MEMORY_RECALL_LIMIT");
+export const RECALL_LIMIT = parseRecallLimit(process.env.MEMORY_RECALL_LIMIT ?? "2", "MEMORY_RECALL_LIMIT");
 
 export function parseRecallLimit(value: string | number, name = "recallLimit"): RecallLimit {
   const raw = typeof value === "number" ? String(value) : value.trim();
@@ -190,6 +190,12 @@ export type Hint = {
   text: string;
   featureKey?: FeatureKey;
   effect?: ReflectionEffect;
+  /** Two-letter region the lesson talks about, when the adapter can separate it from the prose. */
+  region?: string;
+  /** Observable cues the lesson was stored under; the relevance gate uses them as a fallback. */
+  triggers?: string[];
+  /** Provider relevance score, when the provider returns one. Higher is more relevant. */
+  score?: number | null;
 };
 
 export type MemoryBindingRequest = {
@@ -243,6 +249,8 @@ export function renderHint(lesson: Lesson | LegacyLesson): Hint {
   };
   if (lesson.featureKey !== undefined) hint.featureKey = lesson.featureKey;
   if (lesson.effect !== undefined) hint.effect = lesson.effect;
+  if (region !== "") hint.region = region;
+  if (lesson.triggers.length > 0) hint.triggers = [...lesson.triggers];
   return hint;
 }
 

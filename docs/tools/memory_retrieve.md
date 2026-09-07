@@ -66,7 +66,8 @@ truth, бинарное изображение или инструкции из�
       "provider_id": "lesson-0012",
       "text": "Two wooden crossarms are a useful regional separator.",
       "score": 2,
-      "effect": "helped"
+      "effect": "helped",
+      "region": "BR"
     }
   ],
   "failure": null
@@ -75,6 +76,23 @@ truth, бинарное изображение или инструкции из�
 
 `no_hit` содержит пустой `hits` и `failure: null`; failure envelope содержит пустой `hits` и
 ненулевой код failure. `memory_ref`, `attempt_id` и active memory instance добавляет приложение.
+`region` — двухбуквенный код из lesson, когда адаптер отдаёт его отдельно от текста; иначе `null`.
+
+## Relevance gate
+
+Ответ провайдера не попадает в группу напрямую. Dispatcher запрашивает до четырёх кандидатов на
+каждый выдаваемый hit (не более 20) и применяет гейт из
+[ADR о relevance gate](/specs/memory-tools-relevance-gate/adr.md):
+
+- выдаются только lessons с verdict `helped` и lessons без verdict; `irrelevant`, `insufficient` и
+  `misleading` не выдаются;
+- lesson с `featureKey`, отличным от активного признака, не выдаётся;
+- при наличии `score` он должен быть не ниже `MEMORY_MIN_SCORE`; без score lesson должен делить с
+  query хотя бы один содержательный токен по `triggers` или, без triggers, по тексту;
+- дубликаты по тексту не выдаются; выдача ограничена `recallLimit` (по умолчанию 2).
+
+Пустая выдача после гейта — обычный `no_hit`. Счётчики отброшенных кандидатов сохраняются в группе
+как `gate` и уходят в trace, но не сериализуются модели.
 
 ## Legacy provider output
 

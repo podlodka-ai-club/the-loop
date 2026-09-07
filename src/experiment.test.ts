@@ -370,11 +370,11 @@ test("FileMemory and Mem0 readers both enter feature-scoped retrieval through th
     recallCalls: [] as Array<{ query: string; limit: number }>,
     async recall(query: string, limit: number) {
       this.recallCalls.push({ query, limit });
-      return [{ lessonId: "file-provider-id", text: "file lesson" }];
+      return [{ lessonId: "file-provider-id", text: "file lesson about wooden poles" }];
     },
   };
   const mem0Platform = new Mem0PlatformSpy([
-    { id: "mem0-provider-id", memory: "mem0 lesson", metadata: { loci_feature_key: "poles", loci_effect: "helped" } },
+    { id: "mem0-provider-id", memory: "mem0 lesson about wooden poles", metadata: { loci_feature_key: "poles", loci_effect: "helped" } },
   ]);
   const mem0 = createMem0Memory(
     { snapshots: false },
@@ -405,12 +405,12 @@ test("FileMemory and Mem0 readers both enter feature-scoped retrieval through th
 
   assert.equal(fileResult.hits[0]?.providerId, "file-provider-id");
   assert.equal(mem0Result.hits[0]?.providerId, "mem0-provider-id");
-  assert.deepEqual(fileReader.recallCalls, [{ query: "wooden poles", limit: 5 }]);
+  assert.deepEqual(fileReader.recallCalls, [{ query: "wooden poles", limit: 20 }]);
   assert.deepEqual(mem0Platform.searchInvocations, [
     {
       query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "wooden poles"),
       filters: { agent_id: "agent" },
-      topK: 5,
+      topK: 20,
       threshold: 0.1,
       rerank: false,
       keywordSearch: true,
@@ -432,6 +432,7 @@ function group(input: { feature: FeatureObservation; providerIds: string[] }): F
       text: `${providerId} text`,
       score: null,
       effect: null,
+      region: null,
     })),
     failure: null,
     retryCount: 0,

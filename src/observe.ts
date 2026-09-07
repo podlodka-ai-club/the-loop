@@ -151,16 +151,28 @@ function normalizeFeatureObservation(value: unknown): FeatureObservation | null 
   return { key, text: value.text };
 }
 
+/**
+ * Duplicate normalized keys are merged, not rejected. The model routinely emits one
+ * `vehicles` entry per vehicle it sees; rejecting the whole observation for that left
+ * the frame with no features, no retrieval and no reflection. The merged text keeps
+ * the first occurrence's order and is cut at the text bound.
+ */
 function normalizeObservationFeatures(values: readonly unknown[]): FeatureObservation[] | null {
   if (values.length > MAX_FEATURES) return null;
   const normalized: FeatureObservation[] = [];
-  const seen = new Set<string>();
+  const byKey = new Map<string, FeatureObservation>();
   for (let index = 0; index < values.length; index += 1) {
     if (!(index in values)) return null;
     const feature = normalizeFeatureObservation(values[index]);
-    if (feature === null || seen.has(feature.key)) return null;
-    seen.add(feature.key);
-    normalized.push(feature);
+    if (feature === null) return null;
+    const existing = byKey.get(feature.key);
+    if (existing === undefined) {
+      byKey.set(feature.key, feature);
+      normalized.push(feature);
+      continue;
+    }
+    const merged = [...`${existing.text}; ${feature.text}`].slice(0, MAX_FEATURE_TEXT_LENGTH).join("");
+    existing.text = merged;
   }
   return normalized;
 }
@@ -248,7 +260,7 @@ function cachePath(cacheDir: string, config: ObserveConfig, imagePath: string, i
 
 let cachedClient: OpenAI | undefined;
 function client(): OpenAI {
-  cachedClient ??= new OpenAI({ apiKey: process.env.OPENROUTER_API_KEY ?? "", baseURL: BASE_URL });
+  cachedClient ??= new OpenAI({ apiKey: process.env.OPENROUTER_API_KEY ?? "", baseURL: BASE_URL, timeout: 120_000 });
   return cachedClient;
 }
 
@@ -306,7 +318,11 @@ export async function observe(imagePath: string, deps: ObserveDeps = {}): Promis
         span.setAttributes({
           "observe.feature_count": result.features.length,
           "observe.prompt_version": config.promptVersion,
+          ...(result.error === null ? {} : { "observe.error": result.error, "observe.raw_prefix": (raw ?? "").slice(0, 400) }),
         });
+        if (result.error !== null && process.env.OBSERVE_DEBUG === "1") {
+          console.error(`observe ${imagePath}: ${result.error}\n${(raw ?? "<null>").slice(0, 1200)}`);
+        }
         if (result.error === null) {
           await mkdir(dirname(path), { recursive: true });
           await writeFile(path, JSON.stringify(result), "utf8");

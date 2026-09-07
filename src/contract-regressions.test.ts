@@ -302,6 +302,7 @@ test("feature-scoped projection keeps the adapter boundary for retrieve and stor
       text: dynamicFeature.text,
       score: null,
       effect: null,
+      region: null,
     },
   }, {
     feature_key: dynamicFeature.key,
@@ -312,7 +313,7 @@ test("feature-scoped projection keeps the adapter boundary for retrieve and stor
     region: "BR",
   });
 
-  assert.deepEqual(stored, { status: "stored", lessonId: "lesson-boundary", failure: null });
+  assert.deepEqual(stored, { status: "stored", lessonId: "lesson-boundary", failure: null, effect: "insufficient" });
   assert.equal(recallCalls, 0);
   assert.equal(promptPort.storeRequests.length, 1);
   const storeRequest = promptPort.storeRequests[0];
@@ -438,6 +439,7 @@ test("read-only projection keeps the adapter retrieve boundary and rejects store
         text: activeFeature.text,
         score: null,
         effect: null,
+        region: null,
       },
     }, {
       feature_key: activeFeature.key,
@@ -467,6 +469,7 @@ test("public reflection cannot store without the resolved MemoryBinding", async 
         text: "painted center line",
         score: null,
         effect: null,
+        region: null,
       },
       guess: { latitude: 1, longitude: 2, place: "test", reasoning: "test" },
       truth: { latitude: 1, longitude: 2, country: "BR" },
@@ -702,6 +705,7 @@ test("store binding errors stay typed outcomes instead of becoming unknown write
     text: "painted center line",
     score: null,
     effect: null,
+    region: null,
   };
   const source = createMemorySourceBinding({ memoryRef: "store-memory", memory: writer });
   const binding = await resolveMemoryBinding(
@@ -725,7 +729,7 @@ test("store binding errors stay typed outcomes instead of becoming unknown write
     triggers: ["painted center line"],
     region: "BR",
   });
-  assert.deepEqual(result, { status: "unavailable", lessonId: null, failure: "unavailable" });
+  assert.deepEqual(result, { status: "unavailable", lessonId: null, failure: "unavailable", effect: "insufficient" });
 });
 
 test("Hindsight and XMemory return already_stored across adapter instances", async () => {

@@ -11,6 +11,7 @@ import {
 } from "./reflect-runtime.internal.ts";
 import type { ReflectionEpisodeInput } from "./reflect.ts";
 import { loadPrompt } from "./promts.ts";
+import { canonicalIrrelevantContent } from "./lesson-hygiene.ts";
 import type { FeatureObservation } from "./observe.ts";
 import type {
   Hint,
@@ -65,6 +66,7 @@ const memoryHit: MemoryHit = {
   text: "Single yellow center lines can be broad in South America.",
   score: 2,
   effect: "insufficient",
+  region: null,
 };
 
 class WriterSpy implements MemoryWriter {
@@ -146,7 +148,7 @@ function toolCall(overrides: Partial<{
         feature_key: "road_markings",
         memory_hit_id: memoryHitId,
         effect: "helped",
-        content: "The single yellow center line matched the revealed Brazilian road. It should stay a weak cue unless poles agree.",
+        content: "A single yellow center line on a two-lane rural road, not the double yellow line used on nearby highways.",
         triggers: ["single yellow center line", "rural road"],
         region: "BR",
         ...overrides,
@@ -230,11 +232,11 @@ test("reflectEpisode sends one feature and one memory hit with guess, truth, dis
   assert.equal(prompt.includes("\"country\":\"BR\""), true);
   assert.equal(prompt.includes("842.250"), true);
   assert.equal(
-    prompt.includes("- helped: the hit supplied a cue consistent with the revealed location and useful for the answer."),
+    prompt.includes("- helped: the cue is discriminative."),
     true,
   );
   assert.equal(
-    prompt.includes("- irrelevant: the hit was usable data but did not affect this image's location decision."),
+    prompt.includes("- irrelevant: the cue was usable data but did not affect this image's location decision."),
     true,
   );
   assert.equal(
@@ -242,10 +244,10 @@ test("reflectEpisode sends one feature and one memory hit with guess, truth, dis
     true,
   );
   assert.equal(
-    prompt.includes("- insufficient: the hit was partly useful but did not contain enough evidence for this decision."),
+    prompt.includes("- insufficient: the cue is real and consistent with the revealed location, but it is common in many"),
     true,
   );
-  assert.equal(prompt.includes("content must be one or two grounded sentences"), true);
+  assert.equal(prompt.includes("content is a cue rule for a future blind attempt"), true);
   assert.equal(prompt.includes("triggers must be 1-8 short observable noun phrases"), true);
   assert.equal(prompt.includes("region must be the two-letter uppercase country code of the revealed truth"), true);
   assert.equal(JSON.stringify(request.messages).includes("data:image/jpeg;base64,image-reflect.jpg"), true);
@@ -257,7 +259,7 @@ test("reflectEpisode stores a grounded lesson with nullable hit provenance after
   client.toolCalls = [toolCall({
     memory_hit_id: null,
     effect: "insufficient",
-    content: "The visible road marking was a useful weak cue, but no memory answer was available to compare against it.",
+    content: "A single yellow center line on a rural road is a weak cue on its own.",
     triggers: ["single yellow center line"],
   })];
 
@@ -276,7 +278,7 @@ test("reflectEpisode stores a grounded lesson with nullable hit provenance after
   });
   assert.equal(textPart(client.invocations[0]!).includes('"selected_memory_hit":null'), true);
   assert.deepEqual(writer.invocations.map((invocation) => invocation.lesson), [{
-    content: "The visible road marking was a useful weak cue, but no memory answer was available to compare against it.",
+    content: "A single yellow center line on a rural road is a weak cue on its own.",
     sourceAttemptId: "attempt-reflect",
     featureKey: "road_markings",
     memoryHitId: null,
@@ -307,7 +309,9 @@ test("reflectEpisode accepts all effect values and writes app-owned provenance",
       {
         type: "remember",
         lesson: {
-          content: "The single yellow center line matched the revealed Brazilian road. It should stay a weak cue unless poles agree.",
+          content: effect === "irrelevant"
+            ? canonicalIrrelevantContent(["single yellow center line", "rural road"])
+            : "A single yellow center line on a two-lane rural road, not the double yellow line used on nearby highways.",
           sourceAttemptId: "attempt-reflect",
           featureKey: "road_markings",
           memoryHitId,

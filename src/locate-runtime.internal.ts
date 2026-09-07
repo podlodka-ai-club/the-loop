@@ -34,6 +34,7 @@ import { executeMemoryRetrieveWithRuntimeBudget } from "./tools/memory-runtime.i
 import {
   MEMORY_RETRIEVE_TOOL,
   MemoryToolValidationError,
+  projectMemoryGroupsForAnalyze,
   serializeMemoryRetrieveResult,
   validateMemoryRunConfig,
   type AttemptTrace,
@@ -136,6 +137,7 @@ function defaultClient(): LocateChatClient {
   rawClient ??= new OpenAI({
     apiKey: requireEnv("OPENROUTER_API_KEY"),
     baseURL: BASE_URL,
+    timeout: 120_000,
   });
   cachedClient ??= {
     chat: {
@@ -312,7 +314,7 @@ function retrievePrompt(feature: FeatureObservation): string {
 function analyzePrompt(observations: readonly FeatureObservation[], groups: readonly FeatureMemoryGroup[]): string {
   return `${loadPrompt("analyze")}\n\n${JSON.stringify({
     observations,
-    memory_groups: groups,
+    memory_groups: projectMemoryGroupsForAnalyze(groups),
   })}`;
 }
 

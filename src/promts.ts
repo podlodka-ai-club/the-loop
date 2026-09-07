@@ -7,8 +7,8 @@ export const PROMPT_REGISTRY = {
   agent: { path: "src/promts/agent.md", version: "agent-v1" },
   observe: { path: "src/promts/observe.md", version: "dynamic-features-v2" },
   retrieve: { path: "src/promts/retrieve.md", version: "retrieve-v1" },
-  analyze: { path: "src/promts/analyze.md", version: "analyze-v1" },
-  reflect: { path: "src/promts/reflect.md", version: "reflect-v1" },
+  analyze: { path: "src/promts/analyze.md", version: "analyze-v3" },
+  reflect: { path: "src/promts/reflect.md", version: "reflect-v3" },
   "memory-retrieve": { path: "src/promts/memory-retrieve.md", version: "memory-retrieve-v1" },
   "memory-store": { path: "src/promts/memory-store.md", version: "memory-store-v1" },
 } as const;

@@ -19,6 +19,8 @@ import {
 } from "../memory/memory.ts";
 import { loadPrompt } from "../promts.ts";
 import { makeMemoryIdempotencyKey } from "../memory/provenance.ts";
+import { applyRelevanceGate, recallFetchLimit, type RelevanceGateDrops } from "../memory/relevance.ts";
+import { applyLessonHygiene, LessonHygieneError, type LessonHygieneResult } from "../lesson-hygiene.ts";
 export {
   resolveMemoryBinding,
   type MemorySourceBinding,
@@ -36,6 +38,8 @@ export type MemoryHit = {
   text: string;
   score: number | null;
   effect: ReflectionEffect | null;
+  /** Region the lesson was stored under, when the adapter can name it apart from the text. */
+  region: string | null;
 };
 
 export type RetrievalStatus = "hits" | "no_hit" | "failed";
@@ -60,6 +64,8 @@ export type FeatureMemoryGroup = {
   failure: RetrievalFailure | null;
   /** Number of retries after the first model/provider attempt. */
   retryCount: number;
+  /** What the relevance gate removed from the provider answer. Absent when nothing was recalled. */
+  gate?: RelevanceGateDrops;
 };
 
 export type EpisodeTrace = {
@@ -134,9 +140,28 @@ export type MemoryRetrieveToolResult = {
     text: string;
     score: number | null;
     effect: ReflectionEffect | null;
+    region: string | null;
   }>;
   failure: RetrievalFailure | null;
 };
+
+/** One memory group as the analyze step sees it: cue rules only, no provenance. */
+export type AnalyzeMemoryGroup = {
+  feature: { key: FeatureKey };
+  status: RetrievalStatus;
+  failure: RetrievalFailure | null;
+  hits: Array<{
+    region: string | null;
+    lesson: string;
+    effect: ReflectionEffect | null;
+  }>;
+};
+
+/**
+ * Upper bound on lesson characters one analyze prompt may carry, across all groups.
+ * Hits beyond it are dropped in group order; the group keeps its status.
+ */
+export const ANALYZE_MEMORY_CHAR_BUDGET = 3_000;
 
 export type MemoryStoreToolResult =
   | { status: "stored" | "already_stored"; lesson_id: string; failure: null }
@@ -487,6 +512,40 @@ function hintScore(hint: Hint): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+const REGION_PREFIX = /^([A-Z]{2}):\s+/;
+const EFFECT_PREFIX = /^\[effect=(?:helped|irrelevant|misleading|insufficient)\]\s*/;
+
+/** Region from the hint field, or from the `XX: ` prefix that renderHint writes. */
+function hintRegion(hint: Hint): string | null {
+  if (typeof hint.region === "string" && /^[A-Z]{2}$/.test(hint.region)) return hint.region;
+  const match = REGION_PREFIX.exec(hint.text.trim());
+  return match === null ? null : match[1]!;
+}
+
+/** Lesson prose without the region and effect markers; both travel as fields now. */
+export function cleanLessonText(text: string): string {
+  return text.trim().replace(REGION_PREFIX, "").replace(EFFECT_PREFIX, "").trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Projection of retrieval groups for the analyze prompt. The transcript already holds
+ * the raw tool results; this view repeats only what a blind attempt may act on: which
+ * feature, which region, which rule, and how that rule behaved when it was last seen.
+ */
+export function projectMemoryGroupsForAnalyze(groups: readonly FeatureMemoryGroup[]): AnalyzeMemoryGroup[] {
+  let remaining = ANALYZE_MEMORY_CHAR_BUDGET;
+  return groups.map((group) => {
+    const hits: AnalyzeMemoryGroup["hits"] = [];
+    for (const hit of group.hits) {
+      const lesson = cleanLessonText(hit.text);
+      if (lesson === "" || lesson.length > remaining) continue;
+      remaining -= lesson.length;
+      hits.push({ region: hit.region, lesson, effect: hit.effect });
+    }
+    return { feature: { key: group.feature.key }, status: group.status, failure: group.failure, hits };
+  });
+}
+
 function isMemoryWriteResult(value: unknown): value is { status: "stored" | "already_stored"; lessonId: string } {
   return (
     isRecord(value) &&
@@ -620,7 +679,7 @@ export async function executeMemoryRetrieve(
       memoryRef: context.run.memoryRef,
       featureKey: context.activeFeature.key,
       query: parsed.query,
-      limit: context.run.recallLimit,
+      limit: recallFetchLimit(context.run.recallLimit),
     }, promptPort);
     const validated = validateRecallOutput(output);
     if (validated === null) return failedGroup(context, "memory_error", parsed.query);
@@ -642,7 +701,12 @@ export async function executeMemoryRetrieve(
     );
   }
 
-  const hits = hints.slice(0, Math.min(context.run.recallLimit, 5)).map((hint, index) => {
+  const gate = applyRelevanceGate(hints, {
+    featureKey: context.activeFeature.key,
+    query: parsed.query,
+    limit: Math.min(context.run.recallLimit, 5),
+  });
+  const hits = gate.served.map((hint, index) => {
     const text = hintText(hint);
     const providerId = hintProviderId(hint);
     return {
@@ -653,6 +717,7 @@ export async function executeMemoryRetrieve(
       text,
       score: hintScore(hint),
       effect: hint.effect ?? null,
+      region: hintRegion(hint),
     };
   });
 
@@ -664,6 +729,7 @@ export async function executeMemoryRetrieve(
     hits,
     failure: null,
     retryCount: 0,
+    gate: gate.drops,
   };
 }
 
@@ -671,16 +737,18 @@ export async function executeMemoryStore(
   context: MemoryToolContext,
   args: unknown,
 ): Promise<
-  | { status: "stored" | "already_stored"; lessonId: string; failure: null }
+  | { status: "stored" | "already_stored"; lessonId: string; failure: null; effect: ReflectionEffect }
   | {
       status: "write_failed" | "write_outcome_unknown" | "unsupported";
       lessonId: null;
       failure: "write_failed" | "write_outcome_unknown" | "unsupported";
+      effect: ReflectionEffect;
     }
   | {
       status: WorkflowMemoryFailure;
       lessonId: null;
       failure: WorkflowMemoryFailure;
+      effect: ReflectionEffect;
     }
 > {
   validateMemoryRunConfig(context.run);
@@ -713,12 +781,27 @@ export async function executeMemoryStore(
     throw new MemoryToolValidationError("foreign_hit");
   }
 
+  let hygiene: LessonHygieneResult;
+  try {
+    hygiene = applyLessonHygiene({
+      effect: parsed.effect,
+      content: parsed.content,
+      triggers: parsed.triggers,
+      region: parsed.region,
+    });
+  } catch (error) {
+    if (error instanceof LessonHygieneError) {
+      throw new MemoryToolValidationError("invalid_tool_arguments", error.message);
+    }
+    throw error;
+  }
+
   const lesson: LessonInput = {
-    content: parsed.content,
+    content: hygiene.content,
     sourceAttemptId: context.attemptId,
     featureKey: parsed.feature_key,
     memoryHitId: parsed.memory_hit_id,
-    effect: parsed.effect,
+    effect: hygiene.effect,
     triggers: parsed.triggers,
     region: parsed.region,
     idempotencyKey: makeIdempotencyKey(context.attemptId, parsed.feature_key, parsed.memory_hit_id),
@@ -730,19 +813,21 @@ export async function executeMemoryStore(
       featureKey: context.activeFeature.key,
       lesson,
     }, promptPort);
+    const effect = hygiene.effect;
     if (!isMemoryWriteResult(result)) {
-      return { status: "write_outcome_unknown", lessonId: null, failure: "write_outcome_unknown" };
+      return { status: "write_outcome_unknown", lessonId: null, failure: "write_outcome_unknown", effect };
     }
-    return { status: result.status, lessonId: result.lessonId, failure: null };
+    return { status: result.status, lessonId: result.lessonId, failure: null, effect };
   } catch (error) {
+    const effect = hygiene.effect;
     if (error instanceof MemoryWriteError) {
-      return { status: error.code, lessonId: null, failure: error.code };
+      return { status: error.code, lessonId: null, failure: error.code, effect };
     }
     const bindingFailure = memoryBindingFailureCodeOrNull(error);
     if (bindingFailure !== null) {
-      return { status: bindingFailure, lessonId: null, failure: bindingFailure };
+      return { status: bindingFailure, lessonId: null, failure: bindingFailure, effect };
     }
-    return { status: "write_outcome_unknown", lessonId: null, failure: "write_outcome_unknown" };
+    return { status: "write_outcome_unknown", lessonId: null, failure: "write_outcome_unknown", effect };
   }
 }
 
@@ -757,6 +842,7 @@ export function serializeMemoryRetrieveResult(group: FeatureMemoryGroup): Memory
       text: hit.text,
       score: hit.score,
       effect: hit.effect,
+      region: hit.region,
     })),
     failure: group.failure,
   };

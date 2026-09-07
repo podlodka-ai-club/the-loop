@@ -78,7 +78,7 @@ test("empty dynamic observation is accepted without placeholder records", async 
   });
 });
 
-test("normalization enforces bounded keys, generic-key denylist and duplicate rejection", async () => {
+test("normalization enforces bounded keys, generic-key denylist and merges duplicate keys", async () => {
   assert.equal(normalizeFeatureKey("  Road--Markings "), "road_markings");
   assert.equal(normalizeFeatureKey("other"), null);
   assert.equal(normalizeFeatureKey("Feature_2"), null);
@@ -86,8 +86,22 @@ test("normalization enforces bounded keys, generic-key denylist and duplicate re
   assert.equal(isNormalizedFeatureKey("custom-cue"), false);
 
   await withFixture(async ({ cacheDir, imagePath }) => {
+    const merged = await observe(imagePath, {
+      cacheDir: join(cacheDir, "duplicate"),
+      model: async () =>
+        response([
+          { key: "Road Markings", text: "white line" },
+          { key: "vehicles", text: "one car" },
+          { key: "road-markings", text: "another line" },
+        ]),
+    });
+    assert.deepEqual(merged.features, [
+      { key: "road_markings", text: "white line; another line" },
+      { key: "vehicles", text: "one car" },
+    ]);
+    assert.equal(merged.error, null);
+
     for (const [name, features] of [
-      ["duplicate", [{ key: "Road Markings", text: "white line" }, { key: "road-markings", text: "another line" }]],
       ["generic", [{ key: "misc_1", text: "some cue" }]],
       ["invalid", [{ key: "not/a-key", text: "some cue" }]],
       [

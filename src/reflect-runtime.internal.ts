@@ -102,6 +102,7 @@ function defaultClient(): ReflectRuntimeChatClient {
   rawClient ??= new OpenAI({
     apiKey: requireEnv("OPENROUTER_API_KEY"),
     baseURL: BASE_URL,
+    timeout: 120_000,
   });
   cachedClient ??= {
     chat: {
@@ -302,7 +303,7 @@ export async function reflectEpisodeWithRuntime(
 
       const toolCalls = response.choices[0]?.message.tool_calls ?? [];
       const parsedArgs = parsedToolArguments(toolCalls);
-      const effect = effectFromParsedToolArguments(parsedArgs);
+      const requestedEffect = effectFromParsedToolArguments(parsedArgs);
       const region = regionFromParsedToolArguments(parsedArgs);
       if (region === null || region !== truthCountry) return failureResult("invalid_tool_arguments");
       const store = await executeMemoryStore(
@@ -319,12 +320,16 @@ export async function reflectEpisodeWithRuntime(
         parsedArgs,
       );
 
-      if (effect === null) return failureResult("invalid_tool_arguments");
+      if (requestedEffect === null) return failureResult("invalid_tool_arguments");
+      // Hygiene may downgrade `helped` without a contrast to `insufficient`; the
+      // episode and the metrics carry the verdict that was stored, not the one asked.
+      const effect = store.effect;
       span.setAttributes({
         "reflect.attempt_id": input.attemptId,
         "reflect.feature_key": input.feature.key,
         "reflect.prompt_version": PROMPT_VERSIONS.reflect,
         "reflect.effect": effect,
+        "reflect.requested_effect": requestedEffect,
         "reflect.status": store.status,
         ...(input.memoryHit === null ? {} : { "reflect.memory_hit_id": input.memoryHit.memoryHitId }),
       });

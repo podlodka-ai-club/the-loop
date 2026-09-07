@@ -4,14 +4,20 @@
  *
  * Usage:
  *   node src/train.ts [--limit 30] [--snapshot-every 10] [--seed train-v1]
+ *                     [--pool-manifest benchmark/samples/osv5m-v4-train.txt]
+ *
+ * `--pool-manifest` restricts the pool to the ids of a frozen train corpus, so two
+ * machines holding different shards train on the same frames. Without it the pool is
+ * every train-eligible frame on disk.
  *
  * The training pool excludes every image in the frozen evaluation manifest, and
  * every image sharing a `sequence` with one. A sequence is one drive down one road,
  * so a neighbouring frame is the same place from a metre further along - training on
  * it would be training on the eval set.
  */
-import { readManifest, DEFAULT_MANIFEST } from "./manifest.ts";
+import { readManifest, DEFAULT_MANIFEST, DEFAULT_TRAIN_MANIFEST } from "./manifest.ts";
 import { haversineKm } from "./geo.ts";
+import { framePath } from "./frames.ts";
 import {
   createFrozenMemorySnapshotBinding,
   createMemorySourceBinding,
@@ -29,7 +35,9 @@ import type { MemoryRunConfig } from "./tools/memory.ts";
 import { parseBenchmarkMemoryMode } from "./benchmark-metrics.ts";
 import { selectTrainingSample } from "./train-selection.ts";
 import { parsePositiveSafeIntegerOption, readCliOption } from "./cli-options.ts";
-import { parseBackend } from "./memory/select.ts";
+import { loadHindsightConfigFromEnv, parseBackend } from "./memory/select.ts";
+import { createHindsightMemory } from "./memory/hindsight/memory.ts";
+import { createXmemoryMemory, loadXmemoryMemoryConfig } from "./memory/xmemory/memory.ts";
 
 const limit = parsePositiveSafeIntegerOption("limit", readCliOption("limit", "30"));
 const snapshotEvery = parsePositiveSafeIntegerOption("snapshot-every", readCliOption("snapshot-every", "10"));
@@ -44,8 +52,24 @@ if (memoryMode === "warm" && recallMode !== "top") {
   throw new Error("warm training requires --recall top");
 }
 
-const [{ rows: pool }, { rows: metadataRows }] = await Promise.all([loadRows(), loadCsvRows()]);
+const [{ rows: diskPool }, { rows: metadataRows }] = await Promise.all([loadRows(), loadCsvRows()]);
 const manifest = await readManifest(readCliOption("manifest", DEFAULT_MANIFEST));
+const poolManifestPath = readCliOption("pool-manifest", "");
+const poolManifest = poolManifestPath === "" ? null : await readManifest(poolManifestPath);
+if (poolManifest !== null && poolManifest.role !== "train") {
+  throw new Error(`--pool-manifest ${poolManifestPath} has role ${poolManifest.role}, expected train (see ${DEFAULT_TRAIN_MANIFEST})`);
+}
+const poolIds = poolManifest === null ? null : new Set(poolManifest.ids);
+// A frozen train corpus is read from its committed frames, where review rotations are
+// already applied, not from the raw shard the row was indexed in.
+const pool = poolIds === null
+  ? diskPool
+  : diskPool
+      .filter((row) => poolIds.has(row.id))
+      .map((row) => ({ ...row, imagePath: framePath(poolManifest!.role, row.id) }));
+if (poolIds !== null && pool.length < poolIds.size) {
+  console.log(`pool     ${poolIds.size - pool.length} of ${poolIds.size} train manifest ids are not on disk`);
+}
 
 const matchManifest = !process.argv.includes("--no-match-manifest");
 
@@ -81,9 +105,16 @@ if (matchManifest) {
 const fileMemory = backend === "file" ? new FileMemory(undefined, recallMode) : null;
 const mem0Config = backend === "mem0" ? loadMem0MemoryConfig() : null;
 const mem0Platform = mem0Config === null ? null : createMem0PlatformPort({ apiKey: mem0Config.apiKey });
-const memory = fileMemory ?? (mem0Config === null
-  ? null
-  : createMem0Memory({ snapshots: false }, mem0Config, { platform: mem0Platform! }));
+const hindsightConfig = backend === "hindsight" ? loadHindsightConfigFromEnv() : null;
+const xmemoryConfig = backend === "xmemory" ? loadXmemoryMemoryConfig() : null;
+const memory = fileMemory
+  ?? (mem0Config !== null
+    ? createMem0Memory({ snapshots: false }, mem0Config, { platform: mem0Platform! })
+    : hindsightConfig !== null
+      ? createHindsightMemory({ snapshots: false }, hindsightConfig)
+      : xmemoryConfig !== null
+        ? await createXmemoryMemory({ snapshots: false }, xmemoryConfig)
+        : null);
 if (memory === null) throw new Error(`memory backend ${backend} could not be initialized`);
 const run = {
   memoryRef: memoryMode === "cold" || recallMode === "off" ? null : backend,
@@ -106,9 +137,9 @@ const memoryBinding = run.memoryRef === null
         }),
       })))
     : await resolveMemoryBinding(run, createMemorySourceResolver(createMemorySourceBinding({
-        memoryRef: "mem0",
+        memoryRef: backend,
         memory,
-        provider: "mem0",
+        provider: backend,
       })));
 
 console.log(`pool     ${trainPool.length} train-eligible of ${pool.length} on disk`);
@@ -119,6 +150,10 @@ if (run.memoryRef === null) {
   console.log("memory   off (no memory reads, writes or snapshots)");
 } else if (backend === "mem0") {
   console.log(`memory   Mem0 agent ${mem0Config!.agentId}, recall ${recallMode}; hosted memory has no snapshots`);
+} else if (backend === "hindsight") {
+  console.log(`memory   Hindsight bank ${hindsightConfig!.source.bankId}, recall ${recallMode}; hosted memory has no snapshots`);
+} else if (backend === "xmemory") {
+  console.log(`memory   xmemory instance ${xmemoryConfig!.instanceId}, recall ${recallMode}; hosted memory has no snapshots`);
 } else {
   console.log(
     `memory   ${fileMemory!.path}, ${await fileMemory!.size()} lessons, ` +
@@ -184,10 +219,16 @@ if (run.memoryRef !== null) {
     console.log(`memory size       ${await fileMemory!.size()} lessons`);
     console.log(`final snapshot    ${finalSnapshot}`);
     console.log(`evaluate it with  npm run experiment -- --snapshot ${finalSnapshot} --concurrency 1`);
-  } else {
+  } else if (backend === "mem0") {
     const records = await mem0Platform!.list(mem0Config!.agentId);
     console.log(`memory size       ${records.length} Mem0 records`);
     console.log("final snapshot    unavailable (Mem0 Cloud does not support snapshots)");
     console.log(`evaluate it with  npm run experiment -- --backend mem0 --snapshot mem0-${mem0Config!.agentId} --memory-mode warm --flow legacy --two-step --concurrency 1`);
+  } else if (backend === "xmemory") {
+    console.log("final snapshot    unavailable (xmemory Cloud does not support snapshots)");
+    console.log(`evaluate it with  npm run experiment -- --flow feature-scoped --backend xmemory --snapshot xmemory-${xmemoryConfig!.instanceId} --memory-mode warm --concurrency 1`);
+  } else {
+    console.log("final snapshot    unavailable (Hindsight Cloud does not support snapshots)");
+    console.log(`evaluate it with  npm run experiment -- --flow feature-scoped --backend hindsight --snapshot hindsight-${hindsightConfig!.source.bankId} --memory-mode warm --concurrency 1`);
   }
 }

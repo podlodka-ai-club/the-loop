@@ -463,7 +463,7 @@ export function resolveMemoryBinding(
 ): Promise<MemoryBinding>;
 ```
 
-Retrieve validates dynamic key equality, bounded query and phase before provider access. It calls `reader.recall(query, recallLimit)` once and limits context to five hits. Store requires reflect phase, training mode, writable run, writer and matching active attempt/feature/hit; it generates `sourceAttemptId` and `idempotencyKey` in application code.
+Retrieve validates dynamic key equality, bounded query and phase before provider access. It calls `reader.recall(query, fetchLimit)` once, where `fetchLimit` is up to four candidates per served hit (at most 20), applies the relevance gate from the [relevance gate ADR](/specs/memory-tools-relevance-gate/adr.md) and limits context to `recallLimit` hits (at most five). Store requires reflect phase, training mode, writable run, writer and matching active attempt/feature/hit; it generates `sourceAttemptId` and `idempotencyKey` in application code.
 
 When `memoryRef` is `null`, the resolver supplies a no-op `MemoryReader`; every returned feature receives
 one `no_hit` group, and no provider access or lesson write occurs. `skipped` is reserved for an explicit

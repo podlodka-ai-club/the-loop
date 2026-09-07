@@ -110,6 +110,14 @@ dynamic agent tool contract.
 Если модель не может сформировать grounded lesson, episode получает `reflection_failed`; silent skip
 не используется. Negative или insufficient effect остаются валидными lessons.
 
+Content — правило «cue → region», а не отчёт об эпизоде. Content с narrative или с названием страны
+вне `region` отклоняется как `invalid_tool_arguments`, и episode получает `reflection_failed`. Для
+`irrelevant` content заменяется канонической формой без географии; см.
+[`memory_store`](../tools/memory_store.md#гигиена-content). `helped` без контраста с альтернативой
+сохраняется как `insufficient`. Lessons с verdict `irrelevant`, `insufficient` и `misleading`
+хранятся, но analyze их не получает: их отсеивает relevance gate в
+[`memory_retrieve`](../tools/memory_retrieve.md#relevance-gate).
+
 ### 5. Обновление памяти
 
 Если reflection payload валиден и задана `memory_ref`, оркестратор делает ровно один `memory_store`

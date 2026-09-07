@@ -326,11 +326,18 @@ export class Mem0Memory implements Memory, LegacyMemory {
       const featureKey = readFeatureKey(record.metadata.loci_feature_key);
       const effect = readEffect(record.metadata.loci_effect);
       const memory = renderedLessonContent({ content: record.memory, ...(effect === undefined ? {} : { effect }) });
+      const region = record.metadata.loci_region;
+      const triggers = record.metadata.loci_triggers;
       return {
         lessonId: record.id,
         text: memory,
         ...(featureKey === undefined ? {} : { featureKey }),
         ...(effect === undefined ? {} : { effect }),
+        ...(typeof region === "string" && /^[A-Z]{2}$/.test(region) ? { region } : {}),
+        ...(Array.isArray(triggers) && triggers.length > 0 && triggers.every((item) => typeof item === "string")
+          ? { triggers: [...(triggers as string[])] }
+          : {}),
+        ...(typeof record.score === "number" && Number.isFinite(record.score) ? { score: record.score } : {}),
       };
     });
     return hints.slice(0, limit);

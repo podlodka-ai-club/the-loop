@@ -98,6 +98,8 @@ test("evaluation selection keeps an immutable snapshot after the source file is 
       text: "BR: the selected snapshot lesson",
       featureKey: "road_surface",
       effect: "helped",
+      region: "BR",
+      triggers: ["selected cue"],
     },
   ]);
 
@@ -108,6 +110,8 @@ test("evaluation selection keeps an immutable snapshot after the source file is 
       text: "BR: the selected snapshot lesson",
       featureKey: "road_surface",
       effect: "helped",
+      region: "BR",
+      triggers: ["selected cue"],
     },
   ]);
 });

@@ -396,6 +396,106 @@ function providerLessonId(idempotencyKey: string): string {
   return `xmemory-lesson:${createHash("sha256").update(idempotencyKey, "utf8").digest("hex")}`;
 }
 
+/**
+ * xmemory answers a query it cannot serve with prose such as "no matching lessons" or
+ * "no matching insight". That is an empty result, not a hit: served as text it would
+ * pass the relevance gate whenever it repeats the query words.
+ */
+const NO_ANSWER = /^(?:there (?:are|is) )?no (?:matching|relevant|stored|available|applicable|known)?\s*(?:lessons?|insights?|memories|memory|information|records?|data|experiences?|results?)\b/i;
+
+function isNoAnswer(text: string): boolean {
+  return NO_ANSWER.test(text.replace(/^[^a-z]+/i, ""));
+}
+
+const RECORD_EFFECTS: readonly ReflectionEffect[] = ["helped", "irrelevant", "misleading", "insufficient"];
+
+/**
+ * Native read hint appended after the shared retrieve prompt. xmemory turns the query
+ * into SQL; without this line the "raw-tables" reader picks its own columns and often
+ * returns only the lesson text, which leaves the relevance gate blind to effect, feature
+ * and region. The shared prompt text itself is not changed.
+ */
+export const XMEMORY_READ_COLUMNS =
+  "RUNTIME_READ_COLUMNS: lesson_content, effect, feature_key, region, observed_triggers_json, idempotency_key";
+
+function hintFromRecord(record: Record<string, unknown>): Hint | null {
+  const content = record.lesson_content;
+  if (typeof content !== "string" || content.trim() === "") return null;
+  const effect = typeof record.effect === "string" && (RECORD_EFFECTS as readonly string[]).includes(record.effect)
+    ? (record.effect as ReflectionEffect)
+    : undefined;
+  const featureKey = typeof record.feature_key === "string" && isNormalizedFeatureKey(record.feature_key)
+    ? record.feature_key
+    : undefined;
+  const region = typeof record.region === "string" && /^[A-Z]{2}$/.test(record.region) ? record.region : undefined;
+  let triggers: string[] | undefined;
+  if (typeof record.observed_triggers_json === "string") {
+    try {
+      const list: unknown = JSON.parse(record.observed_triggers_json);
+      if (Array.isArray(list) && list.length > 0 && list.every((item) => typeof item === "string")) triggers = list as string[];
+    } catch {
+      triggers = undefined;
+    }
+  }
+  const key = typeof record.idempotency_key === "string" && record.idempotency_key !== ""
+    ? record.idempotency_key
+    : `${String(record.source_attempt_id ?? "")}:${String(record.feature_key ?? "")}:${content}`;
+  return {
+    lessonId: providerLessonId(key),
+    text: effect === undefined || effect === "helped" ? content.trim() : `[effect=${effect}] ${content.trim()}`,
+    ...(effect === undefined ? {} : { effect }),
+    ...(featureKey === undefined ? {} : { featureKey }),
+    ...(region === undefined ? {} : { region }),
+    ...(triggers === undefined ? {} : { triggers }),
+  };
+}
+
+/** "raw-tables" reader result: `{columns: [{name}], rows: [[...]]}`. Rows without lesson text are skipped. */
+function projectXmemoryTable(readerResult: Record<string, unknown>): Hint[] | null {
+  const columns = readerResult.columns;
+  const rows = readerResult.rows;
+  if (!Array.isArray(columns) || !Array.isArray(rows)) return null;
+  const names: string[] = [];
+  for (const column of columns) {
+    if (typeof column !== "object" || column === null || typeof (column as { name?: unknown }).name !== "string") return null;
+    names.push((column as { name: string }).name);
+  }
+  const hints: Hint[] = [];
+  for (const row of rows) {
+    if (!Array.isArray(row)) return null;
+    const record: Record<string, unknown> = {};
+    names.forEach((name, index) => { record[name] = row[index]; });
+    const hint = hintFromRecord(record);
+    if (hint !== null) hints.push(hint);
+  }
+  return hints;
+}
+
+/**
+ * In "single-answer" mode xmemory often returns the matching TrainingExperience rows as
+ * a JSON array instead of a synthesized sentence. Each row is one stored lesson with its
+ * own effect, feature key and region, so it is projected to one Hint per row and the
+ * relevance gate can judge each lesson on its own. Served as one opaque text the array
+ * would carry every `irrelevant` and foreign-feature lesson straight into analyze.
+ */
+function projectXmemoryRecords(text: string): Hint[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const hints: Hint[] = [];
+  for (const row of parsed) {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) return null;
+    const hint = hintFromRecord(row as Record<string, unknown>);
+    if (hint === null) return null;
+    hints.push(hint);
+  }
+  return hints;
+}
+
 function projectXmemoryAnswer(text: string): Pick<Hint, "text" | "effect"> {
   const effectMatch = /^effect:\s*(helped|irrelevant|misleading|insufficient)\s*$/im.exec(text);
   const effect = effectMatch?.[1] as ReflectionEffect | undefined;
@@ -656,8 +756,10 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
     let rawResult: unknown;
     try {
       rawResult = await this.platform.read({
-        query: encodeMemoryRetrieveQuery(prompt, query),
-        readMode: "single-answer",
+        query: `${encodeMemoryRetrieveQuery(prompt, query)}
+
+${XMEMORY_READ_COLUMNS}`,
+        readMode: "raw-tables",
         traceId,
         timeoutMs: this.config.readTimeoutMs,
       });
@@ -675,14 +777,21 @@ class SchemaVerifiedXmemoryMemory implements XmemoryMemory {
         throw new Error("invalid provider trace id");
       }
       const readerResult = result.readerResult;
-      if (typeof readerResult !== "object" || readerResult === null || Array.isArray(readerResult)) {
+      // A query the reader cannot turn into a lookup answers with a null result.
+      if (readerResult === null) return [];
+      if (typeof readerResult !== "object" || Array.isArray(readerResult)) {
         throw new Error("invalid reader result");
       }
+      const table = projectXmemoryTable(readerResult as Record<string, unknown>);
+      if (table !== null) return table.slice(0, limit);
       if (!Object.hasOwn(readerResult, "answer")) throw new Error("missing answer");
       const answer = (readerResult as Record<string, unknown>).answer;
       if (typeof answer !== "string") throw new Error("invalid answer");
       const text = answer.trim();
-      return text === "" ? [] : [{ lessonId: `xmemory-read:${traceId}`, ...projectXmemoryAnswer(text) }];
+      if (text === "" || isNoAnswer(text)) return [];
+      const records = projectXmemoryRecords(text);
+      if (records !== null) return records.slice(0, limit);
+      return [{ lessonId: `xmemory-read:${traceId}`, ...projectXmemoryAnswer(text) }];
     } catch {
       throw protocolError("read");
     }

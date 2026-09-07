@@ -116,6 +116,7 @@ function client(): OpenAI {
   cachedClient ??= new OpenAI({
     apiKey: requireEnv("OPENROUTER_API_KEY"),
     baseURL: BASE_URL,
+    timeout: 120_000,
   });
   return cachedClient;
 }

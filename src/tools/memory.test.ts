@@ -24,6 +24,9 @@ import {
   makeIdempotencyKey,
   makeMemoryHitId,
   memoryToolsForPhase,
+  projectMemoryGroupsForAnalyze,
+  cleanLessonText,
+  ANALYZE_MEMORY_CHAR_BUDGET,
   type FeatureMemoryGroup,
   type MemoryHit,
   type MemoryRunConfig,
@@ -123,6 +126,7 @@ function hit(overrides: Partial<MemoryHit> = {}): MemoryHit {
     text: "wooden poles",
     score: null,
     effect: null,
+    region: null,
     ...overrides,
   };
 }
@@ -135,6 +139,7 @@ function candidateHit(overrides: Partial<MemoryHit> = {}, occurrence = 0): Memor
     text: "wooden poles",
     score: null,
     effect: null,
+    region: null,
     ...overrides,
   } satisfies Omit<MemoryHit, "memoryHitId"> & { memoryHitId?: string };
   return {
@@ -289,7 +294,8 @@ test("memory payload is returned as data and cannot override the active retrieva
     {
       lessonId: "lesson-payload",
       text: payloadText,
-      effect: "misleading",
+      effect: "helped",
+      triggers: ["wooden poles"],
     } as Hint,
   ];
 
@@ -298,14 +304,14 @@ test("memory payload is returned as data and cannot override the active retrieva
     query: "wooden poles",
   });
 
-  assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 5 }]);
+  assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 20 }]);
   assert.equal(result.status, "hits");
   assert.equal(result.feature.key, "poles");
   assert.equal(result.hits.length, 1);
   assert.equal(result.hits[0]?.featureKey, "poles");
   assert.equal(result.hits[0]?.providerId, "lesson-payload");
   assert.equal(result.hits[0]?.text, payloadText);
-  assert.equal(result.hits[0]?.effect, "misleading");
+  assert.equal(result.hits[0]?.effect, "helped");
   assert.equal(Object.prototype.hasOwnProperty.call(result, "hints"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(result, "tools"), false);
 });
@@ -391,7 +397,7 @@ test("retrieval calls Memory once with a bounded query and returns stable applic
     query: "  wooden   crossarms  ",
   });
 
-  assert.deepEqual(reader.calls, [{ query: "wooden crossarms", limit: 5 }]);
+  assert.deepEqual(reader.calls, [{ query: "wooden crossarms", limit: 20 }]);
   assert.equal(result.status, "hits");
   assert.equal(result.failure, null);
   assert.equal(result.hits.length, 5);
@@ -410,6 +416,7 @@ test("retrieval calls Memory once with a bounded query and returns stable applic
     text: "Wooden pole cue 0",
     score: null,
     effect: "helped",
+    region: null,
   });
   assert.equal(
     makeMemoryHitId("attempt-1", "poles", "lesson-0", " Wooden   Pole Cue 0 ", 0),
@@ -429,9 +436,9 @@ test("all recall mode is rejected and grouped retrieval is not globally merged",
   assert.deepEqual(reader.calls, []);
 
   const first = new FakeReader();
-  first.hints = [{ lessonId: "z", text: "first group" }];
+  first.hints = [{ lessonId: "z", text: "first group about poles" }];
   const second = new FakeReader();
-  second.hints = [{ lessonId: "a", text: "second group" }];
+  second.hints = [{ lessonId: "a", text: "second group about plates" }];
 
   const poles = await executeMemoryRetrieve(context(first), {
     feature_key: "poles",
@@ -520,7 +527,7 @@ test("empty result, provider errors, timeout, skipped feature and exhausted budg
     },
     "typed timeout",
   );
-  assert.deepEqual(timeout.calls, [{ query: "wooden poles", limit: 5 }], "typed timeout provider call");
+  assert.deepEqual(timeout.calls, [{ query: "wooden poles", limit: 20 }], "typed timeout provider call");
 
   const messageOnlyTimeout = new FakeReader();
   messageOnlyTimeout.error = new Error("request timeout");
@@ -566,8 +573,8 @@ test("empty result, provider errors, timeout, skipped feature and exhausted budg
 test("runtime hit cap remains effective when the reader has its own prompt port", async () => {
   const reader = new FakeReader();
   reader.hints = [
-    { lessonId: "lesson-1", text: "first cue" },
-    { lessonId: "lesson-2", text: "second cue" },
+    { lessonId: "lesson-1", text: "first wooden cue" },
+    { lessonId: "lesson-2", text: "second wooden cue" },
   ];
   let promptPortCalls = 0;
   reader.promptPort = {
@@ -613,7 +620,7 @@ test("public memory retrieval ignores runtime budget on widened context", async 
   assert.equal(result.status, "hits");
   assert.equal(result.failure, null);
   assert.equal(result.hits.length, 1);
-  assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 5 }]);
+  assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 20 }]);
 });
 
 test("episode candidates are created only for returned hits in model-order groups", () => {
@@ -1352,7 +1359,7 @@ test("malformed recall outputs fail as memory errors without leaking invalid hit
     assert.equal(result.status, "failed", `case ${index}`);
     assert.equal(result.failure, "memory_error", `case ${index}`);
     assert.deepEqual(result.hits, [], `case ${index}`);
-    assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 5 }], `case ${index}`);
+    assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 20 }], `case ${index}`);
   }
 });
 
@@ -1362,7 +1369,7 @@ test("store dispatcher binds app-owned provenance and maps write outcomes", asyn
 
   const result = await executeMemoryStore(memoryContext, validStoreArgs);
 
-  assert.deepEqual(result, { status: "stored", lessonId: "lesson-1", failure: null });
+  assert.deepEqual(result, { status: "stored", lessonId: "lesson-1", failure: null, effect: validStoreArgs.effect });
   assert.deepEqual(writer.lessons, [
     {
       content: "The cue was too broad for the revealed country.",
@@ -1397,7 +1404,7 @@ test("store dispatcher binds app-owned provenance and maps write outcomes", asyn
     triggers: ["wooden poles"],
     region: "BR",
   });
-  assert.deepEqual(writeFailed, { status: "write_failed", lessonId: null, failure: "write_failed" });
+  assert.deepEqual(writeFailed, { status: "write_failed", lessonId: null, failure: "write_failed", effect: "insufficient" });
 });
 
 test("store dispatcher accepts a null memory hit without fabricating provider provenance", async () => {
@@ -1406,14 +1413,14 @@ test("store dispatcher accepts a null memory hit without fabricating provider pr
     feature_key: "poles",
     memory_hit_id: null,
     effect: "insufficient",
-    content: "The visible pole style was a useful cue, but retrieval returned no memory answer.",
+    content: "Wooden pole style with crossarms is a weak cue on its own.",
     triggers: ["wooden poles"],
     region: "BR",
   });
 
-  assert.deepEqual(result, { status: "stored", lessonId: "lesson-1", failure: null });
+  assert.deepEqual(result, { status: "stored", lessonId: "lesson-1", failure: null, effect: "insufficient" });
   assert.deepEqual(writer.lessons, [{
-    content: "The visible pole style was a useful cue, but retrieval returned no memory answer.",
+    content: "Wooden pole style with crossarms is a weak cue on its own.",
     sourceAttemptId: "attempt-1",
     featureKey: "poles",
     memoryHitId: null,
@@ -1431,6 +1438,7 @@ test("store dispatcher preserves already_stored and unknown write outcomes witho
     status: "already_stored",
     lessonId: "lesson-existing",
     failure: null,
+    effect: validStoreArgs.effect,
   });
 
   const unknown = new FakeWriter();
@@ -1439,6 +1447,7 @@ test("store dispatcher preserves already_stored and unknown write outcomes witho
     status: "write_outcome_unknown",
     lessonId: null,
     failure: "write_outcome_unknown",
+    effect: validStoreArgs.effect,
   });
 
   const voidWriter = new FakeWriter();
@@ -1452,6 +1461,7 @@ test("store dispatcher preserves already_stored and unknown write outcomes witho
     status: "write_outcome_unknown",
     lessonId: null,
     failure: "write_outcome_unknown",
+    effect: validStoreArgs.effect,
   });
   assert.equal(voidWriter.lessons.length, 1);
 });
@@ -1514,5 +1524,114 @@ test("store dispatcher shares sentence validation for abbreviations and compact 
       MemoryToolValidationError,
     );
     assert.deepEqual(writer.lessons, []);
+  }
+});
+
+test("analyze projection keeps region, cleaned lesson and effect only, within the character budget", () => {
+  const groups: FeatureMemoryGroup[] = [
+    {
+      attemptId: "attempt-1",
+      feature,
+      query: "wooden poles",
+      status: "hits",
+      hits: [
+        hit({ memoryHitId: "attempt-1/poles/a", providerId: "lesson-a", text: "BR: [effect=misleading] Wooden poles are common.", effect: "misleading", region: "BR" }),
+        hit({ memoryHitId: "attempt-1/poles/b", providerId: "lesson-b", text: "NO: Yellow  centre lines.", effect: "helped", region: null }),
+        hit({ memoryHitId: "attempt-1/poles/c", providerId: "lesson-c", text: "x".repeat(ANALYZE_MEMORY_CHAR_BUDGET), effect: null, region: null }),
+      ],
+      failure: null,
+      retryCount: 0,
+      gate: { effect: 1, feature: 0, unrelated: 0, duplicate: 0, overflow: 0 },
+    },
+    {
+      attemptId: "attempt-1",
+      feature: { key: "plates", text: "white plate" },
+      query: null,
+      status: "failed",
+      hits: [],
+      failure: "missing_tool_call",
+      retryCount: 1,
+    },
+  ];
+
+  assert.deepEqual(projectMemoryGroupsForAnalyze(groups), [
+    {
+      feature: { key: "poles" },
+      status: "hits",
+      failure: null,
+      hits: [
+        { region: "BR", lesson: "Wooden poles are common.", effect: "misleading" },
+        { region: null, lesson: "Yellow centre lines.", effect: "helped" },
+      ],
+    },
+    { feature: { key: "plates" }, status: "failed", failure: "missing_tool_call", hits: [] },
+  ]);
+  const projected = JSON.stringify(projectMemoryGroupsForAnalyze(groups));
+  assert.equal(projected.includes("lesson-a"), false);
+  assert.equal(projected.includes("memoryHitId"), false);
+  assert.equal(cleanLessonText(" BR: [effect=helped]  two   crossarms "), "two crossarms");
+});
+
+test("retrieve dispatcher over-fetches, drops irrelevant and foreign-feature lessons and records the gate", async () => {
+  const reader = new FakeReader();
+  reader.hints = [
+    { lessonId: "irrelevant", text: "wooden poles rule one", effect: "irrelevant", featureKey: "poles" },
+    { lessonId: "surface", text: "wooden poles rule two", effect: "helped", featureKey: "road_surface" },
+    { lessonId: "unrelated", text: "red laterite soil", effect: "helped", featureKey: "poles" },
+    { lessonId: "kept", text: "wooden poles rule three", effect: "helped", featureKey: "poles", region: "BR" },
+  ];
+  const result = await executeMemoryRetrieve(context(reader), { feature_key: "poles", query: "wooden poles" });
+  assert.deepEqual(reader.calls, [{ query: "wooden poles", limit: 20 }]);
+  assert.equal(result.status, "hits");
+  assert.deepEqual(result.hits.map((memoryHit) => [memoryHit.providerId, memoryHit.region]), [["kept", "BR"]]);
+  assert.deepEqual(result.gate, { effect: 1, feature: 1, unrelated: 1, duplicate: 0, overflow: 0 });
+  assert.deepEqual(episodeCandidatesFromGroups("attempt-1", [result]).length, 1);
+
+  reader.hints = [{ lessonId: "only-irrelevant", text: "wooden poles", effect: "irrelevant" }];
+  const empty = await executeMemoryRetrieve(context(reader), { feature_key: "poles", query: "wooden poles" });
+  assert.equal(empty.status, "no_hit");
+  assert.deepEqual(empty.hits, []);
+});
+
+test("store dispatcher applies lesson hygiene before the writer sees the lesson", async () => {
+  const writer = new FakeWriter();
+  const irrelevant = await executeMemoryStore(storeContext(writer), {
+    ...validStoreArgs,
+    effect: "irrelevant",
+    content: "The memory hit about Norway was irrelevant for this road.",
+  });
+  assert.equal(irrelevant.status, "stored");
+  assert.equal(irrelevant.effect, "irrelevant");
+  assert.equal(
+    (writer.lessons[0] as { content: string }).content,
+    'Cue "wooden poles" was observed and did not narrow the location.',
+  );
+
+  const generic = await executeMemoryStore(storeContext(writer), {
+    ...validStoreArgs,
+    effect: "helped",
+    content: "Wooden poles with two crossarms are typical of rural roads.",
+  });
+  assert.equal(generic.status, "stored");
+  assert.equal(generic.effect, "insufficient");
+  assert.equal((writer.lessons[1] as { effect: string }).effect, "insufficient");
+
+  const contrastive = await executeMemoryStore(storeContext(writer), {
+    ...validStoreArgs,
+    effect: "helped",
+    content: "Wooden poles carry two crossarms, not the single crossarm of neighbouring styles.",
+  });
+  assert.equal(contrastive.effect, "helped");
+  assert.equal((writer.lessons[2] as { effect: string }).effect, "helped");
+
+  for (const content of [
+    "The memory hit about poles did not help.",
+    "Wooden poles like these are common in Norway.",
+  ]) {
+    await assert.rejects(
+      executeMemoryStore(storeContext(new FakeWriter()), { ...validStoreArgs, content }),
+      (error: unknown) => error instanceof MemoryToolValidationError && error.failure === "invalid_tool_arguments",
+      content,
+    );
   }
 });
