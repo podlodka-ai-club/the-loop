@@ -90,7 +90,8 @@ function httpError(status: number, operation: string): Mem0MemoryError {
       context: "transient_operation",
     });
   }
-  if (status === 404 || status === 408 || status >= 500) {
+  if (status === 404) return new Mem0MemoryError("agent_not_found", `Mem0 ${operation} target was not found`);
+  if (status === 408 || status >= 500) {
     return new Mem0MemoryError("unavailable", `Mem0 ${operation} is unavailable`, {
       context: "transient_operation",
     });
@@ -118,6 +119,9 @@ function normalizeProviderError(error: unknown, operation: string): Mem0MemoryEr
   }
   if (name === "MemoryQuotaExceededError") {
     return new Mem0MemoryError("quota_exceeded", "Mem0 quota was exceeded");
+  }
+  if (name === "NotFoundError" || name === "MemoryNotFoundError") {
+    return new Mem0MemoryError("agent_not_found", `Mem0 ${operation} target was not found`);
   }
   if (name === "ValidationError" || name === "ConfigurationError") {
     return new Mem0MemoryError("invalid_input", `Mem0 rejected the ${operation} request`);

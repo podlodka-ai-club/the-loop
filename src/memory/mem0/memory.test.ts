@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import type { LessonInput, Memory } from "../memory.ts";
-import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
+import { MemoryWriteError, encodeMemoryRetrieveQuery, normalizeMemoryQuery, sharedMemoryPrompt, sharedMemoryPromptMetadata } from "../memory.ts";
+import type { LegacyLessonInput, LegacyMemory, LessonInput, MemoryWriteErrorCode } from "../memory.ts";
+import { loadPrompt } from "../../promts.ts";
 import {
   MEM0_CAPABILITIES,
   Mem0MemoryError,
@@ -127,11 +128,33 @@ test("capabilities and Phase-1 error retry policy are closed by default", () => 
   }
 });
 
+test("configured Mem0 memory exposes the application-owned common prompt metadata", () => {
+  const memory = createMem0Memory(
+    { snapshots: false },
+    { apiKey: "test-api-key", agentId: "test-agent", ingestionTimeoutMs: 100, pollIntervalMs: 1 },
+    { platform: memoryPort() },
+  );
+  assert.deepEqual(memory.promptMetadata, sharedMemoryPromptMetadata());
+  assert.equal(memory.promptMetadata?.retrieve.text, loadPrompt("memory-retrieve"));
+  assert.equal(memory.promptMetadata?.store.text, loadPrompt("memory-store"));
+});
+
 const lesson: LessonInput = {
   content: "Yellow roadside posts can support an Iceland hypothesis.",
   sourceAttemptId: "attempt-1",
+  featureKey: "bollards_and_barriers",
+  memoryHitId: "attempt-1/bollards_and_barriers/hit",
+  effect: "helped",
   triggers: ["yellow roadside posts"],
-  region: "Iceland",
+  region: "IS",
+  idempotencyKey: "attempt-1:bollards_and_barriers:hit",
+};
+
+const legacyLesson: LegacyLessonInput = {
+  content: "Yellow roadside posts can support an Iceland hypothesis.",
+  sourceAttemptId: "attempt-legacy",
+  triggers: [],
+  region: "",
 };
 
 function unexpected(name: string): never {
@@ -143,7 +166,7 @@ function memoryPort(overrides: Partial<Mem0PlatformPort> = {}): Mem0PlatformPort
     add: async () => unexpected("add"),
     getEvent: async () => unexpected("getEvent"),
     get: async () => unexpected("get"),
-    list: async () => unexpected("list"),
+    list: async () => [],
     search: async () => unexpected("search"),
     ...overrides,
   };
@@ -182,6 +205,12 @@ async function rejectsCode(
   options: { retryable?: boolean; eventId?: string; forbidden?: string[] } = {},
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (error instanceof MemoryWriteError) {
+      const expected: MemoryWriteErrorCode =
+        code === "ingestion_outcome_unknown" ? "write_outcome_unknown" : "write_failed";
+      assert.equal(error.code, expected);
+      return true;
+    }
     assert.ok(error instanceof Mem0MemoryError);
     assert.equal(error.code, code);
     assert.equal(error.retryable, options.retryable ?? false);
@@ -209,21 +238,112 @@ test("remember validates before calls and sends the exact scoped add payload", a
   await rejectsCode(memory.remember({ ...lesson, sourceAttemptId: "" }), "invalid_input");
   assert.equal(requests.length, 0);
 
-  await memory.remember({ ...lesson, triggers: [], region: "" });
+  await memory.remember(legacyLesson);
   assert.deepEqual(requests, [
     {
-      messages: [{ role: "assistant", content: lesson.content }],
+      messages: [{ role: "assistant", content: legacyLesson.content }],
       agentId: "agent-1",
       infer: true,
       temporalReasoning: false,
-      agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
+      agentCustomInstructions: loadPrompt("memory-store"),
       metadata: {
-        loci_source_attempt_id: lesson.sourceAttemptId,
+        loci_source_attempt_id: legacyLesson.sourceAttemptId,
         loci_triggers: [],
         loci_region: "",
       },
     },
   ]);
+});
+
+test("remember prefixes non-helped content and duplicate idempotency returns existing id without another add", async () => {
+  const requests: unknown[] = [];
+  const invocations: string[] = [];
+  const memory = adapter(
+    memoryPort({
+      add: async (request) => {
+        invocations.push("add");
+        requests.push(request);
+        return { eventId: "event-negative", status: "PENDING" };
+      },
+      getEvent: async (eventId) => {
+        invocations.push(`getEvent:${eventId}`);
+        return { eventId, status: "SUCCEEDED", memoryIds: ["memory-negative"] };
+      },
+      get: async (memoryId) => {
+        invocations.push(`get:${memoryId}`);
+        return { id: memoryId, memory: "stored", metadata: {} };
+      },
+    }),
+  );
+  const negative: LessonInput = {
+    ...lesson,
+    effect: "misleading",
+    content: "Single yellow center lines were too broad for this road type.",
+    idempotencyKey: "attempt-1:bollards_and_barriers:negative",
+  };
+
+  assert.deepEqual(await memory.remember(negative), {
+    status: "stored",
+    lessonId: "memory-negative",
+  });
+  assert.deepEqual(await memory.remember(negative), {
+    status: "already_stored",
+    lessonId: "memory-negative",
+  });
+  assert.deepEqual(invocations, ["add", "getEvent:event-negative", "get:memory-negative"]);
+  assert.deepEqual(requests, [
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: "[effect=misleading] Single yellow center lines were too broad for this road type.",
+        },
+      ],
+      agentId: "agent-1",
+      infer: true,
+      temporalReasoning: false,
+      agentCustomInstructions: loadPrompt("memory-store"),
+      metadata: {
+        loci_source_attempt_id: negative.sourceAttemptId,
+        loci_triggers: negative.triggers,
+        loci_region: negative.region,
+        loci_feature_key: negative.featureKey,
+        loci_memory_hit_id: negative.memoryHitId,
+        loci_effect: "misleading",
+        loci_idempotency_key: negative.idempotencyKey,
+      },
+    },
+  ]);
+});
+
+test("remember duplicate idempotency survives a new adapter instance through provider metadata", async () => {
+  const requests: unknown[] = [];
+  const records: Array<{ id: string; memory: string; metadata: Record<string, unknown> }> = [];
+  const platform = memoryPort({
+    list: async () => records,
+    add: async (request) => {
+      requests.push(request);
+      records.push({
+        id: "memory-cross-instance",
+        memory: request.messages[0]?.content ?? "",
+        metadata: request.metadata,
+      });
+      return { eventId: "event-cross-instance", status: "PENDING" };
+    },
+    getEvent: async (eventId) => ({ eventId, status: "SUCCEEDED", memoryIds: ["memory-cross-instance"] }),
+    get: async (memoryId) => records.find((record) => record.id === memoryId) ?? null,
+  });
+
+  assert.deepEqual(await adapter(platform).remember(lesson), {
+    status: "stored",
+    lessonId: "memory-cross-instance",
+  });
+  assert.deepEqual(await adapter(platform).remember(lesson), {
+    status: "already_stored",
+    lessonId: "memory-cross-instance",
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(records[0]?.metadata.loci_idempotency_key, lesson.idempotencyKey);
 });
 
 test("remember rejects every malformed lesson before any platform call", async () => {
@@ -251,6 +371,19 @@ test("remember rejects every malformed lesson before any platform call", async (
     { ...lesson, triggers: null },
     { ...lesson, triggers: ["valid", 1] },
     { ...lesson, region: null },
+    { ...lesson, memory_ref: "foreign" },
+    { ...lesson, content: `${"x".repeat(2_000)}.` },
+    { ...lesson, triggers: [] },
+    { ...lesson, triggers: Array.from({ length: 9 }, (_, index) => `trigger-${index}`) },
+    { ...lesson, triggers: ["valid", ""] },
+    { ...lesson, triggers: ["x".repeat(129)] },
+    { ...lesson, region: "" },
+    { ...lesson, region: "Iceland" },
+    { ...lesson, region: "is" },
+    { ...lesson, featureKey: undefined },
+    { ...lesson, memoryHitId: "" },
+    { ...lesson, effect: undefined },
+    { ...lesson, idempotencyKey: "" },
   ];
 
   for (const value of malformed) {
@@ -656,7 +789,11 @@ test("concurrent remembers execute FIFO and a first failure quarantines queued w
   });
   const memory = adapter(platform);
   const first = memory.remember({ ...lesson, sourceAttemptId: "first" });
-  const second = memory.remember({ ...lesson, sourceAttemptId: "second" });
+  const second = memory.remember({
+    ...lesson,
+    sourceAttemptId: "second",
+    idempotencyKey: "attempt-1:bollards_and_barriers:second",
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(starts, ["first"]);
   releaseFirst?.();
@@ -1017,7 +1154,6 @@ test("recall rejects malformed feature containers after valid limit without sear
   const malformedFeatures: unknown[] = [
     null,
     {},
-    "feature",
     [null],
     ["valid", 1],
     ["valid", {}],
@@ -1045,7 +1181,7 @@ test("recall accepts inclusive limit boundaries and valid empty provider results
   assert.deepEqual(await memory.recall(["feature"], 1_000), []);
   assert.deepEqual(requests, [
     {
-      query: "feature",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "feature"),
       filters: { agent_id: "agent-1" },
       topK: 1,
       threshold: 0.1,
@@ -1053,7 +1189,7 @@ test("recall accepts inclusive limit boundaries and valid empty provider results
       keywordSearch: true,
     },
     {
-      query: "feature",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "feature"),
       filters: { agent_id: "agent-1" },
       topK: 1_000,
       threshold: 0.1,
@@ -1077,7 +1213,7 @@ test("recall normalizes query, sends exact search policy, preserves order and sl
       },
     }),
   );
-  const asMemory: Memory = memory;
+  const asMemory: LegacyMemory = memory;
 
   assert.deepEqual(await asMemory.recall(["  yellow posts ", "", " lava terrain  "], 2), [
     { lessonId: "memory-2", text: "second" },
@@ -1085,7 +1221,7 @@ test("recall normalizes query, sends exact search policy, preserves order and sl
   ]);
   assert.deepEqual(requests, [
     {
-      query: "yellow posts\nlava terrain",
+      query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), normalizeMemoryQuery(["yellow posts", "lava terrain"])),
       filters: { agent_id: "agent-1" },
       topK: 2,
       threshold: 0.1,
@@ -1096,6 +1232,49 @@ test("recall normalizes query, sends exact search policy, preserves order and sl
 
   assert.deepEqual(await asMemory.recall(["", "   "], 5), []);
   assert.equal(requests.length, 1);
+});
+
+test("recall preserves episode metadata and renders non-helped effect prefix exactly once", async () => {
+  const memory = adapter(
+    memoryPort({
+      search: async () => [
+        {
+          id: "memory-1",
+          memory: "Single yellow center lines were too broad.",
+          metadata: {
+            loci_feature_key: "road_markings",
+            loci_effect: "misleading",
+            loci_source_attempt_id: "attempt-1",
+            loci_memory_hit_id: "attempt-1/road_markings/hit",
+            loci_idempotency_key: "attempt-1:road_markings:hit",
+          },
+        },
+        {
+          id: "memory-2",
+          memory: "[effect=insufficient] Wooden poles alone were not enough.",
+          metadata: {
+            loci_feature_key: "poles",
+            loci_effect: "insufficient",
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(await memory.recall(["road cues"], 5), [
+    {
+      lessonId: "memory-1",
+      text: "[effect=misleading] Single yellow center lines were too broad.",
+      featureKey: "road_markings",
+      effect: "misleading",
+    },
+    {
+      lessonId: "memory-2",
+      text: "[effect=insufficient] Wooden poles alone were not enough.",
+      featureKey: "poles",
+      effect: "insufficient",
+    },
+  ]);
 });
 
 test("recall rejects malformed results and sanitizes provider failures", async () => {
@@ -1184,7 +1363,7 @@ test("recall runs during ingestion and returns only provider-visible records", a
     {
       type: "search",
       request: {
-        query: "visible cue",
+        query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "visible cue"),
         filters: { agent_id: "agent-1" },
         topK: 5,
         threshold: 0.1,
@@ -1200,7 +1379,7 @@ test("recall runs during ingestion and returns only provider-visible records", a
     {
       type: "search",
       request: {
-        query: "visible cue",
+        query: encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "visible cue"),
         filters: { agent_id: "agent-1" },
         topK: 5,
         threshold: 0.1,

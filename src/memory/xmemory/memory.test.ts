@@ -2,11 +2,21 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  MemoryBindingError,
+  MemoryWriteError,
+  encodeMemoryRetrieveQuery,
+  normalizeMemoryQuery,
+  sharedMemoryPrompt,
+  sharedMemoryPromptMetadata,
+  type LessonInput,
+} from "../memory.ts";
+import {
   XMEMORY_CAPABILITIES,
   XmemoryMemoryError,
   createXmemoryMemory,
   loadXmemoryMemoryConfig,
   type XmemoryMemoryDependencies,
+  XMEMORY_READ_COLUMNS,
 } from "./memory.ts";
 import type { XmemoryMemoryErrorCode } from "./error.ts";
 import {
@@ -58,6 +68,11 @@ test("xmemory dependencies, lockfile and scripts are pinned to the Phase 1 contr
       "xmemory:pilot:finalize": "node src/memory/xmemory/pilot-finalize.ts",
     },
   );
+});
+
+test("configured xmemory exposes the application-owned common prompt metadata", async () => {
+  const memory = await behaviorMemory();
+  assert.deepEqual(memory.promptMetadata, sharedMemoryPromptMetadata());
 });
 
 test("runtime config uses exact variables and safe timeout defaults", () => {
@@ -474,6 +489,24 @@ async function rejectsMemoryCode(
   retryable = false,
 ): Promise<void> {
   await assert.rejects(promise, (error) => {
+    if (operation === "write" && error instanceof MemoryBindingError) {
+      const mapped =
+        code === "instance_not_found"
+          ? "memory_not_found"
+          : code === "authentication" || code === "authorization"
+            ? "memory_mismatch"
+            : code === "rate_limited"
+              ? "unavailable"
+              : code;
+      assert.equal(error.code, mapped);
+      return true;
+    }
+    if (operation === "write" && error instanceof MemoryWriteError) {
+      assert.equal(error.code, code === "write_outcome_unknown" ? "write_outcome_unknown" : "write_failed");
+      assert.equal("cause" in error, false);
+      assert.equal(`${error.message} ${String(error)} ${error.stack ?? ""} ${JSON.stringify(error)}`.includes("raw-secret"), false);
+      return true;
+    }
     assert.ok(error instanceof XmemoryMemoryError);
     assert.equal(error.code, code);
     assert.equal(error.operation, operation);
@@ -550,6 +583,46 @@ test("remember sends the exact normalized envelope while preserving lesson conte
       timeoutMs: 180_000,
     },
   ]);
+});
+
+test("no-hit envelope omits memory_hit_id instead of serializing a fake string", async () => {
+  let request: Parameters<XmemoryPlatformPort["write"]>[0] | undefined;
+  let writes = 0;
+  const memory = await behaviorMemory({
+    supportsAtomicIdempotency: true,
+    read: async () => ({ traceId: null, readerResult: null }),
+    write: async (value) => {
+      writes += 1;
+      request = value;
+      return { writeId: "no-hit-write", traceId: null, changes: emptyChanges };
+    },
+  });
+
+  const noHitLesson: LessonInput = {
+    content: "The feature had no useful memory match.",
+    sourceAttemptId: "attempt-no-hit",
+    featureKey: "road_markings",
+    memoryHitId: null,
+    effect: "insufficient",
+    idempotencyKey: "attempt-no-hit/road_markings/no-hit",
+    triggers: ["road markings"],
+    region: "Iceland",
+  };
+  const firstResult = await memory.remember(noHitLesson);
+  assert.equal(firstResult.status, "stored");
+
+  assert.ok(request);
+  assert.match(request.text, /feature_key: road_markings\n/);
+  assert.match(request.text, /effect: insufficient\n/);
+  assert.match(request.text, /idempotency_key: attempt-no-hit\/road_markings\/no-hit\n/);
+  assert.doesNotMatch(request.text, /memory_hit_id:/);
+  assert.doesNotMatch(request.text, /memory_hit_id: null/);
+
+  assert.deepEqual(await memory.remember(noHitLesson), {
+    status: "already_stored",
+    lessonId: firstResult.lessonId,
+  });
+  assert.equal(writes, 1);
 });
 
 test("remember accepts every exact inclusive lesson boundary", async () => {
@@ -880,9 +953,8 @@ test("quarantine notification absorbs sync, async and hostile failures without d
         },
       );
       await assert.rejects(memory.remember(lesson), (error) => {
-        assert.ok(error instanceof XmemoryMemoryError);
+        assert.ok(error instanceof MemoryWriteError);
         assert.equal(error.code, "write_outcome_unknown");
-        assert.equal(error.message, "The xmemory write outcome is unknown");
         assert.equal("cause" in error, false);
         return true;
       });
@@ -996,7 +1068,7 @@ test("recall validates limit before features and trace creation", async () => {
     {},
     Array.from({ length: 65 }, (_, index) => `feature-${index}`),
     [42] as unknown as string[],
-    ["x".repeat(257)],
+    ["x".repeat(513)],
     ["<LOCI_bad>"],
     revokedFeatures.proxy,
     hostileFeatures,
@@ -1028,30 +1100,28 @@ test("recall sends exact normalized feature and prior templates", async () => {
   assert.deepEqual(await memory.recall([" ", "\n"], 7), []);
   assert.deepEqual(requests, [
     {
-      query:
-        "Use only stored Loci Insights to help interpret a new photograph.\n" +
-        "Visible features:\n" +
-        "- yellow roadside posts\n" +
-        "- lava field\n" +
-        "Return at most 5 distinct grounded insights. Preserve conditions, counter-signals,\n" +
-        "comparisons and caveats. Do not invent observations or claim a final location.",
-      readMode: "single-answer",
+      query: `${encodeMemoryRetrieveQuery(
+        sharedMemoryPrompt("retrieve"),
+        normalizeMemoryQuery(["yellow roadside posts", "lava field"]),
+      )}
+
+${XMEMORY_READ_COLUMNS}`,
+      readMode: "raw-tables",
       traceId,
       timeoutMs: 60_000,
     },
     {
-      query:
-        "Return at most 7 high-value stored Loci Insights that are broadly useful before any visual\n" +
-        "features are available. Preserve conditions, counter-signals, comparisons and caveats. Do not\n" +
-        "invent observations or claim a final location.",
-      readMode: "single-answer",
+      query: `${encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), "")}
+
+${XMEMORY_READ_COLUMNS}`,
+      readMode: "raw-tables",
       traceId,
       timeoutMs: 60_000,
     },
   ]);
 });
 
-test("recall accepts 64 distinct features at the exact 256-code-unit boundary", async () => {
+test("recall accepts a bounded dynamic feature query and uses the shared instruction", async () => {
   let request: Parameters<XmemoryPlatformPort["read"]>[0] | undefined;
   const memory = await behaviorMemory({
     read: async (value) => {
@@ -1059,17 +1129,12 @@ test("recall accepts 64 distinct features at the exact 256-code-unit boundary", 
       return { traceId: null, readerResult: { answer: "" } };
     },
   });
-  const features = Array.from(
-    { length: 64 },
-    (_, index) => `${String(index).padStart(2, "0")}${"f".repeat(254)}`,
-  );
+  const features = ["yellow roadside posts", "lava field", "black volcanic surface"];
   assert.deepEqual(await memory.recall(features, 1), []);
   assert.ok(request !== undefined);
-  assert.equal(features.length, 64);
-  assert.ok(features.every((feature) => feature.length === 256));
-  assert.equal(request.query.split("\n").filter((line) => line.startsWith("- ")).length, 64);
-  assert.equal(request.query.includes(`- ${features[0]}`), true);
-  assert.equal(request.query.includes(`- ${features[63]}`), true);
+  assert.equal(request.query, `${encodeMemoryRetrieveQuery(sharedMemoryPrompt("retrieve"), normalizeMemoryQuery(features))}
+
+${XMEMORY_READ_COLUMNS}`);
 });
 
 test("recall accepts provider trace metadata and maps blank or non-empty answer to at most one Hint", async () => {
@@ -1086,16 +1151,47 @@ test("recall accepts provider trace metadata and maps blank or non-empty answer 
       response: { traceId: "provider-generated-trace", readerResult: { answer: "fact" } },
       expected: [{ lessonId: `xmemory-read:${traceId}`, text: "fact" }],
     },
+    {
+      response: {
+        traceId: null,
+        readerResult: {
+          answer:
+            "<loci_training_experience_v1>\n" +
+            "<loci_provenance_v1>\n" +
+            "effect: misleading\n" +
+            "</loci_provenance_v1>\n" +
+            "<loci_lesson_v1>\n" +
+            "The road marking cue was too broad.\n" +
+            "</loci_lesson_v1>\n" +
+            "</loci_training_experience_v1>",
+        },
+      },
+      expected: [
+        {
+          lessonId: `xmemory-read:${traceId}`,
+          text: "[effect=misleading] The road marking cue was too broad.",
+          effect: "misleading",
+        },
+      ],
+    },
   ]) {
     const memory = await behaviorMemory({ read: async () => scenario.response });
     assert.deepEqual(await memory.recall(["cue"], 1_000), scenario.expected);
   }
 
+  // A reader that finds no rows answers with a null result: empty, not malformed.
+  const emptyMemory = await behaviorMemory({ read: async () => ({ traceId: null, readerResult: null }) });
+  assert.deepEqual(await emptyMemory.recall(["cue"], 5), []);
+  const tableMemory = await behaviorMemory({ read: async () => ({ traceId: null, readerResult: { columns: [{ name: "lesson_content" }, { name: "effect" }, { name: "feature_key" }, { name: "region" }, { name: "observed_triggers_json" }, { name: "idempotency_key" }], rows: [["Wooden poles carry two crossarms.", "helped", "poles", "BR", "[\"wooden poles\"]", "key-1"], ["Cue x was observed and did not narrow the location.", "irrelevant", "surface", "IN", "[]", "key-2"], [null, "helped", "poles", "BR", null, "key-3"]] } }) });
+  const table = await tableMemory.recall(["cue"], 5);
+  assert.equal(table.length, 2);
+  assert.deepEqual(table[0], { lessonId: table[0]!.lessonId, text: "Wooden poles carry two crossarms.", effect: "helped", featureKey: "poles", region: "BR", triggers: ["wooden poles"] });
+  assert.deepEqual(table[1], { lessonId: table[1]!.lessonId, text: "[effect=irrelevant] Cue x was observed and did not narrow the location.", effect: "irrelevant", featureKey: "surface", region: "IN" });
+
   const malformed: unknown[] = [
     null,
     {},
     { traceId: 1, readerResult: { answer: "fact" } },
-    { traceId: null, readerResult: null },
     { traceId: null, readerResult: {} },
     { traceId: null, readerResult: { answer: 42 } },
   ];

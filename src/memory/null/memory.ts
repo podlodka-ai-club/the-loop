@@ -1,11 +1,14 @@
-import type { Hint, Memory } from "../memory.ts";
+import { MemoryWriteError } from "../memory.ts";
+import type { Hint, LegacyMemory, MemoryWriteResult } from "../memory.ts";
 
 /** Baseline: the agent never sees a lesson. Every memory-off run uses this. */
-export class NullMemory implements Memory {
+export class NullMemory implements LegacyMemory {
   async recall(): Promise<Hint[]> {
     return [];
   }
-  async remember(): Promise<void> {}
+  async remember(): Promise<MemoryWriteResult> {
+    throw new MemoryWriteError("write_failed");
+  }
   async snapshot(): Promise<string> {
     return "null";
   }

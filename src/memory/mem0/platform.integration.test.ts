@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
-import { MEM0_EXTRACTION_INSTRUCTION } from "./constants.ts";
+import { loadPrompt } from "../../promts.ts";
 import { mem0IntegrationEnabled } from "./integration.ts";
 import { Mem0MemoryError, loadMem0MemoryConfig } from "./memory.ts";
 import { createMem0PlatformPort } from "./platform.ts";
@@ -30,7 +30,7 @@ integrationTest(
       agentId: config.agentId,
       infer: true,
       temporalReasoning: false,
-      agentCustomInstructions: MEM0_EXTRACTION_INSTRUCTION,
+      agentCustomInstructions: loadPrompt("memory-store"),
       metadata: {
         loci_source_attempt_id: sourceAttemptId,
         loci_triggers: ["yellow roadside delineators", "treeless lava terrain"],

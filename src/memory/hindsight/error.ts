@@ -145,6 +145,21 @@ export function normalizeHindsightError(
   const transport = transportCode(error, operation);
   if (transport !== undefined) return new HindsightMemoryError(transport, operation);
 
+  try {
+    if (isObject(error)) {
+      const code = error.code;
+      if (code === "bank_not_found") return new HindsightMemoryError("bank_not_found", operation);
+      if (code === "rate_limited") return new HindsightMemoryError("rate_limited", operation);
+      if (code === "unavailable") return new HindsightMemoryError("unavailable", operation);
+      const status = error.statusCode ?? error.status;
+      if (typeof status === "number" && Number.isInteger(status)) {
+        return new HindsightMemoryError(mapHindsightStatus(status, operation), operation);
+      }
+    }
+  } catch {
+    return new HindsightMemoryError("protocol_error", operation);
+  }
+
   return new HindsightMemoryError("protocol_error", operation);
 }
 

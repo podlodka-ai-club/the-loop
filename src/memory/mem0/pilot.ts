@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import type { Hint, LessonInput } from "../memory.ts";
+import type { Hint, LegacyLessonInput, MemoryWriteResult } from "../memory.ts";
 import { mem0IntegrationEnabled } from "./integration.ts";
 import {
   Mem0MemoryError,
@@ -17,7 +17,7 @@ export const MEM0_PILOT_QUERIES_PATH = "benchmark/samples/mem0-pilot-v1-queries.
 
 export type Mem0PilotLessonCase = {
   caseId: string;
-  lesson: LessonInput;
+  lesson: LegacyLessonInput;
   expectedAnyFact: Array<{ allOf: string[] }>;
   forbiddenFactSubstrings: string[];
 };
@@ -50,7 +50,7 @@ export type Mem0PilotSummary = {
 };
 
 export type Mem0PilotMemory = {
-  remember(lesson: LessonInput): Promise<void>;
+  remember(lesson: LegacyLessonInput): Promise<void | MemoryWriteResult>;
   recall(features: string[], limit: number): Promise<Hint[]>;
 };
 

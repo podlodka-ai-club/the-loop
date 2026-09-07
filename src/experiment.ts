@@ -3,8 +3,6 @@
  *
  * Usage:
  *   node src/experiment.ts [--manifest PATH] [--concurrency 8] [--name label]
- *                          [--backend file|mem0] [--snapshot ID] [--recall all]
- *                          [--head N] [--two-step]
  */
 
 // Long base64 image payloads would otherwise land in `input.value` on every span.
@@ -12,62 +10,77 @@
 // per-run storage. Set it before any OpenTelemetry module reads span limits.
 process.env.OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT ??= "2000";
 
-import { createClient } from "@arizeai/phoenix-client";
 import { createDataset, getDatasetInfo } from "@arizeai/phoenix-client/datasets";
+import { runExperiment } from "@arizeai/phoenix-client/experiments";
+import { MODEL } from "./agent.ts";
 import {
-  resumeEvaluation,
-  resumeExperiment,
-  runExperiment,
-} from "@arizeai/phoenix-client/experiments";
-import { MODEL, provider } from "./agent.ts";
+  DEFAULT_RETRIEVAL_FIXTURE,
+  buildBenchmarkPairContract,
+  buildBenchmarkExperimentMetadata,
+  loadRetrievalFixture,
+  parseBenchmarkMemoryMode,
+} from "./benchmark-metrics.ts";
+import { parseNonNegativeSafeIntegerOption, parsePositiveSafeIntegerOption, readCliOption } from "./cli-options.ts";
 import { geoEvaluators } from "./evaluators.ts";
 import { DEFAULT_MANIFEST, loadFrozenSample } from "./manifest.ts";
-import { RECALL_LIMIT } from "./memory/memory.ts";
 import { parseRecallMode } from "./memory/file/memory.ts";
-import { parseBackend, selectMemory } from "./memory/select.ts";
+import { parseBackend, selectFeatureScopedEvaluationMemory, selectMemory } from "./memory/select.ts";
 import { fingerprintOf, loadRows } from "./osv5m.ts";
 import { runTask } from "./task.ts";
 import type { ExampleInput } from "./task.ts";
+import { OBSERVE_PROMPT_VERSION } from "./observe.ts";
 
 const PHOENIX_URL = process.env.PHOENIX_BASE_URL ?? "http://localhost:6006";
 
-// `phoenix-client` uploads each evaluation score without awaiting the POST and
-// without catching it ("We log this without awaiting", runExperiment.js). A refused
-// connection therefore arrives as an unhandled rejection and ends the process after
-// every model call is paid for. Count those instead. The summary below reports what
-// the server is missing, and the next run under the same name writes it. A rejection
-// from this script's own top-level await does not pass through here: Node reports
-// that one itself.
-let droppedUploads = 0;
-process.on("unhandledRejection", (reason) => {
-  droppedUploads += 1;
-  if (droppedUploads <= 3) {
-    console.warn(`upload dropped: ${reason instanceof Error ? reason.message : String(reason)}`);
-  }
-});
-
-function flag(name: string, fallback: string): string {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? fallback : (process.argv[index + 1] ?? fallback);
-}
-
-const manifestPath = flag("manifest", DEFAULT_MANIFEST);
-const concurrency = Number(flag("concurrency", "8"));
-const label = flag("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
+const manifestPath = readCliOption("manifest", DEFAULT_MANIFEST);
+const concurrency = parsePositiveSafeIntegerOption("concurrency", readCliOption("concurrency", "8"));
+const label = readCliOption("name", `${MODEL}-${new Date().toISOString().slice(0, 16)}`);
 
 // Memory is read-only here on purpose. Evaluation that writes lessons is training
 // with extra steps, and the held-out numbers stop meaning anything.
-const snapshotId = flag("snapshot", "");
-const recallMode = parseRecallMode(flag("recall", "all"));
+const snapshotId = readCliOption("snapshot", "");
+const flow = readCliOption("flow", "legacy");
+if (flow !== "legacy" && flow !== "feature-scoped") {
+  throw new Error(`unknown flow "${flow}", expected legacy|feature-scoped`);
+}
+const memoryMode = parseBenchmarkMemoryMode(readCliOption("memory-mode", snapshotId === "" ? "cold" : "warm"));
+const recallMode = parseRecallMode(readCliOption("recall", memoryMode === "cold" ? "off" : "top"));
+if (memoryMode === "cold" && recallMode !== "off") {
+  throw new Error("cold benchmark requires --recall off");
+}
+if (memoryMode === "warm" && recallMode !== "top") {
+  throw new Error("warm benchmark requires --recall top");
+}
+if (memoryMode === "cold" && snapshotId.trim() !== "") {
+  throw new Error("cold benchmark must not set --snapshot");
+}
+if (memoryMode === "warm" && snapshotId.trim() === "") {
+  throw new Error("warm benchmark requires --snapshot");
+}
 
 // Two-step costs a second vision call per item. It is pointless without memory, and
 // mandatory with a ranked or query-based backend, which has nothing to rank on
 // otherwise.
 const twoStep = process.argv.includes("--two-step");
-const backend = parseBackend(flag("backend", "file"));
-const selection = selectMemory({ backend, snapshotId, recall: flag("recall", "all") });
-const memory = selection.memory;
-
+const backend = parseBackend(readCliOption("backend", "file"));
+const recallFlag = recallMode;
+const legacySelection =
+  flow === "legacy"
+    ? await selectMemory({
+        backend: memoryMode === "cold" ? "file" : backend,
+        snapshotId: memoryMode === "cold" ? "" : snapshotId,
+        recall: recallFlag,
+        snapshotMode: "legacy",
+      })
+    : null;
+const featureScopedSelection =
+  flow === "feature-scoped"
+    ? await selectFeatureScopedEvaluationMemory({ backend, snapshotId, recall: recallFlag, memoryMode })
+    : null;
+const activeSelection = featureScopedSelection ?? legacySelection;
+if (activeSelection === null) throw new Error("memory selection is missing");
+const retrievalFixturePath = readCliOption("retrieval-fixture", DEFAULT_RETRIEVAL_FIXTURE);
+const retrievalFixture = await loadRetrievalFixture(retrievalFixturePath);
 // The sample is read from a file in the repository, never drawn afresh. `loadRows`
 // sees only the image shards this machine holds, so a fresh draw would silently
 // score a different set of images here than it did on the machine that reported the
@@ -75,21 +88,17 @@ const memory = selection.memory;
 /**
  * Score only the first N ids of the manifest instead of all of them.
  *
- * The eval corpus is 863 frames, and a full pass costs hours of provider quota once
- * rate-limit backoff is counted. A prefix is enough to read the sign and the order of a
- * delta, which is what decides whether the full pass is worth running at all. The prefix
- * is the manifest's own sorted order, so it is the same frames every time, and it gets
- * its own fingerprint - a partial run is a different benchmark and must never be filed
- * under the full one's numbers.
- *
- * A prefix is not a smaller balanced corpus. The manifest is sorted by id, and id order
- * has nothing to do with country, so the country match with the train corpus holds for
- * the whole file and not for a prefix of it.
+ * A full 200-image pass costs ~45 minutes of provider quota once rate-limit backoff
+ * is counted. A 100-image prefix is enough to read the sign and the order of a
+ * delta, which is what decides whether the full pass is worth running at all. The
+ * prefix is the manifest's own sorted order, so it is the same 100 images every
+ * time, and it gets its own fingerprint - a partial run is a different benchmark and
+ * must never be filed under the full one's numbers.
  */
-const head = Number(flag("head", "0"));
+const head = parseNonNegativeSafeIntegerOption("head", readCliOption("head", "0"));
 
 const { rows: pool, csvRowCount } = await loadRows();
-const full = await loadFrozenSample(pool, manifestPath, "eval");
+const full = await loadFrozenSample(pool, manifestPath);
 const sample =
   head > 0 && head < full.rows.length
     ? {
@@ -110,11 +119,18 @@ console.log(
     `strata=${sample.strata} seed=${sample.seed} fp=${sample.fingerprint}`,
 );
 console.log(
-  `memory  ${selection.describe}${twoStep ? ", two-step (observe then guess)" : ""}` +
-    `${selection.frozen ? "" : " [not frozen: reproducible only by convention]"}`,
+  `memory  ${activeSelection.describe}${twoStep ? ", two-step (observe then guess)" : ""}` +
+    `${activeSelection.frozen ? "" : " [not frozen: reproducible only by convention]"}`,
 );
 
 const datasetName = `osv5m-${seed}-n${sample.rows.length}-${sample.fingerprint}`;
+const pairContract = buildBenchmarkPairContract({
+  sampleIds: sample.rows.map((row) => row.id),
+  sampleFingerprint: sample.fingerprint,
+  manifestPath,
+  observationPromptVersion: OBSERVE_PROMPT_VERSION,
+  memoryMode,
+});
 
 // Reuse the frozen set when it already exists, so every run scores the same items.
 let datasetId: string;
@@ -126,19 +142,14 @@ try {
     await createDataset({
       name: datasetName,
       description:
-        `OSV-5M test corpus. seed=${seed} n=${sample.rows.length} ` +
-        `fingerprint=${sample.fingerprint}. Frozen id list from ${manifestPath}. Every ` +
-        `frame was approved by a person, who dropped every frame showing a burned-in ` +
-        `coordinate. The ` +
-        `pool of approved frames is cut into this corpus and its train counterpart so ` +
-        `that the two match country by country and share no sequence, uploader or 25 km ` +
-        `grid cell. Frames are used whole: nothing is cropped.`,
+        `OSV-5M test sample. seed=${seed} n=${sample.rows.length} ` +
+        `fingerprint=${sample.fingerprint}. Frozen id list from ${manifestPath}, drawn as a ` +
+        `simple random sample over rows whose image is on disk, after keeping one row per ` +
+        `sequence and at most 3 per creator. Dataset-weighted, so country shares track the ` +
+        `full split.`,
       examples: sample.rows.map((row) => ({
         id: row.id,
-        input: {
-          imageId: row.id,
-          imagePath: row.imagePath,
-        } satisfies ExampleInput,
+        input: { imageId: row.id, imagePath: row.imagePath } satisfies ExampleInput,
         output: {
           latitude: row.latitude,
           longitude: row.longitude,
@@ -159,118 +170,65 @@ try {
   console.log(`dataset created: ${datasetName}`);
 }
 
-const client = createClient();
-
-const experimentMetadata = {
-  model: MODEL,
-  seed,
-  fingerprint: sample.fingerprint,
-  sampleSize: sample.rows.length,
-  memoryBackend: backend,
-  memorySnapshot: snapshotId === "" ? "none" : snapshotId,
-  memoryFrozen: selection.frozen,
-  recallMode: snapshotId === "" ? "off" : recallMode,
-  twoStep,
-  recallLimit: RECALL_LIMIT,
-};
-
-const task = (example: { input: unknown }) =>
-  runTask(example.input as ExampleInput, { memory, twoStep });
-
-/** The experiment of this dataset that carries this name, or null. */
-async function findExperiment(
-  name: string,
-): Promise<{ id: string; metadata: Record<string, unknown> } | null> {
-  let cursor: string | undefined;
-  do {
-    const page = await client.GET("/v1/datasets/{dataset_id}/experiments", {
-      params: { path: { dataset_id: datasetId }, query: { cursor, limit: 50 } },
+const experiment = await runExperiment({
+  dataset: { datasetId },
+  experimentName: label,
+  experimentMetadata: buildBenchmarkExperimentMetadata({
+    model: MODEL,
+    seed,
+    fingerprint: sample.fingerprint,
+    sampleSize: sample.rows.length,
+    requestedMemoryBackend: backend,
+    snapshotId,
+    memoryFrozen: activeSelection.frozen,
+    memoryMode,
+    flow,
+    observationCacheKey: pairContract.observationCacheKey,
+    recallMode: activeSelection.recallMode,
+    twoStep,
+    recallLimit: activeSelection.recallLimit,
+    retrievalFixturePath,
+  }),
+  task: (example) => {
+    const input = example.input as ExampleInput;
+    const expected = example.output as { latitude?: unknown; longitude?: unknown; country?: unknown } | undefined;
+    const truth =
+      typeof expected?.latitude === "number" &&
+      typeof expected.longitude === "number" &&
+      typeof expected.country === "string"
+        ? { latitude: expected.latitude, longitude: expected.longitude, country: expected.country }
+        : undefined;
+    const taskInput = truth === undefined ? input : { ...input, truth };
+    if (featureScopedSelection !== null) {
+      return runTask(taskInput, {
+        memoryBinding: featureScopedSelection.memoryBinding,
+        run: featureScopedSelection.run,
+        benchmark: {
+          retrievalFixture,
+        },
+      });
+    }
+    if (legacySelection === null) throw new Error("legacy memory selection is missing");
+    return runTask(taskInput, {
+      memory: legacySelection.memory,
+      twoStep,
+      recallLimit: legacySelection.recallLimit,
+      benchmark: { retrievalFixture },
     });
-    const entries = page.data?.data;
-    if (!entries) throw new Error(`cannot list the experiments of dataset ${datasetId}`);
-    const hit = entries.find((entry) => entry.name === name);
-    if (hit) return { id: hit.id, metadata: hit.metadata };
-    cursor = page.data?.next_cursor ?? undefined;
-  } while (cursor !== undefined);
-  return null;
-}
-
-// A run that dies half way leaves its finished items on the server, and those items
-// are the part that cost provider quota. Reusing the name continues that experiment:
-// only missing runs are executed, and only missing scores are written. A name this
-// dataset has not seen starts a new experiment.
-const existing = await findExperiment(label);
-let experimentId: string;
-
-if (existing === null) {
-  experimentId = (
-    await runExperiment({
-      client,
-      dataset: { datasetId },
-      experimentName: label,
-      experimentMetadata,
-      task,
-      evaluators: geoEvaluators,
-      concurrency,
-    })
-  ).id;
-} else {
-  // One name, two configurations would put both under a single experiment, and no
-  // reader could tell which half produced which number.
-  const changed = Object.keys(experimentMetadata).filter((key) => {
-    const wanted = experimentMetadata[key as keyof typeof experimentMetadata];
-    return JSON.stringify(existing.metadata[key]) !== JSON.stringify(wanted);
-  });
-  if (changed.length > 0) {
-    const differences = changed
-      .map((key) => {
-        const wanted = experimentMetadata[key as keyof typeof experimentMetadata];
-        return `${key} ${JSON.stringify(existing.metadata[key])} -> ${JSON.stringify(wanted)}`;
-      })
-      .join(", ");
-    throw new Error(
-      `experiment "${label}" exists with other settings: ${differences}. Repeat the ` +
-        `original flags to resume it, or pass another --name.`,
-    );
-  }
-  experimentId = existing.id;
-  console.log(`experiment resumed: ${label} (${experimentId})`);
-  await resumeExperiment({ client, experimentId, task, concurrency });
-  await resumeEvaluation({ client, experimentId, evaluators: geoEvaluators, concurrency });
-}
+  },
+  evaluators: geoEvaluators,
+  concurrency,
+});
 
 // ---- aggregate ----------------------------------------------------------------
 
-/**
- * One run as the server stores it. The summary is read back from Phoenix instead of
- * taken from what this process holds: scores are uploaded one at a time, so a dropped
- * upload leaves a gap that only the server can report, and that gap is what the next
- * run under the same name repairs.
- */
-type ExportedRun = {
-  output: unknown;
-  error: string | null;
-  annotations?: { name: string; score?: number | null }[] | null;
-};
-
-const exported = await client.GET("/v1/experiments/{experiment_id}/json", {
-  params: { path: { experiment_id: experimentId } },
-});
-// The OpenAPI document declares this endpoint `text/plain` and the server answers
-// with `application/json`, so the parsed body does not match the generated type.
-const report = exported.data as unknown as ExportedRun[] | undefined;
-if (!report) throw new Error(`cannot read the runs of experiment ${experimentId}`);
-
 const scoresByMetric = new Map<string, number[]>();
-let scored = 0;
-for (const run of report) {
-  for (const annotation of run.annotations ?? []) {
-    scored += 1;
-    if (typeof annotation.score !== "number") continue;
-    const bucket = scoresByMetric.get(annotation.name);
-    if (bucket) bucket.push(annotation.score);
-    else scoresByMetric.set(annotation.name, [annotation.score]);
-  }
+for (const run of experiment.evaluationRuns ?? []) {
+  const value = run.result?.score;
+  if (typeof value !== "number") continue;
+  const bucket = scoresByMetric.get(run.name);
+  if (bucket) bucket.push(value);
+  else scoresByMetric.set(run.name, [value]);
 }
 
 function quantile(sorted: number[], q: number): number {
@@ -279,23 +237,16 @@ function quantile(sorted: number[], q: number): number {
   return sorted[index] ?? Number.NaN;
 }
 
-const errored = report.filter((run) => run.error !== null).length;
+const runCount = Object.keys(experiment.runs).length;
+const errored = Object.values(experiment.runs).filter((run) => run.error !== null).length;
 
-console.log(`\nexperiment ${experimentId} | ${report.length} runs | ${errored} task errors`);
+console.log(`\nexperiment ${experiment.id} | ${runCount} runs | ${errored} task errors`);
 console.log(`${PHOENIX_URL}/datasets/${datasetId}/experiments\n`);
-
-if (droppedUploads > 0) {
-  console.log(`dropped  ${droppedUploads} uploads to Phoenix`);
-}
-const expected = report.length * geoEvaluators.length;
-if (scored < expected) {
-  console.log(`scores   ${scored}/${expected} on the server, run --name ${label} again\n`);
-}
 
 // Which provider actually served each item. With a fallback list this is no longer
 // a constant, and a run split across providers is a run split across queues.
 const providers = new Map<string, number>();
-for (const run of report) {
+for (const run of Object.values(experiment.runs)) {
   const output = run.output as { ok?: boolean; guess?: { provider?: string } } | null;
   const name = output?.ok === true ? (output.guess?.provider ?? "unknown") : "failed";
   providers.set(name, (providers.get(name) ?? 0) + 1);
@@ -323,6 +274,18 @@ for (const name of [
   "hints_in_prompt",
   "hint_tokens",
   "features_observed",
+  "retrieval_outcomes",
+  "memory_hits",
+  "tool_calls",
+  "latency_ms",
+  "rare_cue_hit_rate",
+  "broad_cue_hit_rate",
+  "legacy_global_topk_rare_cue_hit_rate",
+  "feature_scoped_rare_cue_hit_rate",
+  "episodes_helped",
+  "episodes_irrelevant",
+  "episodes_misleading",
+  "episodes_insufficient",
 ]) {
   const values = scoresByMetric.get(name) ?? [];
   const value = mean(values);
@@ -330,13 +293,15 @@ for (const name of [
     name === "geoscore" ||
     name === "hints_in_prompt" ||
     name === "hint_tokens" ||
-    name === "features_observed";
+    name === "features_observed" ||
+    name === "retrieval_outcomes" ||
+    name === "memory_hits" ||
+    name === "tool_calls" ||
+    name === "latency_ms" ||
+    name.startsWith("episodes_");
   const shown = asCount ? value.toFixed(1) : `${(value * 100).toFixed(1)}%`;
   console.log(`${name.padEnd(21)} ${String(values.length).padStart(4)}   ${shown}`);
 }
 console.log(`${"distance_km mean".padEnd(21)} ${String(distances.length).padStart(4)}   ${mean(distances).toFixed(1)} km`);
 console.log(`${"distance_km median".padEnd(21)} ${String(distances.length).padStart(4)}   ${quantile(distances, 0.5).toFixed(1)} km`);
 console.log(`${"distance_km p90".padEnd(21)} ${String(distances.length).padStart(4)}   ${quantile(distances, 0.9).toFixed(1)} km`);
-
-// Spans are batched, so the last of them reach Phoenix only on shutdown.
-await provider.shutdown();

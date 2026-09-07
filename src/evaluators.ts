@@ -192,10 +192,81 @@ export const featureCountEvaluator: Evaluator = {
   kind: "CODE",
   evaluate: ({ output }) => {
     const result = output as TaskResult | null;
-    const count = result?.features?.length ?? 0;
+    const count =
+      Array.isArray(result?.observations)
+        ? result.observations.length
+        : (result?.features?.length ?? 0);
     return { score: count, label: count > 0 ? "observed" : "blind" };
   },
 };
+
+function attemptMetric(output: unknown): TaskResult["attemptMetrics"] | null {
+  const result = output as TaskResult | null;
+  return result?.attemptMetrics ?? null;
+}
+
+function numericAttemptMetric(
+  name: string,
+  read: (metric: TaskResult["attemptMetrics"]) => number | null,
+): Evaluator {
+  return {
+    name,
+    kind: "CODE",
+    evaluate: ({ output }) => {
+      const metric = attemptMetric(output);
+      return { score: metric === null ? null : read(metric) };
+    },
+  };
+}
+
+export const retrievalOutcomesEvaluator = numericAttemptMetric(
+  "retrieval_outcomes",
+  (metric) => metric.retrievalOutcomes,
+);
+
+export const memoryHitsEvaluator = numericAttemptMetric(
+  "memory_hits",
+  (metric) => metric.memoryHits,
+);
+
+export const toolCallsEvaluator = numericAttemptMetric(
+  "tool_calls",
+  (metric) => metric.toolCalls,
+);
+
+export const latencyMsEvaluator = numericAttemptMetric(
+  "latency_ms",
+  (metric) => metric.latencyMs,
+);
+
+export const rareCueHitRateEvaluator = numericAttemptMetric(
+  "rare_cue_hit_rate",
+  (metric) => metric.rareCueHitRate,
+);
+
+export const broadCueHitRateEvaluator = numericAttemptMetric(
+  "broad_cue_hit_rate",
+  (metric) => metric.broadCueHitRate,
+);
+
+export const legacyGlobalRareCueHitRateEvaluator = numericAttemptMetric(
+  "legacy_global_topk_rare_cue_hit_rate",
+  (metric) => metric.legacyGlobalTopKRareCueHitRate,
+);
+
+export const featureScopedRareCueHitRateEvaluator = numericAttemptMetric(
+  "feature_scoped_rare_cue_hit_rate",
+  (metric) => metric.featureScopedRareCueHitRate,
+);
+
+export const episodeEffectEvaluators: Evaluator[] = [
+  "helped",
+  "irrelevant",
+  "misleading",
+  "insufficient",
+].map((effect) =>
+  numericAttemptMetric(`episodes_${effect}`, (metric) => metric.episodesByEffect[effect as keyof typeof metric.episodesByEffect]),
+);
 
 export const geoEvaluators: Evaluator[] = [
   distanceKmEvaluator,
@@ -208,4 +279,13 @@ export const geoEvaluators: Evaluator[] = [
   hintCountEvaluator,
   hintTokensEvaluator,
   featureCountEvaluator,
+  retrievalOutcomesEvaluator,
+  memoryHitsEvaluator,
+  toolCallsEvaluator,
+  latencyMsEvaluator,
+  rareCueHitRateEvaluator,
+  broadCueHitRateEvaluator,
+  legacyGlobalRareCueHitRateEvaluator,
+  featureScopedRareCueHitRateEvaluator,
+  ...episodeEffectEvaluators,
 ];

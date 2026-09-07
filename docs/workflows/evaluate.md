@@ -100,7 +100,8 @@ memory_ref: null
 ```
 
 Ground truth передаётся scorer только после фиксации ответа. `memory_calls` каждого ответа должен
-быть пуст.
+быть пуст; dynamic `LocateResult` may contain application-generated `no_hit` groups, но не содержит
+model/provider memory calls.
 
 ## Прогон 2. С памятью
 
